@@ -21,9 +21,5 @@
   },
   "peerDependencies": {
     "three": ">=0.180.0"
-  },
-  "devDependencies": {
-    "three": "^0.185.1",
-    "@types/three": "^0.185.0"
   }
 }

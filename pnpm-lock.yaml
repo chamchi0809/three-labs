@@ -8,56 +8,6 @@ importers:
 
   .:
     devDependencies:
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-
-  rc-25d/demo:
-    dependencies:
-      '@rc25d/radiance-cascades':
-        specifier: workspace:*
-        version: link:../lib
-      three:
-        specifier: ^0.185.1
-        version: 0.185.1
-    devDependencies:
-      '@types/three':
-        specifier: ^0.185.0
-        version: 0.185.4
-      vite:
-        specifier: ^8.2.0
-        version: 8.2.1(@types/node@26.2.0)
-
-  rc-25d/lib:
-    devDependencies:
-      '@types/three':
-        specifier: ^0.185.0
-        version: 0.185.4
-      three:
-        specifier: ^0.185.1
-        version: 0.185.1
-
-  sdfgi/demo:
-    dependencies:
-      three:
-        specifier: ^0.185.1
-        version: 0.185.1
-      three-sdfgi:
-        specifier: workspace:*
-        version: link:../lib
-    devDependencies:
-      '@types/three':
-        specifier: ^0.185.4
-        version: 0.185.4
-      '@webgpu/types':
-        specifier: ^0.1.64
-        version: 0.1.71
-      vite:
-        specifier: ^8.2.0
-        version: 8.2.1(@types/node@26.2.0)
-
-  sdfgi/lib:
-    devDependencies:
       '@types/node':
         specifier: ^26.1.2
         version: 26.2.0
@@ -69,6 +19,36 @@ importers:
         version: 0.1.71
       three:
         specifier: ^0.185.1
+        version: 0.185.1
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.2.0
+        version: 8.2.1(@types/node@26.2.0)
+
+  rc-25d/demo:
+    dependencies:
+      '@rc25d/radiance-cascades':
+        specifier: workspace:*
+        version: link:../lib
+
+  rc-25d/lib:
+    dependencies:
+      three:
+        specifier: '>=0.180.0'
+        version: 0.185.1
+
+  sdfgi/demo:
+    dependencies:
+      three-sdfgi:
+        specifier: workspace:*
+        version: link:../lib
+
+  sdfgi/lib:
+    dependencies:
+      three:
+        specifier: '>=0.180.0'
         version: 0.185.1
 
 packages:

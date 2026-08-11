@@ -10,12 +10,6 @@
     "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning level.check.ts"
   },
   "dependencies": {
-    "three": "^0.185.1",
     "three-sdfgi": "workspace:*"
-  },
-  "devDependencies": {
-    "@types/three": "^0.185.4",
-    "@webgpu/types": "^0.1.64",
-    "vite": "^8.2.0"
   }
 }

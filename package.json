@@ -12,6 +12,11 @@
     "check": "pnpm -r check"
   },
   "devDependencies": {
-    "typescript": "6.0.3"
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.4",
+    "@webgpu/types": "^0.1.64",
+    "three": "^0.185.1",
+    "typescript": "6.0.3",
+    "vite": "^8.2.0"
   }
 }

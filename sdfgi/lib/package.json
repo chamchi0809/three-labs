@@ -17,11 +17,5 @@
   },
   "peerDependencies": {
     "three": ">=0.180.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.2",
-    "@types/three": "^0.185.4",
-    "@webgpu/types": "^0.1.64",
-    "three": "^0.185.1"
   }
 }
