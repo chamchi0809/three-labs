@@ -1,0 +1,17 @@
+{
+  "name": "three-labs",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "dev:sdfgi": "pnpm --filter sdfgi-demo dev",
+    "dev:rc25d": "pnpm --filter @rc25d/radiance-cascades build && pnpm --filter rc25d-demo dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm --filter @rc25d/radiance-cascades build && pnpm -r typecheck",
+    "test": "pnpm --filter three-sdfgi test",
+    "check": "pnpm -r check"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

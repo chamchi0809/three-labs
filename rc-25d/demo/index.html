@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2.5D Radiance Cascades Demo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+
+      canvas {
+        display: block;
+      }
+
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        color: #b8c3cc;
+        font: 12px/1.55 monospace;
+        text-shadow: 0 1px 3px #000;
+        user-select: none;
+      }
+
+      #hud strong {
+        color: #fff;
+        font-weight: 600;
+      }
+
+      #credit {
+        position: fixed;
+        bottom: 10px;
+        left: 12px;
+        color: #78838c;
+        font: 10px/1.4 monospace;
+      }
+
+      #credit a {
+        color: #9ba9b4;
+      }
+
+      /* Readout for the split solver's probe inspector: the cascade and probe
+         indices behind the pixel under the cursor. */
+      #probe {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        max-width: 46ch;
+        padding: 8px 10px;
+        border: 1px solid #2b333a;
+        border-radius: 4px;
+        background: #0b0e11d9;
+        color: #c6d0d8;
+        font: 11px/1.5 monospace;
+        white-space: pre;
+        user-select: none;
+        pointer-events: none;
+      }
+
+      #probe b {
+        color: #fff;
+        font-weight: 600;
+      }
+
+      #probe .missing {
+        color: #ff6b6b;
+      }
+
+      #probe .key {
+        display: block;
+        margin-top: 6px;
+        color: #8e9aa4;
+        white-space: normal;
+      }
+
+      #probe .swatch {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 3px;
+        vertical-align: baseline;
+      }
+
+      .error {
+        margin: 2em;
+        color: #ccc;
+        font: 16px monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <strong id="hud-title">Rooms · RC 2.5D</strong><br />
+      <span id="hud-instructions">WASD to move · Mouse to aim · Click to fire · F toggles laser</span>
+    </div>
+    <!-- Filled per scene from DemoScene.credit. -->
+    <div id="credit" hidden></div>
+    <!-- Filled from SplitRC.inspectPixel while the probe inspector is on. -->
+    <div id="probe" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

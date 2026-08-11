@@ -1,0 +1,27 @@
+{
+  "name": "three-sdfgi",
+  "version": "0.1.0",
+  "description": "Godot 4 SDFGI ported to three.js / WebGPU",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types src/sdfgi.test.ts"
+  },
+  "peerDependencies": {
+    "three": ">=0.180.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.4",
+    "@webgpu/types": "^0.1.64",
+    "three": "^0.185.1"
+  }
+}

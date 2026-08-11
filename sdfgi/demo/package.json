@@ -1,0 +1,22 @@
+{
+  "name": "sdfgi-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning level.check.ts"
+  },
+  "dependencies": {
+    "three": "^0.185.1",
+    "three-sdfgi": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "@webgpu/types": "^0.1.64",
+    "typescript": "7.0.2",
+    "vite": "^8.2.0"
+  }
+}
