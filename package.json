@@ -12,6 +12,6 @@
     "check": "pnpm -r check"
   },
   "devDependencies": {
-    "typescript": "7.0.2"
+    "typescript": "6.0.3"
   }
 }
