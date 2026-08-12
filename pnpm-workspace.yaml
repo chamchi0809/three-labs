@@ -2,3 +2,8 @@ packages:
   - sdfgi/*
   - rc-25d/*
   - scene/*
+  - lightmapper/*
+
+# the headless Dawn binding ships a postinstall that fetches its prebuilt native addon
+onlyBuiltDependencies:
+  - webgpu

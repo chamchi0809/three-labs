@@ -1,0 +1,33 @@
+{
+  "name": "scene-lightmapper",
+  "version": "0.1.0",
+  "description": "Headless WebGPU path-traced lightmap baker for tscene / three.js scenes",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "bin": {
+    "tlightmap": "./src/cli.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/raster.test.ts",
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/bake.check.ts"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3",
+    "three-mesh-bvh": "^0.9.14",
+    "tscene": "workspace:*",
+    "webgpu": "^0.4.0",
+    "xatlas-wasm": "^0.1.3"
+  },
+  "peerDependencies": {
+    "three": ">=0.180.0"
+  }
+}

@@ -1,0 +1,76 @@
+// A Cornell box, open at the front. Every surface is one plane facing inward, so the whole room is
+// seven quads and two blocks — small enough that a 512px atlas is dense and a bake takes seconds.
+//
+// Two things light it: the emissive ceiling panel, which only the baker understands (three has no area
+// lights in a lightmap-able form), and the point light inside it, which is all the realtime pass has.
+// That difference is the demo.
+
+--w: 4;
+--h: 3;
+
+@template mesh.wall {
+  material: meshStandardMaterial {
+    color: color(var(--tint, #d6d2c8));
+    roughness: 1;
+  };
+}
+
+mesh.wall #floor {
+  geometry: planeGeometry(var(--w), var(--w));
+  rotation: euler(-90deg, 0, 0);
+}
+
+mesh.wall #ceiling {
+  geometry: planeGeometry(var(--w), var(--w));
+  position: vec3(0, var(--h), 0);
+  rotation: euler(90deg, 0, 0);
+}
+
+mesh.wall #back {
+  geometry: planeGeometry(var(--w), var(--h));
+  position: vec3(0, calc(var(--h) / 2), -2);
+}
+
+mesh.wall #left {
+  --tint: #b0221c;
+  geometry: planeGeometry(var(--w), var(--h));
+  position: vec3(-2, calc(var(--h) / 2), 0);
+  rotation: euler(0, 90deg, 0);
+}
+
+mesh.wall #right {
+  --tint: #1f7a34;
+  geometry: planeGeometry(var(--w), var(--h));
+  position: vec3(2, calc(var(--h) / 2), 0);
+  rotation: euler(0, -90deg, 0);
+}
+
+// the fixture. `emissive` is what the baker samples as an area light; realtime only sees it glow.
+mesh #panel {
+  geometry: planeGeometry(1.4, 1.4);
+  position: vec3(0, calc(var(--h) - 0.1), 0);
+  rotation: euler(90deg, 0, 0);
+  material: meshStandardMaterial {
+    color: color(#000000);
+    emissive: color(#fff2d8);
+    emissiveIntensity: 7;
+  };
+}
+
+mesh.wall #tall {
+  geometry: boxGeometry(0.8, 1.7, 0.8);
+  position: vec3(-0.72, 0.85, -0.5);
+  rotation: euler(0, 18deg, 0);
+}
+
+mesh.wall #short {
+  geometry: boxGeometry(0.9, 0.9, 0.9);
+  position: vec3(0.78, 0.45, 0.5);
+  rotation: euler(0, -16deg, 0);
+}
+
+// bakeRadius turns the delta light into a sphere light, which is the only way to bake a soft shadow
+pointLight #lamp(#fff2d8, 6, 0) {
+  position: vec3(0, calc(var(--h) - 0.8), 0);
+  userData: { bakeRadius: 0.35 };
+}

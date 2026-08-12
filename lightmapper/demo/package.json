@@ -1,0 +1,17 @@
+{
+  "name": "lightmapper-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "tscene check scenes",
+    "bake": "node --experimental-strip-types --disable-warning=ExperimentalWarning ../lib/src/cli.ts scenes/room.tscene --out public/lightmaps --size 512 --samples 1024"
+  },
+  "dependencies": {
+    "scene-lightmapper": "workspace:*",
+    "tscene": "workspace:*"
+  }
+}
