@@ -1,7 +1,7 @@
 {
   "$schema": "https://typedoc.org/schema.json",
   "plugin": ["typedoc-plugin-markdown"],
-  "entryPoints": ["src/index.ts", "src/tools.ts", "src/vite.ts"],
+  "entryPoints": ["src/index.ts", "src/tools.ts", "src/vite.ts", "src/bakery/index.ts", "src/bakery/node.ts"],
   "tsconfig": "tsconfig.json",
   "out": "docs/api",
   "readme": "none",

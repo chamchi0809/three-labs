@@ -405,11 +405,34 @@ test("the vite plugin emits one module per sheet, with its imports and assets", 
   assert.equal(JSON.parse(/source: (".*?"), file:/.exec(code)![1]!), src); // source is verbatim, so positions hold
 });
 
+test("the vite plugin imports the three classes a sheet names, and only those", async () => {
+  const plugin = (await import("./vite.ts")).default({ check: false }) as any;
+  plugin.configResolved({ command: "build" });
+  const src = `@template meshStandardMaterial.glow { emissive: color(#fff); side: DoubleSide; }
+mesh { geometry: boxGeometry(1, 1, 1); material: meshStandardMaterial.glow { }; lookAt(0, 1, 0); }
+repeat(2) { pointLight(#fff, 1); }
+gltf("./m.glb") { find(mesh, "body") { } play("Idle") { } }`;
+  const { code } = await plugin.transform(src, path.resolve("/p/main.tscene").split(path.sep).join("/"));
+  const named = /^import \{ (.*) \} from "three\/webgpu";$/m.exec(code)![1]!.split(", ");
+  // template bodies count, aliases resolve, and constants are values like any other
+  assert.deepEqual(named, ["BoxGeometry", "Color", "Group", "DoubleSide", "Mesh", "MeshStandardMaterial", "PointLight"].sort());
+  // repeat/find/play are the language's own, and `lookAt` is a method — none of them is a three export
+  for (const absent of ["Repeat", "Find", "Play", "LookAt", "Scene", "WebGPURenderer"]) assert.ok(!named.includes(absent), absent);
+  assert.match(code, /registry: \{ BoxGeometry, Color, DoubleSide, Group, Mesh, MeshStandardMaterial, PointLight \}/);
+});
+
 // ---------------------------------------------------------------- runtime
 
-test("loadScene builds real three objects", async () => {
+// A sheet parsed from a string was never seen by the vite plugin, so nothing imported three on its
+// behalf — which is exactly the case `tscene/three` exists for.
+const load = async (src: string, opts: Record<string, unknown> = {}) => {
   const { loadScene } = await import("./runtime.ts");
-  const root = await loadScene(`
+  const { threeRegistry } = await import("./three.ts");
+  return loadScene(src, { registry: threeRegistry, ...opts });
+};
+
+test("loadScene builds real three objects", async () => {
+  const root = await load(`
     --h: 1.5;
     group #stage {
       mesh #box {
@@ -436,8 +459,7 @@ test("loadScene builds real three objects", async () => {
 });
 
 test("one AST node is one instance, so a shared --var is a shared material", async () => {
-  const { loadScene } = await import("./runtime.ts");
-  const root = await loadScene(`
+  const root = await load(`
     --mat: meshStandardMaterial { color: color(#00ff00); };
     group { mesh #a { material: var(--mat); } mesh #b { material: var(--mat); } }`);
   const [a, b] = [root.getObjectByName("a") as any, root.getObjectByName("b") as any];
@@ -446,9 +468,8 @@ test("one AST node is one instance, so a shared --var is a shared material", asy
 });
 
 test("runtime handles ref(), method calls and dotted paths, and ignores warnings", async () => {
-  const { loadScene } = await import("./runtime.ts");
   // `--dead` is never read: a warning, and warnings must not stop the build
-  const root = await loadScene(`
+  const root = await load(`
     --dead: 1;
     group {
       mesh #a { material: meshStandardMaterial { }; material.opacity: 0.25; position.x: 3; lookAt(0, 1, 0); }
@@ -462,8 +483,7 @@ test("runtime handles ref(), method calls and dotted paths, and ignores warnings
 });
 
 test("repeat() unrolls with --index and --count", async () => {
-  const { loadScene } = await import("./runtime.ts");
-  const root = await loadScene(`group #row { repeat(3) { mesh #tile { position.x: calc(var(--index) * 2); renderOrder: var(--count); } } }`);
+  const root = await load(`group #row { repeat(3) { mesh #tile { position.x: calc(var(--index) * 2); renderOrder: var(--count); } } }`);
   const row = root.getObjectByName("row")!;
   assert.deepEqual(row.children.map((c) => c.position.x), [0, 2, 4]);
   assert.deepEqual(row.children.map((c) => c.renderOrder), [3, 3, 3]);
@@ -475,8 +495,7 @@ test("repeat() unrolls with --index and --count", async () => {
 });
 
 test("find() reaches into an already-built subtree", async () => {
-  const { loadScene } = await import("./runtime.ts");
-  const root = await loadScene(`
+  const root = await load(`
     group #rig {
       mesh #body { }
       find(mesh, "body") { castShadow: true; }
@@ -487,29 +506,27 @@ test("find() reaches into an already-built subtree", async () => {
   assert.equal(body.castShadow, true);
   assert.equal(body.renderOrder, 2);
   assert.equal(body.name, "body"); // an #id on find() aliases, it does not rename
-  await assert.rejects(loadScene(`group { find("nope") { } }`), /no descendant named "nope"/);
-  await assert.rejects(loadScene(`group { mesh #a { } find(pointLight, "a") { } }`), /is not a PointLight/);
+  await assert.rejects(load(`group { find("nope") { } }`), /no descendant named "nope"/);
+  await assert.rejects(load(`group { mesh #a { } find(pointLight, "a") { } }`), /is not a PointLight/);
 });
 
 test("ref() resolves nodes declared later in the sheet", async () => {
-  const { loadScene } = await import("./runtime.ts");
-  const root = await loadScene(`directionalLight #sun { target: ref(#ground); }
+  const root = await load(`directionalLight #sun { target: ref(#ground); }
 mesh #ground { }`);
   assert.equal((root.getObjectByName("sun") as any).target, root.getObjectByName("ground"));
-  await assert.rejects(loadScene(`directionalLight { target: ref(#nope); }`), /unknown node #nope/);
+  await assert.rejects(load(`directionalLight { target: ref(#nope); }`), /unknown node #nope/);
 });
 
 test("runtime errors point at file:line:col", async () => {
-  const { loadScene } = await import("./runtime.ts");
-  await assert.rejects(loadScene(`group {\n  mesh { position.x: ; }\n}`, { base: "/p/main.tscene" }), /\/p\/main\.tscene:2:22/);
+  await assert.rejects(load(`group {\n  mesh { position.x: ; }\n}`, { base: "/p/main.tscene" }), /\/p\/main\.tscene:2:22/);
   // a property value can wait for a later node, a constructor argument cannot — and says so
-  await assert.rejects(loadScene(`group { mesh(ref(#later)) { } mesh #later { } }`), /constructor argument/);
-  await loadScene(`group { directionalLight { target: ref(#later); } mesh #later { } }`);
+  await assert.rejects(load(`group { mesh(ref(#later)) { } mesh #later { } }`), /constructor argument/);
+  await load(`group { directionalLight { target: ref(#later); } mesh #later { } }`);
 });
 
 test("disposeScene frees geometries, materials and their textures", async () => {
-  const { loadScene, disposeScene } = await import("./runtime.ts");
-  const root = await loadScene(`group { mesh { geometry: boxGeometry(1,1,1); material: meshStandardMaterial { }; } }`);
+  const { disposeScene } = await import("./runtime.ts");
+  const root = await load(`group { mesh { geometry: boxGeometry(1,1,1); material: meshStandardMaterial { }; } }`);
   const mesh = root.children[0]!.children[0] as any;
   const disposed: string[] = [];
   mesh.geometry.addEventListener("dispose", () => disposed.push("geometry"));

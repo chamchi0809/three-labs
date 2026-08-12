@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALIASES, BUILTINS, LOADERS } from "./check.ts";
+import { ALIASES, BUILTINS, LOADERS } from "./names.ts";
 import { checkSource, loadSchema } from "./tools.ts";
 import type { Loader } from "./parse.ts";
 
@@ -42,7 +42,7 @@ function examples(file: string): Example[] {
 const noImports: Loader = async (spec, from) => ({ text: "", file: path.resolve(path.dirname(from ?? "."), spec) });
 
 const schema = loadSchema();
-const docs = ["README.md", "docs/language.md"];
+const docs = ["README.md", "docs/language.md", "docs/bakery.md"];
 
 for (const doc of docs) {
   for (const example of examples(doc)) {
@@ -87,8 +87,11 @@ await check("docs/api is what typedoc generates from the current source", async 
   await app.generateOutputs(project);
 
   const committed = path.join(root, "docs/api");
-  assert.deepEqual(fs.readdirSync(out).sort(), fs.readdirSync(committed).sort());
-  for (const file of fs.readdirSync(out)) {
+  // a subpath entry point (bakery/node) lands in a subdirectory, so this has to walk
+  const tree = (dir: string) => fs.readdirSync(dir, { recursive: true }).map(String).sort();
+  assert.deepEqual(tree(out), tree(committed));
+  for (const file of tree(out)) {
+    if (fs.statSync(path.join(out, file)).isDirectory()) continue;
     assert.equal(
       fs.readFileSync(path.join(out, file), "utf8"),
       fs.readFileSync(path.join(committed, file), "utf8"),

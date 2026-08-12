@@ -52,7 +52,7 @@ export function applyLightmap(root: THREE.Object3D, manifest: LightmapManifest, 
     const count = geometry.getAttribute("position").count;
     if (count !== entry.vertices) {
       throw new Error(
-        `scene-lightmapper: "${entry.key}" has ${count} vertices but the lightmap was baked from ${entry.vertices} — rebake`,
+        `tscene/bakery: "${entry.key}" has ${count} vertices but the lightmap was baked from ${entry.vertices} — rebake`,
       );
     }
 
@@ -78,7 +78,7 @@ export async function loadLightmap(
   manager?: THREE.LoadingManager,
 ): Promise<{ manifest: LightmapManifest; texture: THREE.Texture }> {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`scene-lightmapper: ${response.status} loading ${url}`);
+  if (!response.ok) throw new Error(`tscene/bakery: ${response.status} loading ${url}`);
   const manifest = (await response.json()) as LightmapManifest;
   const base = new URL(url, globalThis.location?.href);
   const texture = await new THREE.TextureLoader(manager).loadAsync(new URL(manifest.texture, base).href);

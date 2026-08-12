@@ -1,7 +1,7 @@
 {
   "extends": "../tsconfig.base.json",
   "include": ["src"],
-  "exclude": ["src/*.test.ts", "src/*.check.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts"],
   "compilerOptions": {
     "types": ["@webgpu/types", "node"],
     "noEmit": false,

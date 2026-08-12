@@ -37,7 +37,7 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
         normals: m.normals,
         meshCountHint: meshes.length,
       });
-      if (err !== 0) throw new Error(`scene-lightmapper: xatlas rejected "${m.key}": ${xatlas.addMeshErrorString(err)}`);
+      if (err !== 0) throw new Error(`tscene/bakery: xatlas rejected "${m.key}": ${xatlas.addMeshErrorString(err)}`);
     }
 
     atlas.generate(
@@ -54,7 +54,7 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
 
     if (atlas.atlasCount > 1) {
       throw new Error(
-        `scene-lightmapper: the charts need ${atlas.atlasCount} atlases at ${size}px — raise --size or lower --texels-per-unit`,
+        `tscene/bakery: the charts need ${atlas.atlasCount} atlases at ${size}px — raise --size or lower --texels-per-unit`,
       );
     }
 

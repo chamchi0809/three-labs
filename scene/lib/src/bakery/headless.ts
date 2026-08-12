@@ -31,7 +31,7 @@ function canvasStub() {
       configure() {},
       unconfigure() {},
       getCurrentTexture() {
-        throw new Error("scene-lightmapper: headless renderer has no swapchain");
+        throw new Error("tscene/bakery: headless renderer has no swapchain");
       },
     }),
     addEventListener() {},
@@ -58,7 +58,7 @@ export async function createHeadlessRenderer(): Promise<THREE.WebGPURenderer> {
  */
 async function adapterLimits(): Promise<Record<string, number>> {
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-  if (!adapter) throw new Error("scene-lightmapper: no WebGPU adapter — is there a GPU on this machine?");
+  if (!adapter) throw new Error("tscene/bakery: no WebGPU adapter — is there a GPU on this machine?");
   const limits: Record<string, number> = {};
   // GPUSupportedLimits keeps its values in prototype getters, so for-in is the way in
   for (const key in adapter.limits) {

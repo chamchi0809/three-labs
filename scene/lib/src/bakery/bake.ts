@@ -37,7 +37,7 @@ export type BakeResult = {
 
 export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<BakeResult> {
   const scene = collectScene(root, opts);
-  if (!scene.meshes.length) throw new Error("scene-lightmapper: nothing to bake — no visible meshes under the root");
+  if (!scene.meshes.length) throw new Error("tscene/bakery: nothing to bake — no visible meshes under the root");
 
   opts.onProgress?.("unwrap", 0);
   const atlas = await unwrap(scene.meshes, opts);
@@ -45,7 +45,7 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
 
   opts.onProgress?.("rasterize", 0);
   const texels = rasterize(scene.meshes, atlas);
-  if (!texels.index.length) throw new Error("scene-lightmapper: the unwrap produced no usable texels");
+  if (!texels.index.length) throw new Error("tscene/bakery: the unwrap produced no usable texels");
   opts.onProgress?.("rasterize", 1);
 
   const traced = await trace(opts.renderer, scene, texels, {

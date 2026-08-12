@@ -30,6 +30,7 @@ group #stage {
 |---|---|
 | [docs/language.md](./docs/language.md) | `.tscene` language reference — nodes, properties, values, variables, templates, imports, builtins, diagnostics |
 | [docs/api](./docs/api/index.md) | runtime and tooling API reference, generated from the source by typedoc |
+| [docs/bakery.md](./docs/bakery.md) | `tscene/bakery` — path-traced lightmaps, baked on a headless WebGPU device in Node |
 
 ## Syntax at a glance
 
@@ -66,6 +67,26 @@ Loader options: `{ manager, draco, ktx2 }` — a shared `LoadingManager`, the dr
 transcoder path.
 
 Runtime errors carry their location: `main.tscene:12:5: ...`.
+
+### Bundle size
+
+The runtime never reaches into three by name. The vite plugin reads the classes a sheet mentions and
+emits `import { Mesh, BoxGeometry, … } from "three/webgpu"` next to it, so a bundler keeps exactly those
+and drops the rest of three — a `import scene from "./room.tscene"` app minifies to ~228 kB rather than
+the ~1,067 kB a `three[name]` lookup would pin.
+
+The price is that a sheet which only exists at runtime — `loadScene(text)`, `loadSceneFromURL(url)` —
+was never seen by the plugin, so it needs three handed to it:
+
+```ts
+import { loadSceneFromURL } from "tscene";
+import { threeRegistry } from "tscene/three";   // this one does pull in all of three
+
+const root = await loadSceneFromURL("/scenes/room.tscene", { registry: threeRegistry });
+```
+
+Same for `registry: { water: Water }` — a class the plugin cannot know about is still passed by hand,
+and is looked up before the sheet's own imports.
 
 ## Type checking
 

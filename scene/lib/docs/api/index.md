@@ -188,8 +188,8 @@ type LoadOptions = {
      renderer: unknown;
   };
   load?: Loader;
-  manager?: THREE.LoadingManager;
-  registry?: Record<string, (...args) => any>;
+  manager?: LoadingManager;
+  registry?: Record<string, any>;
 };
 ```
 
@@ -203,8 +203,8 @@ type LoadOptions = {
 | `ktx2.path` | `string` | - |
 | `ktx2.renderer` | `unknown` | - |
 | <a id="load"></a> `load?` | [`Loader`](#loader) | - |
-| <a id="manager"></a> `manager?` | `THREE.LoadingManager` | shared LoadingManager — its onProgress/onLoad see every texture() and gltf() |
-| <a id="registry"></a> `registry?` | `Record`\<`string`, (...`args`) => `any`\> | extra constructors, e.g. { water: Water }. Looked up before three's exports. |
+| <a id="manager"></a> `manager?` | `LoadingManager` | shared LoadingManager — its onProgress/onLoad see every texture() and gltf() |
+| <a id="registry"></a> `registry?` | `Record`\<`string`, `any`\> | Constructors and constants by name, e.g. `{ water: Water }` — looked up before the sheet's own build-time imports. A sheet loaded from a string has none of those, so it needs the whole set: `import { threeRegistry } from "tscene/three"`. |
 
 ***
 
@@ -290,6 +290,7 @@ type SceneModule = {
   assets?: Record<string, string>;
   file: string;
   imports?: Record<string, string>;
+  registry?: Record<string, unknown>;
   source: string;
 };
 ```
@@ -303,6 +304,7 @@ What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet,
 | <a id="assets"></a> `assets?` | `Record`\<`string`, `string`\> | `texture("./t.png")` → the url the bundler resolved it to |
 | <a id="file-1"></a> `file` | `string` | - |
 | <a id="imports"></a> `imports?` | `Record`\<`string`, `string`\> | - |
+| <a id="registry-1"></a> `registry?` | `Record`\<`string`, `unknown`\> | the three exports this sheet names, imported by the plugin so the bundler sees them one by one |
 | <a id="source"></a> `source` | `string` | - |
 
 ***
@@ -473,29 +475,6 @@ Apply non-overlapping single-range fixes to source text.
 #### Returns
 
 `string`
-
-***
-
-### check()
-
-```ts
-function check(
-   nodes, 
-   schema, 
-   templates?): Diagnostic[];
-```
-
-#### Parameters
-
-| Parameter | Type | Default value |
-| ------ | ------ | ------ |
-| `nodes` | [`Member`](#member)[] | `undefined` |
-| `schema` | [`Schema`](tools.md#schema) | `undefined` |
-| `templates` | [`Pos`](#pos-1) & \{ `body`: [`Member`](#member)[]; `kind`: `"template"`; `name`: `string`; `namePos`: [`Pos`](#pos-1); `node?`: `string`; \}[] | `[]` |
-
-#### Returns
-
-[`Diagnostic`](#diagnostic)[]
 
 ***
 

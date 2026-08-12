@@ -1,17 +1,17 @@
-# scene-lightmapper
+# tscene/bakery
 
-Path-traced lightmaps for [`tscene`](../scene) / three.js scenes, baked on a **headless WebGPU device in
+Path-traced lightmaps for [`tscene`](../README.md) / three.js scenes, baked on a **headless WebGPU device in
 Node**. No browser, no window, no display server — `webgpu` (Dawn) supplies the adapter, three's
 `WebGPURenderer` runs the compute pass, and [`three-mesh-bvh`](https://github.com/gkjohnson/three-mesh-bvh)'s
 WebGPU API owns the acceleration structure.
 
 ```sh
-pnpm bake:lightmapper   # bakes lightmapper/demo/scenes/room.tscene
-pnpm dev:lightmapper    # the demo, press G to A/B baked GI against realtime direct light
+pnpm bake:bakery   # bakes scene/bakery-demo/scenes/room.tscene
+pnpm dev:bakery    # the demo, press G to A/B baked GI against realtime direct light
 ```
 
 <!-- the atlas the demo ships with: charts for the room, the two blocks and the ceiling panel -->
-![the baked atlas](./demo/public/lightmaps/room.png)
+![the baked atlas](../../bakery-demo/public/lightmaps/room.png)
 
 ## What it does
 
@@ -31,12 +31,12 @@ pnpm dev:lightmapper    # the demo, press G to A/B baked GI against realtime dir
 
 ## Using it
 
-Two entry points. `scene-lightmapper` is browser safe and does nothing but apply a bake;
-`scene-lightmapper/node` is the baker and pulls in Dawn, sharp and xatlas.
+Two entry points. `tscene/bakery` is browser safe and does nothing but apply a bake;
+`tscene/bakery/node` is the baker and pulls in Dawn, sharp and xatlas.
 
 ```ts
 // bake, in Node
-import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "scene-lightmapper/node";
+import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
 
 const renderer = await createHeadlessRenderer();
 const result = await bake(await loadSceneFile("scenes/room.tscene"), { renderer, size: 512, samples: 1024 });
@@ -45,7 +45,7 @@ await writeBake(result, "public/lightmaps", "room");
 
 ```ts
 // apply, in the browser
-import { applyLightmap, loadLightmap, muteBakedLights } from "scene-lightmapper";
+import { applyLightmap, loadLightmap, muteBakedLights } from "tscene/bakery";
 
 const { manifest, texture } = await loadLightmap("lightmaps/room.lightmap.json");
 applyLightmap(scene, manifest, texture);
@@ -57,7 +57,7 @@ muteBakedLights(scene); // the atlas already contains them; leaving them on coun
 ### CLI
 
 ```sh
-tlightmap scenes/room.tscene --out public/lightmaps --size 512 --samples 1024 [--exr]
+tscene-bake scenes/room.tscene --out public/lightmaps --size 512 --samples 1024 [--exr]
 ```
 
 `--help` lists the rest (`--bounces`, `--batch`, `--padding`, `--texels-per-unit`, `--denoise`, `--dilate`).
@@ -87,12 +87,12 @@ The manifest carries only uvs, not geometry, because `BufferGeometry.toNonIndexe
 
 | Stage | File | |
 | --- | --- | --- |
-| collect | [`scene.ts`](./lib/src/scene.ts) | scene → world-space triangle soup, materials, lights, sky, emissive triangle list |
-| unwrap | [`atlas.ts`](./lib/src/atlas.ts) | lightmap uvs from xatlas (wasm), one atlas for the whole scene |
-| rasterize | [`raster.ts`](./lib/src/raster.ts) | atlas texel → the world position and normal to shade |
-| trace | [`tracer.ts`](./lib/src/tracer.ts) | the estimator, as WGSL, over three-mesh-bvh's `BVHComputeData` |
-| filter | [`filter.ts`](./lib/src/filter.ts) | edge-aware denoise, then dilation past the chart edges so bilinear taps never read black |
-| pack | [`io.ts`](./lib/src/io.ts) | PNG / EXR / manifest |
+| collect | [`scene.ts`](../src/bakery/scene.ts) | scene → world-space triangle soup, materials, lights, sky, emissive triangle list |
+| unwrap | [`atlas.ts`](../src/bakery/atlas.ts) | lightmap uvs from xatlas (wasm), one atlas for the whole scene |
+| rasterize | [`raster.ts`](../src/bakery/raster.ts) | atlas texel → the world position and normal to shade |
+| trace | [`tracer.ts`](../src/bakery/tracer.ts) | the estimator, as WGSL, over three-mesh-bvh's `BVHComputeData` |
+| filter | [`filter.ts`](../src/bakery/filter.ts) | edge-aware denoise, then dilation past the chart edges so bilinear taps never read black |
+| pack | [`io.ts`](../src/bakery/io.ts) | PNG / EXR / manifest |
 
 The estimator is the part worth reading twice. It integrates **irradiance**, so bounces are
 cosine-sampled and the π from the estimator cancels the 1/π from the Lambert BRDF — every bounce is just
@@ -104,8 +104,8 @@ is what keeps the sample counts low.
 ## Checks
 
 ```sh
-pnpm --filter scene-lightmapper test    # CPU: rasterization, light conventions, manifest round trip
-pnpm --filter scene-lightmapper check   # GPU: the radiometry, against closed forms
+pnpm --filter tscene test     # CPU: rasterization, light conventions, manifest round trip
+pnpm --filter tscene check    # GPU: the radiometry, against closed forms
 ```
 
 The GPU check is the interesting one — every configuration in it has an irradiance you can write down,
@@ -122,7 +122,7 @@ so a shader that is merely plausible still fails:
 The last one is the colour-bleeding check and the sharpest: any energy the bounce loses or invents shows
 up as a deviation from π.
 
-Unlike the rest of the repo, this check needs a working GPU — which is the whole point of the package.
+Unlike the rest of the repo, this check needs a working GPU — which is the whole point of the baker.
 
 ## Known ceilings
 
@@ -140,5 +140,5 @@ ones worth knowing about:
   albedo is what the lightmap gets multiplied by.
 - **No seam fixing.** Charts meet exactly, but a bilinear tap across a seam does not solve for
   continuity; dilation hides the worst of it.
-- `three-mesh-bvh`'s WebGPU API is documented as unstable, and [one small `.d.ts`](./lib/src/three-mesh-bvh-webgpu.d.ts)
+- `three-mesh-bvh`'s WebGPU API is documented as unstable, and [one small `.d.ts`](../src/bakery/three-mesh-bvh-webgpu.d.ts)
   declares the exports it ships without types.

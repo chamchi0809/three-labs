@@ -182,6 +182,29 @@ function buildSchema(opts?): Schema;
 
 ***
 
+### check()
+
+```ts
+function check(
+   nodes, 
+   schema, 
+   templates?): Diagnostic[];
+```
+
+#### Parameters
+
+| Parameter | Type | Default value |
+| ------ | ------ | ------ |
+| `nodes` | [`Member`](index.md#member)[] | `undefined` |
+| `schema` | [`Schema`](#schema) | `undefined` |
+| `templates` | [`Pos`](index.md#pos-1) & \{ `body`: [`Member`](index.md#member)[]; `kind`: `"template"`; `name`: `string`; `namePos`: [`Pos`](index.md#pos-1); `node?`: `string`; \}[] | `[]` |
+
+#### Returns
+
+[`Diagnostic`](index.md#diagnostic)[]
+
+***
+
 ### checkSource()
 
 ```ts
@@ -294,12 +317,6 @@ function resolveSheet(spec, from): string;
 `string`
 
 ## References
-
-### check
-
-Re-exports [check](index.md#check)
-
-***
 
 ### expand
 

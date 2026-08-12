@@ -1,7 +1,12 @@
 // Runtime loader: .tscene source -> live three objects. Browser-safe.
-import * as THREE from "three/webgpu";
+//
+// Nothing here reaches into three by name at runtime: the four values below are the only ones this
+// module imports, and every class a sheet mentions arrives through a registry the vite plugin built
+// at compile time. That is what lets a bundler tree-shake three down to what the scene actually uses.
+import { AnimationClip, AnimationMixer, Group, TextureLoader } from "three/webgpu";
+import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
-import { ALIASES, className } from "./check.ts";
+import { className } from "./names.ts";
 
 /** What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet, one module. */
 export type SceneModule = {
@@ -11,6 +16,8 @@ export type SceneModule = {
   imports?: Record<string, string>;
   /** `texture("./t.png")` → the url the bundler resolved it to */
   assets?: Record<string, string>;
+  /** the three exports this sheet names, imported by the plugin so the bundler sees them one by one */
+  registry?: Record<string, unknown>;
 };
 
 /** every .tscene module registers itself here, so a hot-replaced sheet is picked up by whoever imported it */
@@ -28,12 +35,16 @@ const latest = (mod: SceneModule) => sheets.get(mod.file) ?? mod;
 export type LoadOptions = {
   /** base url/path for @import and texture()/gltf() (defaults to the module's file, then the document url) */
   base?: string;
-  /** extra constructors, e.g. { water: Water }. Looked up before three's exports. */
-  registry?: Record<string, new (...args: any[]) => any>;
+  /**
+   * Constructors and constants by name, e.g. `{ water: Water }` — looked up before the sheet's own
+   * build-time imports. A sheet loaded from a string has none of those, so it needs the whole set:
+   * `import { threeRegistry } from "tscene/three"`.
+   */
+  registry?: Record<string, any>;
   /** resolves @import paths; defaults to the module's own imports, or fetch */
   load?: Loader;
   /** shared LoadingManager — its onProgress/onLoad see every texture() and gltf() */
-  manager?: THREE.LoadingManager;
+  manager?: LoadingManager;
   /** path to three's draco decoder, for gltf() files that use it */
   draco?: string;
   /** transcoder path + the renderer whose support is probed, for gltf() files with ktx2 textures */
@@ -75,19 +86,21 @@ type Ctx = {
   /** the entry sheet, for turning offsets in error messages into line:col */
   sheet: { text: string; file?: string };
   /** mixers created by play(), handed to the caller through root.userData */
-  mixers: THREE.AnimationMixer[];
+  mixers: AnimationMixer[];
   /** one AST node = one instance, so a material held in a --var is shared, not rebuilt per user */
   made: WeakMap<ObjectValue, Promise<any>>;
   /** #id → instance, for ref(#id) */
   ids: Map<string, any>;
   /** props whose ref(#id) target is not built yet — replayed once the whole tree exists */
   deferred: (() => Promise<void>)[];
+  /** name → constructor/constant: the sheet's build-time three imports, with opts.registry on top */
+  registry: Record<string, any>;
   /** after the tree is built an unknown #id is a real error, not a forward reference */
   settled?: boolean;
 };
 
 /** Parses `src` and builds the scene graph. Top-level nodes become children of the returned group. */
-export async function loadScene(src: string | SceneModule, opts: LoadOptions = {}): Promise<THREE.Group> {
+export async function loadScene(src: string | SceneModule, opts: LoadOptions = {}): Promise<Group> {
   // the imported module object goes stale on every hot reload, so always take the registered one
   const mod = typeof src === "string" ? undefined : latest(src);
   const base = opts.base ?? mod?.file;
@@ -100,12 +113,14 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
   const ctx: Ctx = {
     opts: { ...opts, base }, sheet: { text: sheet.text, file: sheet.file }, mixers: [],
     made: new WeakMap(), ids: new Map(), deferred: [],
+    // the caller's registry wins, so `{ water: Water }` can also shadow a three export
+    registry: { ...moduleRegistry(mod), ...opts.registry },
   };
-  const root = new THREE.Group();
+  const root = new Group();
   root.name = "scene";
   for (const m of nodes) {
     if (m.kind !== "node") continue;
-    root.add((await construct(m.object, ctx)) as THREE.Object3D);
+    root.add((await construct(m.object, ctx)) as Object3D);
   }
   ctx.settled = true;
   for (const replay of ctx.deferred) await replay();
@@ -127,15 +142,15 @@ function fail(message: string, pos: Pos, ctx: Ctx): never {
 }
 
 /** Advances every clip play() started. Call it once per frame with the frame time in seconds. */
-export function updateScene(root: THREE.Object3D, delta: number): void {
-  for (const mixer of (root.userData.mixers ?? []) as THREE.AnimationMixer[]) mixer.update(delta);
+export function updateScene(root: Object3D, delta: number): void {
+  for (const mixer of (root.userData.mixers ?? []) as AnimationMixer[]) mixer.update(delta);
 }
 
 /**
  * Frees the GPU resources of a scene built by loadScene — call it before dropping a root,
  * otherwise every hot reload leaks its geometries, materials and textures.
  */
-export function disposeScene(root: THREE.Object3D): void {
+export function disposeScene(root: Object3D): void {
   root.traverse((o: any) => {
     o.geometry?.dispose?.();
     for (const material of [o.material].flat().filter(Boolean)) {
@@ -163,22 +178,43 @@ export function __sceneChanged(mod: SceneModule): void {
 }
 
 /** Convenience: fetch a .tscene file and build it. */
-export async function loadSceneFromURL(url: string, opts: LoadOptions = {}): Promise<THREE.Group> {
+export async function loadSceneFromURL(url: string, opts: LoadOptions = {}): Promise<Group> {
   const file = resolveUrl(url, opts.base);
   const res = await fetch(file);
   if (!res.ok) throw new Error(`cannot load ${file}: ${res.status}`);
   return loadScene(await res.text(), { ...opts, base: file });
 }
 
-const three = THREE as unknown as Record<string, any>;
+/**
+ * Every three export a sheet and its @imports name, collected from the modules the vite plugin emitted.
+ * Merging the whole closure matters because a @template defined in one sheet is instantiated in another.
+ */
+function moduleRegistry(root: SceneModule | undefined): Record<string, any> {
+  const out: Record<string, any> = {};
+  const seen = new Set<string>();
+  const walk = (mod: SceneModule | undefined) => {
+    if (!mod || seen.has(mod.file)) return;
+    seen.add(mod.file);
+    Object.assign(out, mod.registry);
+    for (const file of Object.values(mod.imports ?? {})) walk(sheets.get(file));
+  };
+  walk(root);
+  return out;
+}
+
+/** `meshStandardMaterial` and `MeshStandardMaterial` are the same entry; so are `vec3` and `Vector3`. */
+const lookup = (name: string, ctx: Ctx) => ctx.registry[name] ?? ctx.registry[className(name)];
+
+// a sheet parsed from a string was never seen by the plugin, so nothing imported three on its behalf
+const HINT = ' — a sheet loaded from a string has no build-time registry: import { threeRegistry } from "tscene/three" and pass it as `registry`';
 
 // module-level: a reloaded scene reuses the bytes it already downloaded
 // ponytail: keyed by url only — two loadScene calls with different draco/ktx2 options share the first result
 const assets = new Map<string, Promise<any>>();
 /** gltf() root → the clips that came with it, for play() */
-const clipsOf = new WeakMap<object, THREE.AnimationClip[]>();
+const clipsOf = new WeakMap<object, AnimationClip[]>();
 /** clip owner → its mixer, so several play() calls on one gltf share one mixer */
-const mixerOf = new WeakMap<object, THREE.AnimationMixer>();
+const mixerOf = new WeakMap<object, AnimationMixer>();
 function asset<T>(url: string, load: () => Promise<T>): Promise<T> {
   let pending = assets.get(url) as Promise<T> | undefined;
   if (!pending) assets.set(url, (pending = load()));
@@ -223,7 +259,7 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
 
   let target: any;
   if (o.name === "texture") {
-    const source = await asset(url(), () => new THREE.TextureLoader(ctx.opts.manager).loadAsync(url()));
+    const source = await asset(url(), () => new TextureLoader(ctx.opts.manager).loadAsync(url()));
     target = source.clone(); // shares the decoded image, but each use gets its own wrap/repeat state
     target.needsUpdate = true;
   } else if (o.name === "gltf") {
@@ -232,8 +268,8 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
     target = gltf.scene.clone(true);
     if (gltf.animations?.length) clipsOf.set(target, gltf.animations);
   } else {
-    const cls = ctx.opts.registry?.[o.name] ?? three[className(o.name)];
-    if (typeof cls !== "function") fail(`unknown three class ${JSON.stringify(className(o.name))}`, o, ctx);
+    const cls = lookup(o.name, ctx);
+    if (typeof cls !== "function") fail(`unknown three class ${JSON.stringify(className(o.name))}${cls === undefined ? HINT : ""}`, o, ctx);
     target = new cls(...args);
   }
 
@@ -251,7 +287,7 @@ async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
     const o = m.object;
     if (o.name === "find") return applyFind(target, o, ctx);
     if (o.name === "play") return applyPlay(target, o, ctx);
-    const known = ctx.opts.registry?.[o.name] ?? three[className(o.name)];
+    const known = lookup(o.name, ctx);
     // `lookAt(0, 1, 0);` — a name that is a method here and not a class of its own is a call
     if (!known && !o.hasBody && typeof target[o.name] === "function") {
       const args: unknown[] = [];
@@ -322,13 +358,13 @@ async function applyFind(target: any, o: ObjectValue, ctx: Ctx): Promise<void> {
 async function applyPlay(target: any, o: ObjectValue, ctx: Ctx): Promise<void> {
   let owner = target;
   while (owner && !clipsOf.has(owner)) owner = owner.parent;
-  const clips: THREE.AnimationClip[] | undefined = owner && clipsOf.get(owner);
+  const clips: AnimationClip[] | undefined = owner && clipsOf.get(owner);
   if (!clips) fail("play() needs a gltf() node with animations to sit in", o, ctx);
   const name = String(await evaluate(o.args[0]!, ctx));
-  const clip = THREE.AnimationClip.findByName(clips, name);
+  const clip = AnimationClip.findByName(clips, name);
   if (!clip) fail(`no clip named ${JSON.stringify(name)} — this gltf has ${clips.map((c) => c.name).join(", ") || "none"}`, o, ctx);
   let mixer = mixerOf.get(owner);
-  if (!mixer) mixerOf.set(owner, (mixer = new THREE.AnimationMixer(owner)));
+  if (!mixer) mixerOf.set(owner, (mixer = new AnimationMixer(owner)));
   const action = mixer.clipAction(clip);
   for (const inner of o.body) await apply(action, inner, ctx);
   action.play();
@@ -361,9 +397,8 @@ async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
       if (v.name === "true") return true;
       if (v.name === "false") return false;
       if (v.name === "null") return null;
-      if (v.name in (ctx.opts.registry ?? {})) return ctx.opts.registry![v.name];
-      if (v.name in three) return three[v.name];
-      if (ALIASES[v.name]) return three[ALIASES[v.name]!];
-      return fail(`unknown constant ${JSON.stringify(v.name)}`, v, ctx);
+      const constant = lookup(v.name, ctx);
+      if (constant !== undefined) return constant;
+      return fail(`unknown constant ${JSON.stringify(v.name)}${HINT}`, v, ctx);
   }
 }

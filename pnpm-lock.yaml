@@ -33,36 +33,6 @@ importers:
         specifier: ^8.2.0
         version: 8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(yaml@2.9.0)
 
-  lightmapper/demo:
-    dependencies:
-      scene-lightmapper:
-        specifier: workspace:*
-        version: link:../lib
-      tscene:
-        specifier: workspace:*
-        version: link:../../scene/lib
-
-  lightmapper/lib:
-    dependencies:
-      sharp:
-        specifier: ^0.35.3
-        version: 0.35.3(@types/node@26.2.0)
-      three:
-        specifier: '>=0.180.0'
-        version: 0.185.1
-      three-mesh-bvh:
-        specifier: ^0.9.14
-        version: 0.9.14(three@0.185.1)
-      tscene:
-        specifier: workspace:*
-        version: link:../../scene/lib
-      webgpu:
-        specifier: ^0.4.0
-        version: 0.4.0
-      xatlas-wasm:
-        specifier: ^0.1.3
-        version: 0.1.3
-
   rc-25d/demo:
     dependencies:
       '@rc25d/radiance-cascades':
@@ -74,6 +44,12 @@ importers:
       three:
         specifier: '>=0.180.0'
         version: 0.185.1
+
+  scene/bakery-demo:
+    dependencies:
+      tscene:
+        specifier: workspace:*
+        version: link:../lib
 
   scene/demo:
     dependencies:
@@ -95,6 +71,19 @@ importers:
       vscode-languageserver-textdocument:
         specifier: ^1.0.12
         version: 1.0.12
+    devDependencies:
+      sharp:
+        specifier: ^0.35.3
+        version: 0.35.3(@types/node@26.2.0)
+      three-mesh-bvh:
+        specifier: ^0.9.14
+        version: 0.9.14(three@0.185.1)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+      xatlas-wasm:
+        specifier: ^0.1.3
+        version: 0.1.3
 
   scene/vscode:
     dependencies:

@@ -1,5 +1,5 @@
 {
-  "name": "lightmapper-demo",
+  "name": "bakery-demo",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,10 +8,9 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "check": "node node_modules/tscene/dist/cli.js check scenes",
-    "bake": "node --experimental-strip-types --disable-warning=ExperimentalWarning ../lib/src/cli.ts scenes/room.tscene --out public/lightmaps --size 512 --samples 1024"
+    "bake": "node --experimental-strip-types --disable-warning=ExperimentalWarning ../lib/src/bakery/cli.ts scenes/room.tscene --out public/lightmaps --size 512 --samples 1024"
   },
   "dependencies": {
-    "scene-lightmapper": "workspace:*",
     "tscene": "workspace:*"
   }
 }

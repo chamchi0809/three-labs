@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as THREE from "three/webgpu";
-import { loadScene, type LoadOptions } from "tscene";
+import { loadScene, type LoadOptions } from "../index.ts";
+import { threeRegistry } from "../three.ts";
 import sharp from "sharp";
 
 let shimmed = false;
@@ -52,6 +53,8 @@ export async function loadSceneFile(file: string, opts: LoadOptions = {}): Promi
   installNodeLoaders();
   const entry = resolve(file);
   return loadScene(await readFile(entry, "utf8"), {
+    // read off disk, so no bundler ever saw it — the baker needs all of three available by name
+    registry: threeRegistry,
     base: pathToFileURL(entry).href,
     load: async (path, from) => {
       const target = resolve(from ? dirname(fileURLToPath(from)) : dirname(entry), path);

@@ -3,7 +3,7 @@
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { loadScene } from "tscene";
-import { applyLightmap, loadLightmap, muteBakedLights } from "scene-lightmapper";
+import { applyLightmap, loadLightmap, muteBakedLights } from "tscene/bakery";
 import sheet from "../scenes/room.tscene";
 
 const msg = document.getElementById("msg")!;
@@ -62,7 +62,7 @@ function setBaked(on: boolean) {
 
 msg.textContent = bake
   ? ""
-  : "no lightmap yet.\nrun `pnpm bake:lightmapper` from the repo root, then reload.";
+  : "no lightmap yet.\nrun `pnpm bake:bakery` from the repo root, then reload.";
 hud.hidden = !bake;
 setBaked(true);
 

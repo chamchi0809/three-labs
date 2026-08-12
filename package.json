@@ -11,8 +11,8 @@
     "test": "pnpm -r test",
     "check": "pnpm --filter tscene build && pnpm -r check",
     "dev:scene": "pnpm --filter tscene build && pnpm --filter scene-demo dev",
-    "dev:lightmapper": "pnpm --filter tscene build && pnpm --filter lightmapper-demo dev",
-    "bake:lightmapper": "pnpm --filter tscene build && pnpm --filter lightmapper-demo bake",
+    "dev:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo dev",
+    "bake:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo bake",
     "docs": "pnpm --filter tscene docs"
   },
   "devDependencies": {

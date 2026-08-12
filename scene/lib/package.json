@@ -33,12 +33,25 @@
       "types": "./dist/vite.d.ts",
       "import": "./dist/vite.js"
     },
+    "./three": {
+      "types": "./dist/three.d.ts",
+      "import": "./dist/three.js"
+    },
+    "./bakery": {
+      "types": "./dist/bakery/index.d.ts",
+      "import": "./dist/bakery/index.js"
+    },
+    "./bakery/node": {
+      "types": "./dist/bakery/node.d.ts",
+      "import": "./dist/bakery/node.js"
+    },
     "./client": "./client.d.ts",
     "./package.json": "./package.json"
   },
   "bin": {
     "tscene": "./dist/cli.js",
-    "tscene-lsp": "./dist/lsp.js"
+    "tscene-lsp": "./dist/lsp.js",
+    "tscene-bake": "./dist/bakery/cli.js"
   },
   "files": [
     "dist",
@@ -51,20 +64,32 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "docs": "typedoc",
-    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/docs.check.ts",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts"
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/docs.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/bake.check.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/raster.test.ts"
   },
   "peerDependencies": {
+    "sharp": ">=0.34.0",
     "three": ">=0.180.0",
-    "typescript": ">=5.5.0"
+    "three-mesh-bvh": ">=0.9.0",
+    "typescript": ">=5.5.0",
+    "webgpu": ">=0.4.0",
+    "xatlas-wasm": ">=0.1.3"
+  },
+  "peerDependenciesMeta": {
+    "sharp": { "optional": true },
+    "three-mesh-bvh": { "optional": true },
+    "typescript": { "optional": true },
+    "webgpu": { "optional": true },
+    "xatlas-wasm": { "optional": true }
   },
   "dependencies": {
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   },
-  "peerDependenciesMeta": {
-    "typescript": {
-      "optional": true
-    }
+  "devDependencies": {
+    "sharp": "^0.35.3",
+    "three-mesh-bvh": "^0.9.14",
+    "webgpu": "^0.4.0",
+    "xatlas-wasm": "^0.1.3"
   }
 }

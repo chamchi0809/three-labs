@@ -10,7 +10,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BUILTINS, className, nodeName } from "./check.ts";
+import { ALIASES, BUILTINS, className, nodeName } from "./names.ts";
 import { expand, parse, type Loader, type Member, type ObjectValue, type Pos, type Sheet } from "./parse.ts";
 import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
 
