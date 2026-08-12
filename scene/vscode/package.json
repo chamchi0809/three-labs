@@ -1,0 +1,144 @@
+{
+  "name": "three-scene-vscode",
+  "displayName": "three-scene",
+  "description": "Syntax highlighting, type checking, completion and formatting for .tscene files",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "three-labs",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "bundle": "node bundle.mjs",
+    "check": "node bundle.mjs && node grammar.check.mjs",
+    "vscode:prepublish": "node bundle.mjs"
+  },
+  "activationEvents": [
+    "onLanguage:scene"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "scene",
+        "aliases": [
+          "three-scene",
+          "scene"
+        ],
+        "extensions": [
+          ".tscene"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.svg",
+          "dark": "./icon.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "scene",
+        "scopeName": "source.scene",
+        "path": "./syntaxes/scene.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "scene",
+        "path": "./snippets/scene.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "three-scene.format",
+        "title": "three-scene: Fix and format this file"
+      },
+      {
+        "command": "three-scene.checkWorkspace",
+        "title": "three-scene: Check all .tscene files"
+      },
+      {
+        "command": "three-scene.fixWorkspace",
+        "title": "three-scene: Fix all .tscene files"
+      },
+      {
+        "command": "three-scene.restart",
+        "title": "three-scene: Restart language server"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "three-scene.format",
+          "when": "editorLangId == scene",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "three-scene",
+      "properties": {
+        "three-scene.entry": {
+          "type": "string",
+          "default": "three/webgpu",
+          "description": "three entry point whose typings drive the checker (three/webgpu or three)."
+        },
+        "three-scene.modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra modules whose exported classes become usable nodes and values (e.g. three/addons/objects/Water.js)."
+        },
+        "three-scene.declare": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Node names your app registers at runtime (loadScene's `registry`). They are accepted without type checking."
+        },
+        "three-scene.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "node binary used to run the language server. Empty uses the one bundled with VS Code."
+        },
+        "three-scene.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to three-scene's language server entry. Empty resolves it from the workspace's node_modules."
+        },
+        "three-scene.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log LSP traffic to the three-scene output channel."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[scene]": {
+        "editor.tabSize": 2,
+        "editor.formatOnSave": true,
+        "editor.suggest.insertMode": "replace"
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.1.0"
+  }
+}

@@ -1,0 +1,21 @@
+// shared look, pulled in with @import
+--accent: #ff8a3d;
+
+// --tint is a parameter: a node that sets it before applying .glow overrides the fallback
+@template mesh.glow {
+  material: meshStandardMaterial {
+    color: color(var(--tint, var(--accent)));
+    emissive: color(#221000);
+    roughness: 0.35;
+    metalness: 0.1;
+  };
+  castShadow: true;
+}
+
+@template mesh.floor {
+  material: meshStandardMaterial {
+    color: color(#20242c);
+    roughness: 0.9;
+  };
+  receiveShadow: true;
+}

@@ -1,0 +1,15 @@
+{
+  "name": "scene-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "three-scene check scenes"
+  },
+  "dependencies": {
+    "three-scene": "workspace:*"
+  }
+}

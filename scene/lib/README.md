@@ -1,0 +1,166 @@
+# three-scene
+
+Write three.js scenes in CSS syntax: the `.tscene` format, plus a type checker, an autofixer and a
+runtime loader.
+
+```css
+@import "./materials.tscene";
+--height: 1.5;
+
+@template mesh.glow {
+  material: meshStandardMaterial { color: color(#ff8a3d); roughness: 0.35; };
+  castShadow: true;
+}
+
+group #stage {
+  mesh.glow #spinner {
+    geometry: torusKnotGeometry(0.7, 0.24, 160, 32);
+    position: vec3(0, var(--height), 0);
+    rotation: euler(20deg, 0, 0);
+  }
+  pointLight #lamp(#ffd9a0, 30, 20) {
+    position: vec3(2.5, 3, 2);
+  }
+}
+```
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/language.md](./docs/language.md) | `.tscene` language reference — nodes, properties, values, variables, templates, imports, builtins, diagnostics |
+| [docs/api](./docs/api/index.md) | runtime and tooling API reference, generated from the source by typedoc |
+
+## Syntax at a glance
+
+| | |
+|---|---|
+| nesting | parenting (`parent.add(child)`) |
+| `#id` | `object.name = "id"` |
+| `.cls` | lays down the body of `@template <node>.cls`, then the node's own body overrides it |
+| `name(...)` | constructor arguments (positional) |
+| `{ ... }` | **instance properties only**. Constructor-only settings like `BoxGeometry.widthSegments` go in `boxGeometry(1,1,1,2,2,2)` |
+| property names | three's own camelCase (`castShadow`), plus dotted paths (`material.opacity`) and method calls (`lookAt(0,1,0);`) |
+| node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) |
+| values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ hp: 3 }` |
+| language functions | `var(--x, fallback)` `calc(...)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
+
+## Runtime
+
+```ts
+import { loadScene, loadSceneFromURL, updateScene, disposeScene } from "three-scene";
+import sheet from "./main.tscene";     // a SceneModule, courtesy of the vite plugin
+
+const root = await loadScene(sheet, { registry: { water: Water } });
+scene.add(root);           // a Group holding the top-level nodes
+
+updateScene(root, dt);     // advances the clips play() started — every frame
+disposeScene(root);        // disposes geometries/materials/textures and unparents
+```
+
+`loadScene` takes either a `SceneModule` or a raw source string. A string resolves `@import` with `fetch`
+(swap it out with the `load` option); a module reads the sheets bundled alongside it — no runtime fetch.
+`loadSceneFromURL(url)` fetches the file and uses that URL as the base.
+
+Loader options: `{ manager, draco, ktx2 }` — a shared `LoadingManager`, the draco decoder path, the ktx2
+transcoder path.
+
+Runtime errors carry their location: `main.tscene:12:5: ...`.
+
+## Type checking
+
+The schema is reflected out of the installed `three/webgpu` `.d.ts` with the TypeScript Compiler API:
+classes, constructor signatures, property types. Upgrading three upgrades the schema (cached under
+`node_modules/.cache/three-scene`, keyed by version).
+
+Constant unions such as `type Side = typeof FrontSide | ...` keep their names, so `side: NormalBlending`
+is an error (a raw `side: 2` passes, because three accepts it). Completion offers only the members of
+that union.
+
+```sh
+three-scene check scenes/          # a directory, a glob or a file
+three-scene fix   scenes/          # casing + formatting
+three-scene check --entry three    # when only core three is used
+three-scene check --watch          # re-check on every change
+three-scene check --format json    # for editors and CI
+three-scene check --module three/addons/objects/Water.js   # expose that module's exports as nodes (repeatable)
+three-scene check --declare water     # a node injected through the runtime registry — passes on name alone (repeatable)
+```
+
+The autofixer only touches **casing and formatting**. Aggressive fixes such as spelling corrections or
+value conversions are reported but never applied.
+
+Editors talk to the LSP server: `three-scene-lsp --stdio`. It supports:
+
+| Feature | Details |
+| --- | --- |
+| diagnostics | refreshed while typing, no save needed, following `@import`s |
+| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths inside `@import "` |
+| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants |
+| signature help | highlights the current argument inside `boxGeometry(` |
+| go to definition | templates (`.glow`), variables (`var(--x)`), `#id` (`ref(#a)`), `@import` paths (also ctrl-clickable as document links) |
+| find references / rename | `--var`, `#id`, `.template` — across every `.tscene` in the workspace, multi-root included. Rename validates the cursor position and the new name first (prepareRename). It follows the declaration↔use pairs `expand()` actually resolved, so a shadowed variable of the same name is left alone and a `var()` passed in as a template parameter is renamed along with it |
+| symbol outline | the scene graph as-is |
+| formatting | reprints the whole document (casing included) |
+| quick fixes | casing typos |
+
+VS Code picks this server up through the `scene/vscode/` extension (which adds highlighting, snippets and
+workspace check/fix commands).
+
+```ts
+// from a program
+import { loadSchema, checkSource, fixSource } from "three-scene/tools";
+```
+
+## Vite
+
+```ts
+import threeScene from "three-scene/vite";
+export default defineConfig({ plugins: [threeScene()] });
+```
+
+One sheet is one module (`SceneModule`). An `@import` becomes an import of that module, and the relative
+paths in `texture()`/`gltf()` become `?url` imports, so the bundler handles hashing and copying. Every
+build and hot update runs the checker; failures show up in the overlay. Options:
+`{ entry, modules, declare, check, hmr }`.
+
+Saving fires `onSceneChange` — rebuild the scene and nothing else (passing the module object you imported
+is fine, the current source is looked up for you):
+
+```ts
+import { loadScene, disposeScene, onSceneChange } from "three-scene";
+import sheet from "./main.tscene";
+
+let root = await loadScene(sheet);
+onSceneChange(async () => { disposeScene(root); scene.add(root = await loadScene(sheet)); });
+```
+
+One line types `import sheet from "./main.tscene"`: `/// <reference types="three-scene/client" />`.
+
+## Why the docs cannot rot
+
+`pnpm --filter three-scene check` verifies three things (`src/docs.check.ts`):
+
+1. Every example in this README and in `docs/language.md` is **compiled by the real parser and checker**.
+   A block tagged ` ```css error ` has to fail instead.
+2. Every name in the tables the implementation itself dispatches on (`BUILTINS`, `ALIASES`, `LOADERS`)
+   must appear in the language reference — adding a builtin without documenting it fails CI.
+3. `docs/api` must match, byte for byte, what typedoc generates from the current source
+   (`pnpm --filter three-scene docs` refreshes it).
+
+## Releasing
+
+`.github/workflows/npm-publish.yml` runs typecheck, tests and checks, sets the version from the tag and
+publishes:
+
+```sh
+git tag three-scene-v0.1.1 && git push --tags
+```
+
+A manual run (workflow_dispatch) only uploads the packed tarball unless `publish=true`. The token comes
+from the `NPM_PAT` repository secret (an npm automation token with publish rights).
+
+## Not included
+
+- Selector-based overrides (post-hoc rules like `.enemy { ... }`) — the nesting tree covers enough.
+- Loaders other than GLTF, colour previews.

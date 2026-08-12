@@ -1,0 +1,322 @@
+// Drives the language server over stdio and asserts every capability it advertises.
+// node --experimental-strip-types src/lsp.check.ts
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "three-scene-lsp-"));
+const main = path.join(dir, "main.tscene");
+const shared = path.join(dir, "shared.tscene");
+
+fs.writeFileSync(shared, `--warmth: 0.5;\n\n@template mesh.glow {\n  castShadow: true;\n  renderOrder: var(--depth);\n}\n\n@template pointLight.warm {\n  intensity: 3;\n}\n`);
+const text = `@import "./shared.tscene";
+--height: 2;
+
+group #stage {
+  --spin: 0.5;
+  mesh.glow #box {
+    --depth: 1;
+    geometry: boxGeometry(1, 1, 1);
+    position: vec3(0, var(--height), 0);
+    scale: vec3(var(--spin), 1, 1);
+    material: meshStandardMaterial { --hidden: 1; side: DoubleSide; };
+    visable: true;
+  }
+  mesh #floor {
+    --spin: 9;
+    scale: vec3(var(--spin), 1, 1);
+  }
+}
+
+@template mesh.shiny {
+  receiveShadow: true;
+}
+`;
+fs.writeFileSync(main, text);
+
+const server = spawn(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", path.join(here, "lsp.ts"), "--stdio"], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+
+const pending = new Map<number, (message: any) => void>();
+const notifications: Record<string, any[]> = {};
+let buffer = Buffer.alloc(0);
+
+server.stdout.on("data", (chunk: Buffer) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  for (;;) {
+    const header = buffer.indexOf("\r\n\r\n");
+    if (header < 0) return;
+    const length = Number(/Content-Length: (\d+)/i.exec(buffer.subarray(0, header).toString())?.[1]);
+    if (buffer.length < header + 4 + length) return;
+    const message = JSON.parse(buffer.subarray(header + 4, header + 4 + length).toString());
+    buffer = buffer.subarray(header + 4 + length);
+    if (message.id !== undefined && pending.has(message.id)) {
+      const settle = pending.get(message.id)!;
+      pending.delete(message.id);
+      settle(message);
+    }
+    else if (message.method) (notifications[message.method] ??= []).push(message.params);
+  }
+});
+
+let nextId = 1;
+const send = (message: object) => {
+  const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...message }));
+  server.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+  server.stdin.write(body);
+};
+const request = (method: string, params: object) =>
+  new Promise<any>((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, (message) => (message.error ? reject(new Error(`${method}: ${message.error.message}`)) : resolve(message.result)));
+    setTimeout(() => reject(new Error(`${method} timed out`)), 60_000).unref();
+    send({ id, method, params });
+  });
+
+const uri = pathToFileURL(main).href;
+const at = (needle: string, delta = 0) => {
+  const offset = text.indexOf(needle) + delta;
+  const head = text.slice(0, offset);
+  return { line: head.split("\n").length - 1, character: offset - (head.lastIndexOf("\n") + 1) };
+};
+const position = (needle: string, delta = 0) => ({ textDocument: { uri }, position: at(needle, delta) });
+const labels = (items: any[]) => items.map((i: any) => i.label);
+// results come out in graph order, so compare as sets
+const sortRanges = (items: any[]) =>
+  items.map((r: any) => r.range.start).sort((a, b) => a.line - b.line || a.character - b.character);
+
+const failures: string[] = [];
+const check = async (name: string, fn: () => Promise<void>) => {
+  try {
+    await fn();
+    console.log(`ok   ${name}`);
+  } catch (e) {
+    failures.push(name);
+    console.error(`FAIL ${name}\n     ${(e as Error).message.split("\n").join("\n     ")}`);
+  }
+};
+
+const capabilities = (await request("initialize", { processId: process.pid, rootPath: dir, capabilities: {} })).capabilities;
+send({ method: "initialized", params: {} });
+send({ method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "scene", version: 1, text } } });
+
+await check("advertises the full language surface", async () => {
+  for (const capability of ["completionProvider", "hoverProvider", "signatureHelpProvider", "definitionProvider", "referencesProvider", "renameProvider", "documentSymbolProvider", "documentFormattingProvider", "codeActionProvider", "documentLinkProvider"]) {
+    assert.ok(capabilities[capability], `missing ${capability}`);
+  }
+});
+
+await check("publishes diagnostics for the open file", async () => {
+  for (let i = 0; i < 100 && !notifications["textDocument/publishDiagnostics"]; i++) await new Promise((r) => setTimeout(r, 100));
+  const diagnostics = notifications["textDocument/publishDiagnostics"]!.at(-1)!.diagnostics;
+  const messages = diagnostics.map((d: any) => d.message);
+  const typo = diagnostics.find((d: any) => /has no property "visable"/.test(d.message));
+  assert.ok(typo, `expected the property typo, got ${messages}`);
+  assert.deepEqual(typo.range.start, at("visable"));
+  // dead declarations in the edited file are warned about; the import's --warmth is not this file's problem
+  assert.deepEqual(messages.filter((m: string) => /never/.test(m)).sort(), ["--hidden is never used", ".shiny is never applied"]);
+  assert.equal(diagnostics.length, 3);
+});
+
+await check("quick-fixes casing through code actions", async () => {
+  const doc = text.replace("visable: true;", "CastShadow: true;");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 2 }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, 500));
+  const diagnostics = notifications["textDocument/publishDiagnostics"]!.at(-1)!.diagnostics;
+  const casing = diagnostics.find((d: any) => /did you mean castShadow/.test(d.message));
+  assert.ok(casing, `expected a casing fix, got ${diagnostics.map((d: any) => d.message)}`);
+  const actions = await request("textDocument/codeAction", { textDocument: { uri }, range: casing.range, context: { diagnostics: [casing] } });
+  assert.equal(actions[0].edit.changes[uri][0].newText, "castShadow");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 3 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 300));
+});
+
+await check("hover shows the class signature and property type", async () => {
+  const node = await request("textDocument/hover", position("boxGeometry", 3));
+  assert.match(node.contents.value, /boxGeometry\(width\?: number/);
+  assert.match(node.contents.value, /BoxGeometry < BufferGeometry/);
+  const prop = await request("textDocument/hover", position("position:", 2));
+  assert.match(prop.contents.value, /readonly Mesh\.position: Vector3/);
+  assert.match(prop.contents.value, /copy\(\)/);
+  // three's own TSDoc rides along with the schema
+  assert.match(node.contents.value, /box geometry|geometry class/i);
+  assert.match((await request("textDocument/hover", position("receiveShadow", 3))).contents.value, /shadow/i);
+});
+
+await check("signature help tracks the active constructor argument", async () => {
+  const help = await request("textDocument/signatureHelp", position("boxGeometry(1, 1, 1)", "boxGeometry(1, ".length));
+  assert.match(help.signatures[0].label, /^boxGeometry\(width/);
+  assert.equal(help.activeParameter, 1);
+});
+
+await check("go to definition for templates, variables and imports", async () => {
+  const template = await request("textDocument/definition", position("mesh.glow", 6));
+  assert.equal(template[0].uri, pathToFileURL(shared).href);
+  assert.deepEqual(template[0].range.start, { line: 2, character: "@template mesh".length }); // the `.glow` name itself
+
+  const variable = await request("textDocument/definition", position("var(--height)", 6));
+  assert.equal(variable[0].uri, uri);
+  assert.deepEqual(variable[0].range.start, at("--height"));
+
+  // declared in an enclosing block, not at the top level
+  const nested = await request("textDocument/definition", position("var(--spin)", 6));
+  assert.deepEqual(nested[0].range.start, at("--spin"));
+
+  const imported = await request("textDocument/definition", position("./shared.tscene", 3));
+  assert.equal(imported[0].uri, pathToFileURL(shared).href);
+});
+
+await check("references and rename span every sheet in the workspace", async () => {
+  const context = { context: { includeDeclaration: true } };
+  const refs = await request("textDocument/references", { ...position("var(--height)", 6), ...context });
+  assert.deepEqual(sortRanges(refs), sortRanges([{ range: { start: at("--height") } }, { range: { start: at("var(--height)", 4) } }]));
+
+  const edit = await request("textDocument/rename", { ...position("var(--height)", 6), newName: "lift" });
+  assert.deepEqual(edit.changes[uri].map((e: any) => e.newText), ["--lift", "--lift"]);
+
+  // a template is declared in one file and applied in another
+  const glow = await request("textDocument/references", { ...position("mesh.glow", 6), ...context });
+  assert.deepEqual([...new Set(glow.map((r: any) => r.uri))].sort(), [uri, pathToFileURL(shared).href].sort());
+});
+
+await check("rename follows scope, not the name", async () => {
+  // #floor has its own --spin; renaming the one on #stage must leave it alone
+  const outer = await request("textDocument/rename", { ...position("--spin: 0.5"), newName: "turn" });
+  const inner = await request("textDocument/rename", { ...position("--spin: 9"), newName: "turn" });
+  const lines = (edit: any) => edit.changes[uri].map((e: any) => e.range.start.line).sort();
+  assert.equal(lines(outer).length, 2); // the declaration and #box's var()
+  assert.equal(lines(inner).length, 2); // the declaration and #floor's var()
+  assert.equal(lines(outer).filter((l: number) => lines(inner).includes(l)).length, 0);
+});
+
+await check("rename follows a template parameter into the template body", async () => {
+  // --depth is declared on #box and read by .glow, which lives in the other sheet
+  const edit = await request("textDocument/rename", { ...position("--depth: 1"), newName: "layer" });
+  assert.deepEqual(Object.keys(edit.changes).sort(), [uri, pathToFileURL(shared).href].sort());
+});
+
+await check("hover explains variables, templates and constants", async () => {
+  const variable = await request("textDocument/hover", position("var(--height)", 6));
+  assert.match(variable.contents.value, /--height: 2;/);
+  const template = await request("textDocument/hover", position("mesh.glow", 6));
+  assert.match(template.contents.value, /@template mesh\.glow/);
+  const constant = await request("textDocument/hover", position("DoubleSide", 2));
+  assert.match(constant.contents.value, /DoubleSide: (number|Side)/);
+});
+
+await check("rename is prepared and validated before it runs", async () => {
+  const prepared = await request("textDocument/prepareRename", position("var(--height)", 6));
+  assert.equal(prepared.placeholder, "--height");
+
+  // a hex colour is not an id, so nothing there is renameable
+  assert.equal(await request("textDocument/prepareRename", position("DoubleSide", 2)), null);
+
+  await assert.rejects(
+    () => request("textDocument/rename", { ...position("var(--height)", 6), newName: "1bad name" }),
+    /not a valid variable name/,
+  );
+});
+
+await check("#id references and definitions follow ref()", async () => {
+  const doc = text.replace("  mesh #floor {", "  mesh #floor { customDepthMaterial: ref(#box);");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 6 }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, 300));
+  const line = doc.slice(0, doc.indexOf("ref(#box)")).split("\n").length - 1;
+  const character = doc.slice(0, doc.indexOf("ref(#box)")).length - doc.lastIndexOf("\n", doc.indexOf("ref(#box)")) - 1 + "ref(#".length;
+  const refs = await request("textDocument/references", { textDocument: { uri }, position: { line, character }, context: { includeDeclaration: true } });
+  assert.equal(refs.length, 2); // the declaration on #box and this use
+  const edit = await request("textDocument/rename", { textDocument: { uri }, position: { line, character }, newName: "crate" });
+  assert.deepEqual(edit.changes[uri].map((e: any) => e.newText), ["#crate", "#crate"]);
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 7 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
+await check("document symbols mirror the scene graph", async () => {
+  const symbols = await request("textDocument/documentSymbol", { textDocument: { uri } });
+  assert.deepEqual(symbols.map((s: any) => s.name), ["--height", "group #stage", "@template mesh.shiny"]);
+  assert.deepEqual(symbols[1].children.map((s: any) => s.name), ["mesh #box.glow", "mesh #floor"]);
+});
+
+await check("completion is context sensitive", async () => {
+  const inBody = await request("textDocument/completion", position("    geometry: boxGeometry", 4));
+  assert.ok(labels(inBody).includes("castShadow"), "expected Mesh properties");
+  assert.ok(labels(inBody).includes("pointLight"), "expected node names");
+
+  const values = await request("textDocument/completion", position("vec3(0, var"));
+  assert.ok(labels(values).includes("vec3"), `expected vec3 constructor, got ${labels(values).slice(0, 5)}`);
+  assert.ok(!labels(values).includes("castShadow"), "property names should not leak into value position");
+
+  // `side` is `Side`, not a bare number — only its own members may show up
+  const constants = await request("textDocument/completion", position("DoubleSide"));
+  assert.deepEqual(labels(constants), ["FrontSide", "BackSide", "DoubleSide"]);
+
+  // only templates declared for a Mesh — `pointLight.warm` must not show up here
+  const templates = await request("textDocument/completion", position("mesh.glow", 5));
+  assert.deepEqual(labels(templates).sort(), ["glow", "shiny"]);
+
+  // inside `var(` — variables, not class names: the import's top level, this file's, the enclosing
+  // group's, but neither the one declared deeper in `material` nor anything after the cursor
+  const vars = await request("textDocument/completion", position("--height), 0)", 3));
+  assert.deepEqual(labels(vars), ["--warmth", "--height", "--spin", "--depth"]);
+  assert.equal(vars[0].textEdit.newText, "--warmth");
+
+  // inside a call argument — only values that fit the parameter
+  const args = labels(await request("textDocument/completion", position("boxGeometry(1, 1, 1)", "boxGeometry(".length)));
+  assert.deepEqual(args, [], `numeric parameter, nothing to suggest, got ${args.slice(0, 5)}`);
+
+  // inside a template body the declared node type drives completion
+  const inTemplate = labels(await request("textDocument/completion", position("  receiveShadow", 2)));
+  assert.ok(inTemplate.includes("castShadow"), "expected Mesh properties inside @template mesh.shiny");
+  assert.ok(!inTemplate.includes("intensity"), "PointLight properties leaked into a Mesh template");
+});
+
+await check("completion narrows to the property type while the document is unparseable", async () => {
+  // a half-typed property: nothing after the colon, no terminator — the parser rejects this outright
+  const typing = text.replace("    visable: true;\n", "    material: ");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 4 }, contentChanges: [{ text: typing }] } });
+  const head = typing.slice(0, typing.indexOf("material: ") + "material: ".length);
+  const at = { line: head.split("\n").length - 1, character: head.length - (head.lastIndexOf("\n") + 1) };
+  const items = labels(await request("textDocument/completion", { textDocument: { uri }, position: at }));
+  assert.ok(items.includes("meshStandardMaterial"), `expected Material subclasses, got ${items.slice(0, 5)}`);
+  assert.ok(!items.includes("ambientLight"), "non-Material classes leaked in");
+  assert.ok(!items.includes("boxGeometry"), "non-Material classes leaked in");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 5 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
+await check("@import links to its target and completes sibling sheets", async () => {
+  const links = await request("textDocument/documentLink", { textDocument: { uri } });
+  assert.equal(links.length, 1);
+  assert.equal(links[0].target, pathToFileURL(shared).href);
+  assert.deepEqual(links[0].range, { start: at("./shared.tscene"), end: at("./shared.tscene", "./shared.tscene".length) });
+
+  const typed = `@import "./sh`;
+  const typing = text.replace(`@import "./shared.tscene";`, typed);
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 8 }, contentChanges: [{ text: typing }] } });
+  await new Promise((r) => setTimeout(r, 300));
+  const items = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: typed.length } });
+  assert.deepEqual(labels(items), ["shared.tscene"]); // main.tscene is this file, so it is not offered
+  assert.equal(items[0].textEdit.newText, "shared.tscene");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 9 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
+await check("formatting normalises the whole document", async () => {
+  const messy = `Mesh#a{CastShadow:true;geometry:boxGeometry(1,1,1)}`;
+  const scratch = path.join(dir, "messy.tscene");
+  fs.writeFileSync(scratch, messy);
+  const messyUri = pathToFileURL(scratch).href;
+  send({ method: "textDocument/didOpen", params: { textDocument: { uri: messyUri, languageId: "scene", version: 1, text: messy } } });
+  const edits = await request("textDocument/formatting", { textDocument: { uri: messyUri }, options: { tabSize: 2, insertSpaces: true } });
+  assert.equal(edits[0].newText, `mesh #a {\n  castShadow: true;\n  geometry: boxGeometry(1, 1, 1);\n}\n`);
+});
+
+server.kill();
+fs.rmSync(dir, { recursive: true, force: true });
+console.log(`${failures.length ? `${failures.length} failed` : "all lsp checks passed"}`);
+process.exit(failures.length ? 1 : 0);

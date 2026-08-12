@@ -25,8 +25,12 @@ pnpm-debug.log*
 
 # Editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
 *.iml
+
+# VS Code extension package
+*.vsix
 
 # OS files
 .DS_Store

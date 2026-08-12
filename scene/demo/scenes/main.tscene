@@ -1,0 +1,37 @@
+@import "./materials.tscene";
+
+--height: 1.5;
+
+group #stage {
+  mesh.floor #ground {
+    geometry: boxGeometry(20, 0.2, 20);
+    position: vec3(0, -0.1, 0);
+    material: meshStandardMaterial();
+  }
+  mesh.glow #spinner {
+    geometry: torusKnotGeometry(0.7, 0.24, 160, 32);
+    position: vec3(0, var(--height), 0);
+    rotation: euler(20deg, 0, 0);
+    userData: { spin: 0.5 };
+  }
+  mesh.glow #satellite {
+    --tint: #7fd1ff;
+    geometry: sphereGeometry(0.3, 32, 16);
+    position: vec3(2.2, calc(var(--height) * 2), 0);
+  }
+  mesh #pillar {
+    geometry: cylinderGeometry(0.25, 0.25, 2);
+    position: vec3(-2.5, 1, 0);
+    material: meshStandardMaterial {
+      color: color(#7fd1ff);
+      roughness: 0.2;
+      side: FrontSide;
+    };
+    castShadow: true;
+  }
+  pointLight #lamp(#ffd9a0, 30, 20) {
+    position: vec3(2.5, 3, 2);
+    castShadow: true;
+  }
+  ambientLight(#334455, 1.2)
+}

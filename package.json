@@ -7,15 +7,19 @@
     "dev:sdfgi": "pnpm --filter sdfgi-demo dev",
     "dev:rc25d": "pnpm --filter @rc25d/radiance-cascades build && pnpm --filter rc25d-demo dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm --filter @rc25d/radiance-cascades build && pnpm -r typecheck",
-    "test": "pnpm --filter three-sdfgi test",
-    "check": "pnpm -r check"
+    "typecheck": "pnpm --filter @rc25d/radiance-cascades --filter three-scene build && pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "check": "pnpm --filter three-scene build && pnpm -r check",
+    "dev:scene": "pnpm --filter three-scene build && pnpm --filter scene-demo dev",
+    "docs": "pnpm --filter three-scene docs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/three": "^0.185.4",
     "@webgpu/types": "^0.1.64",
     "three": "^0.185.1",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.12.0",
     "typescript": "6.0.3",
     "vite": "^8.2.0"
   }

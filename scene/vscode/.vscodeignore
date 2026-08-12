@@ -1,0 +1,8 @@
+# the .vsix ships the two bundles from bundle.mjs and nothing else
+node_modules/**
+dist/**/*.map
+bundle.mjs
+extension.js
+grammar.check.mjs
+**/*.check.mjs
+README.md.bak

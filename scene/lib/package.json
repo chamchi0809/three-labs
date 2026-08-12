@@ -1,0 +1,70 @@
+{
+  "name": "three-scene",
+  "version": "0.1.0",
+  "description": "CSS-like scene description format for three.js, with a type checker driven by the installed three typings",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chamchi0809/three-labs.git",
+    "directory": "scene/lib"
+  },
+  "keywords": [
+    "three",
+    "threejs",
+    "scene",
+    "dsl",
+    "css",
+    "webgpu",
+    "language-server"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js"
+    },
+    "./client": "./client.d.ts",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "three-scene": "./dist/cli.js",
+    "three-scene-lsp": "./dist/lsp.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "client.d.ts",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "docs": "typedoc",
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/docs.check.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts"
+  },
+  "peerDependencies": {
+    "three": ">=0.180.0",
+    "typescript": ">=5.5.0"
+  },
+  "dependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "mesh": {
+    "prefix": "mesh",
+    "body": [
+      "mesh #${1:name} {",
+      "  geometry: ${2|boxGeometry,sphereGeometry,planeGeometry,cylinderGeometry,torusKnotGeometry|}(${3:1, 1, 1});",
+      "  material: meshStandardMaterial { color: color(#${4:ffffff}); };",
+      "  position: vec3(${5:0}, ${6:0}, ${7:0});",
+      "}"
+    ],
+    "description": "Mesh with geometry, material and position"
+  },
+  "group": {
+    "prefix": "group",
+    "body": [
+      "group #${1:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Group node"
+  },
+  "material": {
+    "prefix": "material",
+    "body": [
+      "material: meshStandardMaterial {",
+      "  color: color(#${1:ffffff});",
+      "  roughness: ${2:0.5};",
+      "  metalness: ${3:0};",
+      "};"
+    ],
+    "description": "Standard material"
+  },
+  "light": {
+    "prefix": "light",
+    "body": [
+      "${1|pointLight,directionalLight,spotLight,ambientLight,hemisphereLight|} #${2:lamp}(#${3:ffffff}, ${4:5}) {",
+      "  position: vec3(${5:0}, ${6:3}, ${7:0});",
+      "}"
+    ],
+    "description": "Light node"
+  },
+  "template": {
+    "prefix": "template",
+    "body": [
+      "@template ${1:mesh}.${2:name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Reusable property block for a node type, applied with .name"
+  },
+  "import": {
+    "prefix": "import",
+    "body": [
+      "@import \"${1:./shared.tscene}\";"
+    ],
+    "description": "Import another .tscene file"
+  },
+  "variable": {
+    "prefix": "var",
+    "body": [
+      "--${1:name}: ${2:value};"
+    ],
+    "description": "Custom property"
+  },
+  "ref": {
+    "prefix": "ref",
+    "body": [
+      "ref(#${1:id})"
+    ],
+    "description": "The instance built for a #id declared elsewhere in the sheet"
+  },
+  "repeat": {
+    "prefix": "repeat",
+    "body": [
+      "repeat(${1:3}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Unroll this block n times, with --index and --count bound in each copy"
+  },
+  "find": {
+    "prefix": "find",
+    "body": [
+      "find(${1:mesh}, \"${2:Name}\") {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Reach into a node built by a loader and set properties on it"
+  },
+  "play": {
+    "prefix": "play",
+    "body": [
+      "play(\"${1:Clip}\") {",
+      "\tloop: ${2|LoopRepeat,LoopOnce,LoopPingPong|};",
+      "}"
+    ],
+    "description": "Play an animation clip that came with the loaded model"
+  }
+}

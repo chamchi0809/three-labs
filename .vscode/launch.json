@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // opens scene/demo as the workspace so scenes/*.tscene are picked up right away (the three-scene link and three both resolve from there)
+      "name": "three-scene: Extension Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["${workspaceFolder}/scene/demo", "--extensionDevelopmentPath=${workspaceFolder}/scene/vscode"],
+      "outFiles": ["${workspaceFolder}/scene/vscode/*.js"]
+    },
+    {
+      // start the above first, then attach to hit breakpoints in lsp.ts (a debug extension host starts the server with --inspect=6009)
+      "name": "three-scene: Attach to language server",
+      "type": "node",
+      "request": "attach",
+      "port": 6009,
+      "restart": true,
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "three-scene: Extension + server",
+      "configurations": ["three-scene: Extension Host", "three-scene: Attach to language server"]
+    }
+  ]
+}

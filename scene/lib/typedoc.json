@@ -1,0 +1,22 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "plugin": ["typedoc-plugin-markdown"],
+  "entryPoints": ["src/index.ts", "src/tools.ts", "src/vite.ts"],
+  "tsconfig": "tsconfig.json",
+  "out": "docs/api",
+  "readme": "none",
+  "outputFileStrategy": "modules",
+  "excludeExternals": true,
+  "treatWarningsAsErrors": true,
+  "excludeInternal": true,
+  "hideGenerator": true,
+  "githubPages": false,
+  "disableSources": true,
+  "sortEntryPoints": false,
+  "useCodeBlocks": true,
+  "expandObjects": true,
+  "parametersFormat": "table",
+  "propertiesFormat": "table",
+  "enumMembersFormat": "table",
+  "typeDeclarationFormat": "table"
+}

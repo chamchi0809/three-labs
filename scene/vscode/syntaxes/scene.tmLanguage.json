@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "three-scene",
+  "scopeName": "source.scene",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#at-rule" },
+    { "include": "#variable-declaration" },
+    { "include": "#selector" },
+    { "include": "#property" },
+    { "include": "#value" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        { "name": "comment.line.double-slash.scene", "match": "//.*$" },
+        { "name": "comment.block.scene", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "at-rule": {
+      "patterns": [
+        {
+          "match": "(@import)\\s+((\"[^\"]*\"|'[^']*'))",
+          "captures": {
+            "1": { "name": "keyword.control.import.scene" },
+            "2": { "name": "string.quoted.scene" }
+          }
+        },
+        {
+          "match": "(@template)\\s+([a-z][A-Za-z0-9]*)?(\\.[A-Za-z_][\\w-]*)",
+          "captures": {
+            "1": { "name": "keyword.control.template.scene" },
+            "2": { "name": "entity.name.tag.scene" },
+            "3": { "name": "entity.name.type.template.scene" }
+          }
+        },
+        { "name": "invalid.illegal.unknown-at-rule.scene", "match": "@[A-Za-z-]+" }
+      ]
+    },
+    "variable-declaration": {
+      "match": "(--[A-Za-z_][\\w-]*)\\s*(:)",
+      "captures": {
+        "1": { "name": "variable.other.custom-property.scene" },
+        "2": { "name": "punctuation.separator.key-value.scene" }
+      }
+    },
+    "selector": {
+      "match": "(?<![\\w.#-])([a-z][A-Za-z0-9]*)((?:\\.[A-Za-z_][\\w-]*)*)(?:\\s*(#[A-Za-z_][\\w-]*))?(?=[^:;()]*\\{)",
+      "captures": {
+        "1": { "name": "entity.name.tag.scene" },
+        "2": { "name": "entity.other.attribute-name.class.scene" },
+        "3": { "name": "entity.other.attribute-name.id.scene" }
+      }
+    },
+    "property": {
+      "match": "(?<![\\w-])([a-zA-Z_][\\w]*(?:\\.[a-zA-Z_][\\w]*)*)\\s*(:)",
+      "captures": {
+        "1": { "name": "support.type.property-name.scene" },
+        "2": { "name": "punctuation.separator.key-value.scene" }
+      }
+    },
+    "value": {
+      "patterns": [
+        { "name": "constant.other.color.rgb-value.scene", "match": "#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\\b" },
+        { "name": "entity.other.attribute-name.id.scene", "match": "#[A-Za-z_][\\w-]*" },
+        { "name": "string.quoted.double.scene", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.scene", "match": "\\\\." }] },
+        { "name": "string.quoted.single.scene", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.scene", "match": "\\\\." }] },
+        {
+          "match": "\\b(var)\\s*(\\()\\s*(--[A-Za-z_][\\w-]*)",
+          "captures": {
+            "1": { "name": "support.function.var.scene" },
+            "2": { "name": "punctuation.section.parens.begin.scene" },
+            "3": { "name": "variable.other.custom-property.scene" }
+          }
+        },
+        { "name": "support.function.calc.scene", "match": "\\b(calc)(?=\\s*\\()" },
+        {
+          "match": "\\b(ref)\\s*(\\()\\s*(#[A-Za-z_][\\w-]*)",
+          "captures": {
+            "1": { "name": "support.function.ref.scene" },
+            "2": { "name": "punctuation.section.parens.begin.scene" },
+            "3": { "name": "entity.other.attribute-name.id.scene" }
+          }
+        },
+        { "name": "support.function.builtin.scene", "match": "\\b(find|play|repeat)(?=\\s*[#(])" },
+        { "name": "entity.name.function.scene", "match": "\\b[a-z][A-Za-z0-9]*(?=\\s*\\()" },
+        { "name": "constant.numeric.scene", "match": "[-+]?(?:0[xX][0-9a-fA-F]+|(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?)(deg|rad)?\\b" },
+        { "name": "constant.language.boolean.scene", "match": "\\b(true|false|null)\\b" },
+        { "name": "support.constant.three.scene", "match": "\\b[A-Z][A-Za-z0-9]*\\b" },
+        { "name": "keyword.operator.arithmetic.scene", "match": "[-+*/]" },
+        { "name": "punctuation.section.brackets.scene", "match": "[\\[\\]]" },
+        { "name": "punctuation.terminator.scene", "match": ";" },
+        { "name": "punctuation.separator.scene", "match": "," }
+      ]
+    }
+  }
+}

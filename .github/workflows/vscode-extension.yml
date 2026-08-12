@@ -1,0 +1,58 @@
+name: vscode-extension
+
+# Pushing a scene-vscode-v1.2.3 tag packages that version and publishes it to the marketplace.
+# A manual run only builds the .vsix artifact (pass publish=true to publish).
+on:
+  push:
+    tags: ["scene-vscode-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "publish to the marketplace"
+        type: boolean
+        default: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm check
+
+      - name: Take the version from the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: scene/vscode
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#scene-vscode-v}"
+
+      # Bundles the client and the LSP server into one file each (typescript included) — which also sidesteps vsce not reading pnpm's symlinks
+      - name: Package
+        working-directory: scene/vscode
+        run: |
+          pnpm run bundle
+          npx --yes @vscode/vsce package --no-dependencies --out "$GITHUB_WORKSPACE/three-scene-vscode.vsix"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: three-scene-vscode
+          path: three-scene-vscode.vsix
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        working-directory: scene/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          test -n "$VSCE_PAT" || { echo "VSCE_PAT is not set in the repository secrets"; exit 1; }
+          npx --yes @vscode/vsce publish --no-dependencies --packagePath "$GITHUB_WORKSPACE/three-scene-vscode.vsix"
