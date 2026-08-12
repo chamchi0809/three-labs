@@ -4,7 +4,7 @@
   "description": "Syntax highlighting, type checking, completion and formatting for .tscene files",
   "version": "0.1.0",
   "license": "MIT",
-  "publisher": "three-labs",
+  "publisher": "chamchi",
   "engines": {
     "vscode": "^1.90.0"
   },

@@ -54,7 +54,7 @@ git tag scene-vscode-v0.1.1 && git push --tags   # sets package.json to the tag 
 A manual run (workflow_dispatch) only uploads the `.vsix` artifact by default. The PAT comes from the
 `VSCE_PAT` repository secret
 ([issued in Azure DevOps](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token),
-Marketplace: Manage scope; the `publisher` is `three-labs`).
+Marketplace: Manage scope; the `publisher` is `chamchi`).
 
 To verify a package locally, follow the same order as the workflow — vsce cannot read pnpm's symlinks:
 
