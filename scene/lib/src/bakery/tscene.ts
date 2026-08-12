@@ -1,5 +1,6 @@
 // Loading a .tscene sheet in Node. tscene's runtime is written for a browser: it fetches sheets and
-// decodes images through the DOM. Three small shims are enough to make it work headless.
+// decodes images through the DOM. A handful of small shims is enough to make it work headless.
+import { resolveObjectURL } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,6 +24,11 @@ export function installNodeLoaders(): void {
     return new Response(await readFile(fileURLToPath(url)));
   };
 
+  // GLTFLoader reads `self.URL` once per image, embedded or not. Same shim createHeadlessRenderer()
+  // installs — three treats `self` as the global object, not as a browser marker, so anything narrower
+  // breaks it (the animation loop reads requestAnimationFrame off exactly this).
+  (globalThis as Record<string, unknown>).self ??= globalThis;
+
   // FileLoader dispatches one of these per chunk
   (globalThis as Record<string, unknown>).ProgressEvent ??= class extends Event {
     constructor(type: string, init: Record<string, unknown> = {}) {
@@ -38,14 +44,28 @@ export function installNodeLoaders(): void {
     _onProgress?: unknown,
     onError?: (event: unknown) => void,
   ) {
-    sharp(fileURLToPath(url))
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true })
+    bytes(url)
+      .then((buffer) => sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true }))
       .then(({ data, info }) => onLoad?.({ width: info.width, height: info.height, data: new Uint8Array(data) }))
       .catch(onError ?? (() => {}));
     return {} as HTMLImageElement;
   } as typeof THREE.ImageLoader.prototype.load;
+}
+
+/** The bytes behind a texture url: off disk, off the network when a sheet points at a CDN, or out of
+ * the object url GLTFLoader wraps a .glb's embedded image in. */
+async function bytes(url: string): Promise<Buffer> {
+  if (/^https?:/.test(url)) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  if (url.startsWith("blob:")) {
+    const blob = resolveObjectURL(url);
+    if (!blob) throw new Error(`nothing behind ${url}`);
+    return Buffer.from(await blob.arrayBuffer());
+  }
+  return readFile(fileURLToPath(url));
 }
 
 /** Reads a `.tscene` file from disk, `@import`s and all, and returns the built scene. */

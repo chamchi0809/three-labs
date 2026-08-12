@@ -129,8 +129,9 @@ Unlike the rest of the repo, this check needs a working GPU — which is the who
 Everything deliberately left simple is marked with a `ponytail:` comment naming the upgrade path. The
 ones worth knowing about:
 
-- **Albedo is one colour per material**, the mean of its `map`. Colour bleeding gets a texture's hue but
-  not its pattern; use `userData.bakeAlbedo` where that matters.
+- **Albedo is one colour per material**, the mean of its `map` (and darkened by the mean of its
+  `metalnessMap`, since glTF leaves `metalness` at 1 and puts the real value in the texture). Colour
+  bleeding gets a texture's hue but not its pattern; use `userData.bakeAlbedo` where that matters.
 - **Shadow rays run a closest-hit query** because three-mesh-bvh has no any-hit shapecast yet, so a
   shadow ray costs a full traversal.
 - **The area-light estimator clamps its solid angle**, which slightly darkens the first centimetre around

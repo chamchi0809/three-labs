@@ -1,0 +1,21 @@
+// Khronos Sponza, referenced straight off the CDN — ~50 MB on first load, nothing committed here.
+// The url is absolute, so the vite plugin leaves it alone and both the browser and the Node baker
+// fetch it themselves.
+//
+// One directional light and nothing else: no ambient, no fill, and no shadow map either. Realtime that
+// means a flat sun that lights every surface facing it, walls included — the occlusion only exists in
+// the bake, which is the whole comparison.
+//
+// The shadowed courtyard lands ~78x under the sunlit floor here, and the arcades further still, so the
+// demo gives this scene its own exposure and tone curve. Nothing is wrong with the atlas at that depth;
+// a filmic toe just buries it.
+
+--sun: #fff1d0;
+
+directionalLight #sun(var(--sun), 4) {
+  position: vec3(-8, 20, 4);
+  // to the baker this is the sun's angular radius in radians — 0.02 rad is a slightly soft disc
+  userData: { bakeRadius: 0.02 };
+}
+
+gltf #sponza("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Sponza/glTF/Sponza.gltf") {}

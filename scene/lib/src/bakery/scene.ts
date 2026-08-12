@@ -271,9 +271,14 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
     const mean = meanColor(m.map);
     if (mean) albedo = [albedo[0] * mean[0], albedo[1] * mean[1], albedo[2] * mean[2]];
   }
-  // a metal reflects specularly; a lambertian bake would over-brighten the room, so darken by metalness
-  const diffuse = 1 - Math.min(1, Math.max(0, m.metalness ?? 0));
-  if (m.metalness !== undefined) albedo = [albedo[0] * diffuse, albedo[1] * diffuse, albedo[2] * diffuse];
+  // a metal reflects specularly; a lambertian bake would over-brighten the room, so darken by metalness.
+  // glTF writes metalness as factor × the map's blue channel and leaves the factor at 1, so reading the
+  // scalar alone calls every textured material a mirror and kills the bounce entirely.
+  const scale = m.metalnessMap ? (meanColor(m.metalnessMap)?.[2] ?? 1) : 1;
+  const diffuse = 1 - Math.min(1, Math.max(0, (m.metalness ?? 0) * scale));
+  // an override is the final reflectance, not an input to the guess -- darkening it too would make
+  // `bakeAlbedo = [1,1,1]` unreachable on any metal, and a furnace test impossible to write.
+  if (!override && m.metalness !== undefined) albedo = [albedo[0] * diffuse, albedo[1] * diffuse, albedo[2] * diffuse];
 
   const intensity = m.emissiveIntensity ?? 1;
   const emissive: [number, number, number] = m.emissive
@@ -296,7 +301,9 @@ function meanColor(texture: THREE.Texture): [number, number, number] | undefined
   const image = texture.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;
   const data = image?.data;
   if (!data || data.length < 4) return undefined;
-  const srgb = texture.colorSpace !== THREE.LinearSRGBColorSpace;
+  // only an explicitly sRGB texture gets decoded. glTF leaves a metalnessMap on NoColorSpace, and
+  // decoding that raw channel as sRGB used to under-read metalness by a factor of three.
+  const srgb = texture.colorSpace === THREE.SRGBColorSpace;
   const byte = !(data instanceof Float32Array);
   let r = 0;
   let g = 0;
