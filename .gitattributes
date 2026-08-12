@@ -1,0 +1,7 @@
+# The repo stores LF. Without this, a windows checkout under the default core.autocrlf=true
+# smudges every text file to CRLF, and scene/lib's docs check — which compares typedoc's
+# freshly generated markdown byte for byte against docs/api — fails on a clean tree.
+* text=auto eol=lf
+
+*.png binary
+*.glb binary

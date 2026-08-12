@@ -6,8 +6,12 @@ import type { Schema, SchemaOptions } from "./schema.ts";
 
 export type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "cache" | "declare"> & { check?: boolean; hmr?: boolean };
 
+// vite ids are always forward-slash, and the sheet registry is keyed by id — a win32
+// backslash path from path.resolve() would never match the module that registered itself
+const posix = (p: string) => p.split(path.sep).join("/");
+
 const relative = (from: string, to: string) => {
-  const r = path.relative(path.dirname(from), to).split(path.sep).join("/");
+  const r = posix(path.relative(path.dirname(from), to));
   return r.startsWith(".") ? r : `./${r}`;
 };
 
@@ -42,7 +46,7 @@ export default function threeScene(options: PluginOptions = {}) {
       for (const s of parse(code, file).statements) {
         if (s.kind !== "import" || imports[s.path]) continue;
         const bare = !s.path.startsWith(".") && !path.isAbsolute(s.path);
-        const dep = resolveSheet(s.path, file);
+        const dep = posix(resolveSheet(s.path, file));
         imports[s.path] = dep;
         // registers the dep and gives vite the edge; a bare specifier stays bare so vite resolves it
         lines.push(`import ${JSON.stringify(bare ? s.path : relative(file, dep))};`);

@@ -53,7 +53,9 @@ export function buildSchema(opts: SchemaOptions = {}): Schema {
   const entry = opts.entry ?? "three/webgpu";
   const modules = opts.modules ?? [];
   const cwd = opts.cwd ?? process.cwd();
-  const probe = path.join(cwd, "__tscene-probe__.ts");
+  // slashes, not path.sep — ts normalizes every path it hands the host, so a windows
+  // backslash probe would never match and the in-memory file would go unfound
+  const probe = `${cwd.split(path.sep).join("/").replace(/\/$/, "")}/__tscene-probe__.ts`;
   const source = [entry, ...modules].map((m, i) => `import * as M${i} from ${JSON.stringify(m)};\nexport type P${i} = typeof M${i};\n`).join("");
 
   const options: ts.CompilerOptions = {
