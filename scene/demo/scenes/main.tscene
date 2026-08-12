@@ -31,7 +31,7 @@ group #stage {
   }
   // loaded model: the whole scene comes in as a child, find() reaches into it, play() runs a clip
   gltf #robot("../assets/robot.glb") {
-    position: vec3(-1.4, 0, -1.6);
+    position: vec3(-1.4, 0, 1.6);
     rotation: euler(0, 25deg, 0);
     find(mesh, "Body") { castShadow: true; }
     find(mesh, "Head") { castShadow: true; }
