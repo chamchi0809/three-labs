@@ -1,6 +1,6 @@
 {
   "name": "tscene",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CSS-like scene description format for three.js, with a type checker driven by the installed three typings",
   "license": "MIT",
   "repository": {
@@ -76,11 +76,21 @@
     "xatlas-wasm": ">=0.1.3"
   },
   "peerDependenciesMeta": {
-    "sharp": { "optional": true },
-    "three-mesh-bvh": { "optional": true },
-    "typescript": { "optional": true },
-    "webgpu": { "optional": true },
-    "xatlas-wasm": { "optional": true }
+    "sharp": {
+      "optional": true
+    },
+    "three-mesh-bvh": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    },
+    "webgpu": {
+      "optional": true
+    },
+    "xatlas-wasm": {
+      "optional": true
+    }
   },
   "dependencies": {
     "vscode-languageserver": "^9.0.1",

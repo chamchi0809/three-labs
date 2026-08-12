@@ -2,7 +2,7 @@
   "name": "tscene-vscode",
   "displayName": "tscene",
   "description": "Syntax highlighting, type checking, completion and formatting for .tscene files",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "publisher": "chamchi",
   "icon": "icon.png",
@@ -107,7 +107,9 @@
         },
         "tscene.declare": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Node names your app registers at runtime (loadScene's `registry`). They are accepted without type checking."
         },
