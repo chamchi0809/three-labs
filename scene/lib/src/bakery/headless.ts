@@ -39,6 +39,15 @@ function canvasStub() {
   };
 }
 
+/**
+ * Whether this machine can actually run a bake. A CI runner has Dawn but no driver behind it, so the
+ * binding loads and then hands back no adapter — which is a skip, not a failure.
+ */
+export async function hasWebGPU(): Promise<boolean> {
+  installWebGPU();
+  return (await navigator.gpu.requestAdapter({ powerPreference: "high-performance" })) !== null;
+}
+
 /** A `WebGPURenderer` that runs compute in Node. Only `computeAsync` / `getArrayBufferAsync` are usable. */
 export async function createHeadlessRenderer(): Promise<THREE.WebGPURenderer> {
   installWebGPU();

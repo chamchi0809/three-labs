@@ -1,4 +1,7 @@
-// node --experimental-strip-types src/bake.check.ts   (needs a GPU)
+// node --experimental-strip-types src/bake.check.ts
+//
+// Needs a GPU, and says so by skipping rather than failing when there is none — CI runs on machines
+// with no driver, and everything below measures a shader.
 //
 // Radiometry, against closed forms. Every configuration here has an irradiance you can write down,
 // so a shader that is merely plausible still fails:
@@ -17,7 +20,7 @@
 import assert from "node:assert/strict";
 import * as THREE from "three/webgpu";
 import { bake } from "./bake.ts";
-import { createHeadlessRenderer } from "./headless.ts";
+import { createHeadlessRenderer, hasWebGPU } from "./headless.ts";
 import type { Texels } from "./raster.ts";
 import { collectScene } from "./scene.ts";
 import { trace } from "./tracer.ts";
@@ -57,6 +60,11 @@ function plane(y: number, size: number, up: boolean, material: THREE.Material): 
 }
 
 const black = () => new THREE.MeshStandardMaterial({ color: 0x000000, metalness: 0 });
+
+if (!(await hasWebGPU())) {
+  console.log("bake.check.ts skipped — no WebGPU adapter on this machine");
+  process.exit(0);
+}
 
 const renderer = await createHeadlessRenderer();
 
