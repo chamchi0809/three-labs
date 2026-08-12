@@ -52,6 +52,42 @@ type Atlas = {
 
 ***
 
+### BakeFileOptions
+
+```ts
+type BakeFileOptions = Omit<BakeOptions, "renderer"> & WriteOptions & {
+  name?: string;
+  out?: string;
+  renderer?: THREE.WebGPURenderer;
+};
+```
+
+#### Type Declaration
+
+| Name | Type | Description |
+| ------ | ------ | ------ |
+| `name?` | `string` | output base name (default: the sheet's file name) |
+| `out?` | `string` | where to write (default: next to the sheet) |
+| `renderer?` | `THREE.WebGPURenderer` | an initialized WebGPURenderer. One is created — and disposed again — when this is left out. |
+
+***
+
+### BakeFileResult
+
+```ts
+type BakeFileResult = BakeResult & {
+  files: string[];
+};
+```
+
+#### Type Declaration
+
+| Name | Type | Description |
+| ------ | ------ | ------ |
+| `files` | `string`[] | the paths `writeBake` produced |
+
+***
+
 ### BakeLight
 
 ```ts
@@ -176,7 +212,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 | <a id="exposure"></a> `exposure` | `number` | divisor that maps `image` into [0,1] for an 8-bit texture; also the `lightMapIntensity` to use |
 | <a id="height-1"></a> `height` | `number` | - |
 | <a id="image"></a> `image` | `Float32Array` | linear irradiance, RGBA, `width * height * 4`, bottom row first. Alpha marks covered texels. |
-| <a id="manifest"></a> `manifest` | `Omit`\<[`LightmapManifest`](../bakery.md#lightmapmanifest), `"texture"`\> | everything the runtime needs except the texture file name, which the writer fills in |
+| <a id="manifest"></a> `manifest` | `Omit`\<[`LightmapManifest`](../bakery.md#lightmapmanifest-1), `"texture"`\> | everything the runtime needs except the texture file name, which the writer fills in |
 | <a id="utilization-1"></a> `utilization` | `number` | fraction of the atlas the charts cover |
 | <a id="width-1"></a> `width` | `number` | - |
 
@@ -376,6 +412,38 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 #### Returns
 
 `Promise`\<[`BakeResult`](#bakeresult)\>
+
+***
+
+### bakeSceneFile()
+
+```ts
+function bakeSceneFile(file, opts?): Promise<BakeFileResult>;
+```
+
+Loads a `.tscene` file, bakes it, and writes the atlas and its manifest.
+
+```ts
+const { files, width, exposure } = await bakeSceneFile("scenes/room.tscene", {
+  out: "public/lightmaps",
+  size: 512,
+  samples: 1024,
+});
+```
+
+Every knob of [bake](#bake) and [writeBake](#writebake) passes straight through. Reach for the pieces
+themselves when the scene is not a sheet on disk, or when one renderer bakes several scenes.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `file` | `string` |
+| `opts` | [`BakeFileOptions`](#bakefileoptions) |
+
+#### Returns
+
+`Promise`\<[`BakeFileResult`](#bakefileresult)\>
 
 ***
 
@@ -664,21 +732,21 @@ Re-exports [encodeFloats](../bakery.md#encodefloats)
 
 ***
 
+### Lightmap
+
+Re-exports [Lightmap](../bakery.md#lightmap)
+
+***
+
 ### LightmapManifest
 
-Re-exports [LightmapManifest](../bakery.md#lightmapmanifest)
+Re-exports [LightmapManifest](../bakery.md#lightmapmanifest-1)
 
 ***
 
 ### loadLightmap
 
 Re-exports [loadLightmap](../bakery.md#loadlightmap)
-
-***
-
-### muteBakedLights
-
-Re-exports [muteBakedLights](../bakery.md#mutebakedlights)
 
 ***
 

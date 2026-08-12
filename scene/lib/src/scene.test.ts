@@ -535,6 +535,65 @@ test("disposeScene frees geometries, materials and their textures", async () => 
   assert.deepEqual(disposed.sort(), ["geometry", "material"]);
 });
 
+test("mountScene keeps one root in the parent, hot update after hot update", async () => {
+  const { mountScene, __sceneRegister, __sceneChanged } = await import("./runtime.ts");
+  const { threeRegistry } = await import("./three.ts");
+  const { Group } = await import("three/webgpu");
+
+  const sheet = (source: string) => __sceneRegister({ source, file: "/p/main.tscene", registry: threeRegistry });
+  const mod = sheet(`mesh #box { geometry: boxGeometry(1,1,1); }`);
+  const parent = new Group();
+
+  const loaded: string[] = [];
+  const mount = await mountScene(parent, mod, { onLoad: (root) => loaded.push(root.children[0]!.name) });
+  assert.equal(parent.children.length, 1);
+  assert.deepEqual(loaded, ["box"]);
+
+  // the module object the caller imported goes stale on reload; the registry has the current source
+  const first = mount.root;
+  sheet(`mesh #sphere { geometry: sphereGeometry(1); }`);
+  __sceneChanged(mod);
+  await mount.reload(); // the hot listener queued one too — both go through the same chain
+  assert.equal(parent.children.length, 1, "the old root is disposed once the new one is up");
+  assert.equal(mount.root?.children[0]?.name, "sphere");
+  assert.equal(first?.parent, null);
+  assert.deepEqual(loaded, ["box", "sphere", "sphere"]);
+
+  // a broken sheet is reported instead of thrown, and nothing goes up
+  const errors: string[] = [];
+  const target = new Group();
+  const guarded = await mountScene(target, sheet(`mesh { position.x: ; }`), { onError: (e) => errors.push(String(e)) });
+  assert.equal(target.children.length, 0);
+  assert.equal(errors.length, 1);
+  sheet(`mesh #ok { }`);
+  await guarded.reload();
+  assert.equal(target.children[0]?.children[0]?.name, "ok");
+  assert.equal(errors.length, 1, "a failed build must not poison the rebuilds queued behind it");
+
+  mount.dispose();
+  assert.equal(parent.children.length, 0);
+  __sceneChanged(mod); // no longer listening
+  assert.equal(mount.root, undefined);
+});
+
+test("mount.update advances the clips play() started", async () => {
+  const { mountScene, __sceneRegister } = await import("./runtime.ts");
+  const { threeRegistry } = await import("./three.ts");
+  const { Group } = await import("three/webgpu");
+
+  const mod = __sceneRegister({ source: `mesh #box { }`, file: "/p/clock.tscene", registry: threeRegistry });
+  const mount = await mountScene(new Group(), mod);
+  const deltas: number[] = [];
+  mount.root!.userData.mixers = [{ update: (dt: number) => deltas.push(dt) }];
+
+  mount.update(0.5);
+  mount.update(); // the first untimed frame has no previous timestamp to subtract
+  mount.update();
+  assert.equal(deltas.length, 3);
+  assert.equal(deltas[0], 0.5);
+  assert.ok(deltas[2]! >= 0 && deltas[2]! < 1, `an untimed frame is a real delta, got ${deltas[2]}`);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

@@ -1,5 +1,6 @@
 /** The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` for the runtime half. */
 export { bake, type BakeOptions, type BakeResult, type BakeStage } from "./bake.ts";
+export { bakeSceneFile, type BakeFileOptions, type BakeFileResult } from "./file.ts";
 export { unwrap, type Atlas, type UnwrapOptions } from "./atlas.ts";
 export { createHeadlessRenderer, installWebGPU } from "./headless.ts";
 export { denoise, dilate } from "./filter.ts";

@@ -8,6 +8,53 @@
 
 ## Type Aliases
 
+### Lightmap
+
+```ts
+type Lightmap = {
+  enabled: boolean;
+  height: number;
+  intensity: number;
+  lights: ReadonlyMap<THREE.Light, number>;
+  manifest: LightmapManifest;
+  meshes: number;
+  texture: THREE.Texture;
+  width: number;
+  dispose: void;
+};
+```
+
+A bake that is on a scene. Handed back by [applyLightmap](#applylightmap); there is nothing to construct.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="enabled"></a> `enabled` | `public` | `boolean` | `false` puts the scene back on its own lights: the atlas goes to zero and every light the bake accounted for gets the intensity it had when this handle was made. |
+| <a id="height"></a> `height` | `readonly` | `number` | - |
+| <a id="intensity"></a> `intensity` | `public` | `number` | Gain on the exposure the bake wrote into the manifest, so 1 is "as baked". An 8-bit atlas of a scene whose bright end sits far above what matters wants this above 1. |
+| <a id="lights"></a> `lights` | `readonly` | `ReadonlyMap`\<`THREE.Light`, `number`\> | The lights the bake already contains → the intensity each had when the atlas was applied. A realtime pass scales these instead of snapshotting its own. |
+| <a id="manifest"></a> `manifest` | `readonly` | [`LightmapManifest`](#lightmapmanifest-1) | - |
+| <a id="meshes"></a> `meshes` | `readonly` | `number` | how many meshes the atlas reached |
+| <a id="texture"></a> `texture` | `readonly` | `THREE.Texture` | - |
+| <a id="width"></a> `width` | `readonly` | `number` | - |
+
+#### Methods
+
+##### dispose()
+
+```ts
+dispose(): void;
+```
+
+Drops the atlas off the materials, restores the lights, and disposes a texture this call loaded.
+
+###### Returns
+
+`void`
+
+***
+
 ### LightmapManifest
 
 ```ts
@@ -31,9 +78,8 @@ device in Node.
 This entry point is the browser half: it applies a bake to a live scene and nothing more.
 
 ```ts
-const { manifest, texture } = await loadLightmap("/lightmaps/room.lightmap.json");
-applyLightmap(scene, manifest, texture);
-muteBakedLights(scene);
+const lightmap = await applyLightmap(scene, "/lightmaps/room.lightmap.json");
+lightmap.enabled = false;   // and the scene is back on its own lights
 ```
 
 The atlas holds irradiance, which is exactly what three's `lightMap` slot expects, so this is a
@@ -42,23 +88,21 @@ texture assignment and a `uv1` attribute — no custom material.
 The baker itself pulls in sharp, xatlas and Dawn, so it lives behind `tscene/bakery/node`:
 
 ```ts
-import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
+import { bakeSceneFile } from "tscene/bakery/node";
 
-const renderer = await createHeadlessRenderer();
-const result = await bake(await loadSceneFile("room.tscene"), { renderer, samples: 1024 });
-await writeBake(result, "public/lightmaps", "room");
+const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", samples: 1024 });
 ```
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="height"></a> `height` | `number` | - |
-| <a id="intensity"></a> `intensity` | `number` | `lightMapIntensity` that undoes the exposure baked into an 8-bit texture |
-| <a id="meshes"></a> `meshes` | \{ `key`: `string`; `uv`: `string`; `vertices`: `number`; \}[] | - |
-| <a id="texture"></a> `texture` | `string` | texture file name, relative to the manifest |
+| <a id="height-1"></a> `height` | `number` | - |
+| <a id="intensity-1"></a> `intensity` | `number` | `lightMapIntensity` that undoes the exposure baked into an 8-bit texture |
+| <a id="meshes-1"></a> `meshes` | \{ `key`: `string`; `uv`: `string`; `vertices`: `number`; \}[] | - |
+| <a id="texture-1"></a> `texture` | `string` | texture file name, relative to the manifest |
 | <a id="version"></a> `version` | `1` | - |
-| <a id="width"></a> `width` | `number` | - |
+| <a id="width-1"></a> `width` | `number` | - |
 
 ## Functions
 
@@ -67,11 +111,22 @@ await writeBake(result, "public/lightmaps", "room");
 ```ts
 function applyLightmap(
    root, 
-   manifest, 
-   texture): number;
+   source, 
+opts?): Promise<Lightmap>;
 ```
 
-De-indexes every baked mesh, attaches its `uv1`, and points the materials at the lightmap.
+Puts a bake on a scene: de-indexes every baked mesh, attaches its `uv1`, points the materials at the
+atlas, and zeroes the lights the bake already contains (leaving them on counts every direct
+contribution twice).
+
+`source` is either a manifest url — the texture is resolved next to it — or an already loaded pair
+from [loadLightmap](#loadlightmap), which is how two roots share one atlas.
+
+```ts
+const lightmap = await applyLightmap(root, "lightmaps/room.lightmap.json");
+lightmap.enabled = false;   // back to the sheet's own lights
+lightmap.intensity = 4;     // brighter than baked
+```
 
 The uvs are per triangle corner, which is why the geometry has to be non-indexed — two triangles
 sharing a vertex almost never share a lightmap texel. `bakeGeometry()` produced the same layout
@@ -83,14 +138,13 @@ check that the manifest belongs to this scene.
 | Parameter | Type |
 | ------ | ------ |
 | `root` | `Object3D` |
-| `manifest` | [`LightmapManifest`](#lightmapmanifest) |
-| `texture` | `Texture` |
+| `source` | \| `string` \| \{ `manifest`: [`LightmapManifest`](#lightmapmanifest-1); `texture`: `Texture`; \} |
+| `opts` | \{ `manager?`: `LoadingManager`; \} |
+| `opts.manager?` | `LoadingManager` |
 
 #### Returns
 
-`number`
-
-the number of meshes that got a lightmap.
+`Promise`\<[`Lightmap`](#lightmap)\>
 
 ***
 
@@ -127,9 +181,8 @@ device in Node.
 This entry point is the browser half: it applies a bake to a live scene and nothing more.
 
 ```ts
-const { manifest, texture } = await loadLightmap("/lightmaps/room.lightmap.json");
-applyLightmap(scene, manifest, texture);
-muteBakedLights(scene);
+const lightmap = await applyLightmap(scene, "/lightmaps/room.lightmap.json");
+lightmap.enabled = false;   // and the scene is back on its own lights
 ```
 
 The atlas holds irradiance, which is exactly what three's `lightMap` slot expects, so this is a
@@ -138,11 +191,9 @@ texture assignment and a `uv1` attribute — no custom material.
 The baker itself pulls in sharp, xatlas and Dawn, so it lives behind `tscene/bakery/node`:
 
 ```ts
-import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
+import { bakeSceneFile } from "tscene/bakery/node";
 
-const renderer = await createHeadlessRenderer();
-const result = await bake(await loadSceneFile("room.tscene"), { renderer, samples: 1024 });
-await writeBake(result, "public/lightmaps", "room");
+const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", samples: 1024 });
 ```
 
 #### Parameters
@@ -169,9 +220,8 @@ device in Node.
 This entry point is the browser half: it applies a bake to a live scene and nothing more.
 
 ```ts
-const { manifest, texture } = await loadLightmap("/lightmaps/room.lightmap.json");
-applyLightmap(scene, manifest, texture);
-muteBakedLights(scene);
+const lightmap = await applyLightmap(scene, "/lightmaps/room.lightmap.json");
+lightmap.enabled = false;   // and the scene is back on its own lights
 ```
 
 The atlas holds irradiance, which is exactly what three's `lightMap` slot expects, so this is a
@@ -180,11 +230,9 @@ texture assignment and a `uv1` attribute — no custom material.
 The baker itself pulls in sharp, xatlas and Dawn, so it lives behind `tscene/bakery/node`:
 
 ```ts
-import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
+import { bakeSceneFile } from "tscene/bakery/node";
 
-const renderer = await createHeadlessRenderer();
-const result = await bake(await loadSceneFile("room.tscene"), { renderer, samples: 1024 });
-await writeBake(result, "public/lightmaps", "room");
+const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", samples: 1024 });
 ```
 
 #### Parameters
@@ -221,30 +269,9 @@ Browser-side convenience — the baker writes both files with matching names.
 #### Returns
 
 `Promise`\<\{
-  `manifest`: [`LightmapManifest`](#lightmapmanifest);
+  `manifest`: [`LightmapManifest`](#lightmapmanifest-1);
   `texture`: `Texture`;
 \}\>
-
-***
-
-### muteBakedLights()
-
-```ts
-function muteBakedLights(root): void;
-```
-
-Zeroes the lights a bake already accounted for. Leaving them on double counts every direct
-contribution; call this right after `applyLightmap`.
-
-#### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `root` | `Object3D` |
-
-#### Returns
-
-`void`
 
 ***
 

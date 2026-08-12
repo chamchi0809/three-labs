@@ -6,7 +6,7 @@ import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Inspector } from "three/addons/inspector/Inspector.js";
 import { loadScene, type SceneModule } from "tscene";
-import { applyLightmap, loadLightmap, muteBakedLights } from "tscene/bakery";
+import { applyLightmap, type Lightmap } from "tscene/bakery";
 import room from "../scenes/room.tscene";
 import sponza from "../scenes/sponza.tscene";
 
@@ -63,38 +63,19 @@ const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 2
 
 const controls = new OrbitControls(camera, renderer.domElement);
 
-type Loaded = {
-  root: THREE.Group;
-  /** what the realtime pass uses, so the toggle can put it back after muteBakedLights() */
-  intensities: Map<THREE.Light, number>;
-  lightMapped: THREE.MeshStandardMaterial[];
-  bake?: Awaited<ReturnType<typeof loadLightmap>>;
-  applied: number;
-};
+/** a scene, plus its bake if one has been run — the handle owns the atlas/lights bookkeeping */
+type Loaded = { root: THREE.Group; lightmap: Lightmap | undefined };
 
 // kept around rather than disposed: re-entering sponza would otherwise re-download the whole model
 const loaded = new Map<string, Loaded>();
 
 async function load(entry: Entry): Promise<Loaded> {
   const root = await loadScene(entry.sheet);
-
-  const intensities = new Map<THREE.Light, number>();
-  root.traverse((o) => {
-    const light = o as THREE.Light;
-    if (light.isLight) intensities.set(light, light.intensity);
-  });
-
-  const bake = await loadLightmap(`lightmaps/${entry.name}.lightmap.json`).catch(() => undefined);
-  const applied = bake ? applyLightmap(root, bake.manifest, bake.texture) : 0;
-
-  const lightMapped: THREE.MeshStandardMaterial[] = [];
-  root.traverse((o) => {
-    for (const m of ([] as THREE.Material[]).concat((o as THREE.Mesh).material ?? [])) {
-      if ((m as THREE.MeshStandardMaterial).lightMap) lightMapped.push(m as THREE.MeshStandardMaterial);
-    }
-  });
-
-  return { root, intensities, lightMapped, bake, applied };
+  // nothing baked yet, or a bake that no longer matches the sheet — either way `entry.bake` is the fix
+  const lightmap = await applyLightmap(root, `lightmaps/${entry.name}.lightmap.json`).catch((e: Error) =>
+    void console.warn(e.message),
+  );
+  return { root, lightmap };
 }
 
 let index = 0;
@@ -146,18 +127,21 @@ function gain(light: THREE.Light): number {
 
 function setBaked(on: boolean) {
   if (!current) return;
-  baked = on && Boolean(current.bake);
+  const { lightmap } = current;
+  baked = on && Boolean(lightmap);
   view.baked = baked;
-  // intensity, not `lightMap = null`: dropping the texture changes the node graph, and the rebuild does
-  // not come back when it is put back. Zero reads the same and costs one uniform.
-  for (const m of current.lightMapped) m.lightMapIntensity = baked ? current.bake!.manifest.intensity * tune.lightmap : 0;
-  // a lightmap already contains every light it was baked from; leaving them on counts them twice
-  if (baked) muteBakedLights(current.root);
-  else for (const [light, intensity] of current.intensities) light.intensity = intensity * gain(light);
+  if (lightmap) {
+    lightmap.intensity = tune.lightmap;
+    // the handle zeroes the atlas and hands the lights their intensity back — a bake already contains
+    // every light it was baked from, so leaving them on counts them twice
+    lightmap.enabled = baked;
+    // …at the intensity the sheet declared, which the realtime gains then scale
+    if (!baked) for (const [light, intensity] of lightmap.lights) light.intensity = intensity * gain(light);
+  }
 
   const entry = SCENES[index]!;
-  hud.textContent = current.bake
-    ? `[S] ${entry.name}   [G] ${baked ? "baked GI" : "realtime direct only"}\n${current.bake.manifest.width}px atlas, ${current.applied} meshes`
+  hud.textContent = lightmap
+    ? `[S] ${entry.name}   [G] ${baked ? "baked GI" : "realtime direct only"}\n${lightmap.width}px atlas, ${lightmap.meshes} meshes`
     : `[S] ${entry.name}   realtime only`;
 }
 
@@ -183,7 +167,7 @@ function show(next: number) {
       loaded.set(entry.name, (current = await load(entry)));
     }
     scene.add(current.root);
-    msg.textContent = current.bake ? "" : `no lightmap for ${entry.name} yet.\nrun \`${entry.bake}\` from the repo root, then reload.`;
+    msg.textContent = current.lightmap ? "" : `no lightmap for ${entry.name} yet.\nrun \`${entry.bake}\` from the repo root, then reload.`;
     hud.hidden = false;
     // after the root is in: a tone mapping change has to reach materials that exist
     applyView(entry);

@@ -6,7 +6,7 @@ import type { Atlas } from "./atlas.ts";
 import { rasterize } from "./raster.ts";
 import { areaLights, bakeGeometry, collectScene, nodeKey, type BakeMesh } from "./scene.ts";
 import { dilate } from "./filter.ts";
-import { decodeFloats, encodeFloats } from "./apply.ts";
+import { applyLightmap, decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
 
 /** A 2x2 quad on the XZ plane at y = 0, facing +Y, filling the whole atlas. */
 function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
@@ -153,6 +153,61 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
 {
   const uv = new Float32Array([0, 0.25, 0.5, 1, 0.125, 0.875]);
   assert.deepEqual(Array.from(decodeFloats(encodeFloats(uv))), Array.from(uv));
+}
+
+// --- the lightmap handle owns the atlas/lights trade -----------------------------------------------
+{
+  const root = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  mesh.name = "floor";
+  const baked = new THREE.PointLight(0xffffff, 7);
+  const live = new THREE.PointLight(0xffffff, 3);
+  live.userData.bake = false; // "stays live at runtime": not one of the lights the atlas contains
+  root.add(mesh, baked, live);
+
+  const vertices = bakeGeometry(mesh).getAttribute("position").count;
+  const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  const manifest: LightmapManifest = {
+    version: 1,
+    width: 64,
+    height: 32,
+    intensity: 2,
+    texture: "atlas.png",
+    meshes: [{ key: nodeKey(root, mesh), vertices, uv: encodeFloats(new Float32Array(vertices * 2)) }],
+  };
+
+  const lightmap = await applyLightmap(root, { manifest, texture });
+  const material = mesh.material as THREE.MeshStandardMaterial;
+  assert.equal(lightmap.meshes, 1);
+  assert.equal(lightmap.width, 64);
+  assert.equal(material.lightMap, texture);
+  assert.equal(material.lightMapIntensity, 2, "gain 1 is the exposure the manifest carries");
+  assert.equal(baked.intensity, 0, "a bake contains its lights; leaving them on counts them twice");
+  assert.equal(live.intensity, 3);
+  assert.equal(lightmap.lights.get(baked), 7);
+  assert.equal(lightmap.lights.has(live), false);
+
+  lightmap.intensity = 4;
+  assert.equal(material.lightMapIntensity, 8);
+
+  lightmap.enabled = false;
+  assert.equal(material.lightMapIntensity, 0);
+  assert.equal(material.lightMap, texture, "zeroed, never unassigned — the node graph does not come back");
+  assert.equal(baked.intensity, 7, "the realtime pass gets the intensity the sheet declared");
+
+  lightmap.enabled = true;
+  assert.equal(material.lightMapIntensity, 8, "the gain survives a round trip");
+  assert.equal(baked.intensity, 0);
+
+  lightmap.dispose();
+  assert.equal(material.lightMap, null);
+  assert.equal(baked.intensity, 7);
+
+  // vertex counts are the check that a manifest belongs to this scene
+  await assert.rejects(
+    applyLightmap(root, { manifest: { ...manifest, meshes: [{ ...manifest.meshes[0]!, vertices: 3 }] }, texture }),
+    /baked from 3 vertices|has \d+ vertices/,
+  );
 }
 
 console.log("raster.test.ts ok");
