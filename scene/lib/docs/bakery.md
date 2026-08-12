@@ -36,6 +36,34 @@ Two entry points. `tscene/bakery` is browser safe and does nothing but apply a b
 
 ```ts
 // bake, in Node
+import { bakeSceneFile } from "tscene/bakery/node";
+
+const { files } = await bakeSceneFile("scenes/room.tscene", { out: "public/lightmaps", size: 512, samples: 1024 });
+```
+
+```ts
+// apply, in the browser
+import { applyLightmap } from "tscene/bakery";
+
+const lightmap = await applyLightmap(scene, "lightmaps/room.lightmap.json");
+```
+
+Applying a bake also zeroes the lights it already contains — leaving them on counts every direct
+contribution twice. The handle owns that trade, so a baked/realtime A/B is one assignment:
+
+| | |
+|---|---|
+| `lightmap.enabled = false` | atlas off, and every muted light back at the intensity the sheet declared |
+| `lightmap.intensity = 4` | gain on the exposure the manifest carries, so 1 is "as baked" |
+| `lightmap.lights` | `Map<Light, number>`: the bake's lights → the intensity each had. Scale a realtime pass through this rather than snapshotting your own |
+| `lightmap.meshes` `.width` `.height` | what the atlas reached, and how big it is |
+| `lightmap.dispose()` | atlas off the materials, lights back, texture disposed |
+
+`bakeSceneFile` is `loadSceneFile` + `bake` + `writeBake`, and makes a headless renderer when it is not
+handed one. Reach for the pieces when the scene is not a sheet on disk — `bake()` takes any
+`THREE.Object3D` — or when one renderer bakes several scenes:
+
+```ts
 import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
 
 const renderer = await createHeadlessRenderer();
@@ -43,16 +71,8 @@ const result = await bake(await loadSceneFile("scenes/room.tscene"), { renderer,
 await writeBake(result, "public/lightmaps", "room");
 ```
 
-```ts
-// apply, in the browser
-import { applyLightmap, loadLightmap, muteBakedLights } from "tscene/bakery";
-
-const { manifest, texture } = await loadLightmap("lightmaps/room.lightmap.json");
-applyLightmap(scene, manifest, texture);
-muteBakedLights(scene); // the atlas already contains them; leaving them on counts twice
-```
-
-`bake()` takes any `THREE.Object3D`, not just a loaded sheet.
+`loadLightmap(url)` is the other half of `applyLightmap`: it returns `{ manifest, texture }`, which is
+also what `applyLightmap` accepts in place of a url when two roots share one atlas.
 
 ### CLI
 
@@ -66,7 +86,7 @@ tscene-bake scenes/room.tscene --out public/lightmaps --size 512 --samples 1024 
 
 | `userData` | Effect |
 | --- | --- |
-| `bake: false` | keep the node out of the bake entirely — as an occluder *and* a receiver. On a light it means "stays live at runtime", and `muteBakedLights` leaves it alone |
+| `bake: false` | keep the node out of the bake entirely — as an occluder *and* a receiver. On a light it means "stays live at runtime": `applyLightmap` leaves it alone and it is not in `lightmap.lights` |
 | `bakeRadius: n` | soft shadows: the light becomes a sphere of world radius `n` (a directional light reads it as an angular radius in radians) |
 | `bakeAlbedo: [r, g, b]` | override the linear reflectance the tracer bounces off this material |
 

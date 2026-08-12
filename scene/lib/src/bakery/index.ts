@@ -5,9 +5,8 @@
  * This entry point is the browser half: it applies a bake to a live scene and nothing more.
  *
  * ```ts
- * const { manifest, texture } = await loadLightmap("/lightmaps/room.lightmap.json");
- * applyLightmap(scene, manifest, texture);
- * muteBakedLights(scene);
+ * const lightmap = await applyLightmap(scene, "/lightmaps/room.lightmap.json");
+ * lightmap.enabled = false;   // and the scene is back on its own lights
  * ```
  *
  * The atlas holds irradiance, which is exactly what three's `lightMap` slot expects, so this is a
@@ -16,12 +15,10 @@
  * The baker itself pulls in sharp, xatlas and Dawn, so it lives behind `tscene/bakery/node`:
  *
  * ```ts
- * import { bake, createHeadlessRenderer, loadSceneFile, writeBake } from "tscene/bakery/node";
+ * import { bakeSceneFile } from "tscene/bakery/node";
  *
- * const renderer = await createHeadlessRenderer();
- * const result = await bake(await loadSceneFile("room.tscene"), { renderer, samples: 1024 });
- * await writeBake(result, "public/lightmaps", "room");
+ * const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", samples: 1024 });
  * ```
  */
-export { applyLightmap, loadLightmap, muteBakedLights, decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
+export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, type Lightmap, type LightmapManifest } from "./apply.ts";
 export { bakeGeometry, nodeKey } from "./scene.ts";

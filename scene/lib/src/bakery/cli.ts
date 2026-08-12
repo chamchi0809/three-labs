@@ -1,11 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types --disable-warning=ExperimentalWarning
 // tlightmap <scene.tscene> [--out dir] [--size 1024] [--samples 512] ...
-import { basename, extname } from "node:path";
 import { parseArgs } from "node:util";
-import { bake } from "./bake.ts";
-import { createHeadlessRenderer } from "./headless.ts";
-import { writeBake } from "./io.ts";
-import { loadSceneFile } from "./tscene.ts";
+import { bakeSceneFile } from "./file.ts";
 
 const USAGE = `tlightmap <scene.tscene> [options]
 
@@ -45,17 +41,13 @@ if (values.help || positionals.length !== 1) {
   process.exit(values.help ? 0 : 1);
 }
 
-const entry = positionals[0];
-const name = values.name ?? basename(entry, extname(entry));
-const out = values.out ?? ".";
 const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
 
-const root = await loadSceneFile(entry);
-const renderer = await createHeadlessRenderer();
-
 let stage = "";
-const result = await bake(root, {
-  renderer,
+const result = await bakeSceneFile(positionals[0]!, {
+  out: values.out,
+  name: values.name,
+  exr: values.exr,
   size: num(values.size, 1024),
   samples: num(values.samples, 512),
   bounces: num(values.bounces, 4),
@@ -71,11 +63,10 @@ const result = await bake(root, {
   },
 });
 
-const written = await writeBake(result, out, name, { exr: values.exr });
 process.stderr.write(
   `\n${result.width}x${result.height}, ${(result.utilization * 100).toFixed(0)}% packed, exposure ${result.exposure.toFixed(3)}\n`,
 );
-process.stdout.write(`${written.join("\n")}\n`);
+process.stdout.write(`${result.files.join("\n")}\n`);
 
 // the requestAnimationFrame shim keeps a timer alive, so nothing else will end the process
 process.exit(0);

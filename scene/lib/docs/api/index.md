@@ -231,6 +231,92 @@ type Member =
 
 ***
 
+### Mount
+
+```ts
+type Mount = {
+  root: Group | undefined;
+  dispose: void;
+  reload: Promise<void>;
+  update: void;
+};
+```
+
+A sheet that is on screen. Handed back by [mountScene](#mountscene).
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="root"></a> `root` | `readonly` | `Group` \| `undefined` | what is in the parent right now — `undefined` only if the very first build failed |
+
+#### Methods
+
+##### dispose()
+
+```ts
+dispose(): void;
+```
+
+Stops listening for hot updates and disposes the current root.
+
+###### Returns
+
+`void`
+
+##### reload()
+
+```ts
+reload(): Promise<void>;
+```
+
+Rebuilds from the sheet's current source. A hot update does this for you.
+
+###### Returns
+
+`Promise`\<`void`\>
+
+##### update()
+
+```ts
+update(delta?): void;
+```
+
+Advances the clips `play()` started. Call it once per frame; without an argument the mount times
+the frames itself.
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `delta?` | `number` |
+
+###### Returns
+
+`void`
+
+***
+
+### MountOptions
+
+```ts
+type MountOptions = LoadOptions & {
+  hmr?: boolean;
+  onError?: (error) => void;
+  onLoad?: (root) => void;
+};
+```
+
+#### Type Declaration
+
+| Name | Type | Description |
+| ------ | ------ | ------ |
+| `hmr?` | `boolean` | rebuild whenever the vite plugin hot-replaces a sheet (default true) |
+| `onError()?` | (`error`) => `void` | Where a failed build goes. With this set nothing throws and the previous root stays up, which is what an on-screen error message wants; without it the first build rejects and a failed reload lands on the console. |
+| `onLoad()?` | (`root`) => `void` | after every successful build, hot updates included — where to grab nodes or apply a lightmap |
+
+***
+
 ### ObjectValue
 
 ```ts
@@ -609,6 +695,37 @@ Convenience: fetch a .tscene file and build it.
 #### Returns
 
 `Promise`\<`Group`\<`Object3DEventMap`\>\>
+
+***
+
+### mountScene()
+
+```ts
+function mountScene(
+   parent, 
+   src, 
+opts?): Promise<Mount>;
+```
+
+Builds a sheet into `parent` and keeps it there: hot updates rebuild it, the old root is disposed
+once the new one is up, and `update()` drives the clips.
+
+```ts
+const mount = await mountScene(scene, sheet, { onError: (e) => (msg.textContent = String(e)) });
+renderer.setAnimationLoop(() => { mount.update(); renderer.render(scene, camera); });
+```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `parent` | `Object3D` |
+| `src` | `string` \| [`SceneModule`](#scenemodule) |
+| `opts` | [`MountOptions`](#mountoptions) |
+
+#### Returns
+
+`Promise`\<[`Mount`](#mount)\>
 
 ***
 

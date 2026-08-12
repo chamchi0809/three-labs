@@ -49,12 +49,35 @@ group #stage {
 ## Runtime
 
 ```ts
-import { loadScene, loadSceneFromURL, updateScene, disposeScene } from "tscene";
+import { mountScene } from "tscene";
 import sheet from "./main.tscene";     // a SceneModule, courtesy of the vite plugin
+
+const mount = await mountScene(scene, sheet);
+
+mount.update();            // advances the clips play() started — every frame
+```
+
+`mountScene` owns the whole lifecycle: it builds the sheet into `scene`, rebuilds it on every hot
+update (disposing the old root once the new one is up), and times the frames for you. `onLoad` runs
+after every build, hot updates included, and `onError` is where a failed rebuild goes instead of
+throwing — with it set, the previous root stays on screen.
+
+```ts
+const mount = await mountScene(scene, sheet, {
+  onLoad: (root) => (spinner = root.getObjectByName("spinner")),
+  onError: (e) => (msg.textContent = String(e)),
+});
+mount.reload();            // rebuild by hand
+mount.dispose();           // stop listening, dispose the root
+```
+
+The pieces underneath are still exported, for a scene whose lifecycle is yours:
+
+```ts
+import { loadScene, loadSceneFromURL, updateScene, disposeScene } from "tscene";
 
 const root = await loadScene(sheet, { registry: { water: Water } });
 scene.add(root);           // a Group holding the top-level nodes
-
 updateScene(root, dt);     // advances the clips play() started — every frame
 disposeScene(root);        // disposes geometries/materials/textures and unparents
 ```
@@ -145,8 +168,9 @@ paths in `texture()`/`gltf()` become `?url` imports, so the bundler handles hash
 build and hot update runs the checker; failures show up in the overlay. Options:
 `{ entry, modules, declare, check, hmr }`.
 
-Saving fires `onSceneChange` — rebuild the scene and nothing else (passing the module object you imported
-is fine, the current source is looked up for you):
+Saving rebuilds the scene and nothing else. `mountScene` already listens; `onSceneChange` is the raw
+signal behind it (passing the module object you imported is fine, the current source is looked up for
+you):
 
 ```ts
 import { loadScene, disposeScene, onSceneChange } from "tscene";

@@ -161,6 +161,86 @@ export function disposeScene(root: Object3D): void {
   root.removeFromParent();
 }
 
+// ---------------------------------------------------------------- mount
+
+/** A sheet that is on screen. Handed back by {@link mountScene}. */
+export type Mount = {
+  /** what is in the parent right now — `undefined` only if the very first build failed */
+  readonly root: Group | undefined;
+  /**
+   * Advances the clips `play()` started. Call it once per frame; without an argument the mount times
+   * the frames itself.
+   */
+  update(delta?: number): void;
+  /** Rebuilds from the sheet's current source. A hot update does this for you. */
+  reload(): Promise<void>;
+  /** Stops listening for hot updates and disposes the current root. */
+  dispose(): void;
+};
+
+export type MountOptions = LoadOptions & {
+  /** rebuild whenever the vite plugin hot-replaces a sheet (default true) */
+  hmr?: boolean;
+  /** after every successful build, hot updates included — where to grab nodes or apply a lightmap */
+  onLoad?: (root: Group) => void;
+  /**
+   * Where a failed build goes. With this set nothing throws and the previous root stays up, which is
+   * what an on-screen error message wants; without it the first build rejects and a failed reload
+   * lands on the console.
+   */
+  onError?: (error: unknown) => void;
+};
+
+/**
+ * Builds a sheet into `parent` and keeps it there: hot updates rebuild it, the old root is disposed
+ * once the new one is up, and `update()` drives the clips.
+ *
+ * ```ts
+ * const mount = await mountScene(scene, sheet, { onError: (e) => (msg.textContent = String(e)) });
+ * renderer.setAnimationLoop(() => { mount.update(); renderer.render(scene, camera); });
+ * ```
+ */
+export async function mountScene(parent: Object3D, src: string | SceneModule, opts: MountOptions = {}): Promise<Mount> {
+  let current: Group | undefined;
+  let last = 0;
+  // a hot update during a load — or a slow gltf — would otherwise leave two roots racing to be added
+  let pending = Promise.resolve();
+
+  const build = async () => {
+    const next = await loadScene(src, opts);
+    if (current) disposeScene(current);
+    parent.add((current = next));
+    opts.onLoad?.(next);
+  };
+  // `catch` first: one failed build must not poison every rebuild queued behind it
+  const run = () => (pending = pending.catch(() => {}).then(build));
+  const rebuild = () => run().catch((e: unknown) => (opts.onError ? opts.onError(e) : console.error(e)));
+
+  const stop = opts.hmr === false ? undefined : onSceneChange(() => void rebuild());
+
+  // the first build is the one whose failure the caller can still see, so it only swallows with onError
+  if (opts.onError) await rebuild();
+  else await run();
+
+  return {
+    get root() {
+      return current;
+    },
+    update(delta?: number) {
+      const now = performance.now() / 1000;
+      const dt = delta ?? (last ? now - last : 0);
+      last = now;
+      if (current) updateScene(current, dt);
+    },
+    reload: () => rebuild(),
+    dispose() {
+      stop?.();
+      if (current) disposeScene(current);
+      current = undefined;
+    },
+  };
+}
+
 // ---------------------------------------------------------------- hot reload
 
 export type HotListener = (mod: SceneModule) => void;
