@@ -1,4 +1,4 @@
-// three-scene VS Code client. Plain JS on purpose — the repo ships TS sources with no build step,
+// tscene VS Code client. Plain JS on purpose — the repo ships TS sources with no build step,
 // and VS Code loads this file directly.
 const path = require("node:path");
 const fs = require("node:fs");
@@ -8,22 +8,22 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
 let client;
 
-// a published three-scene ships dist/; a checkout may only have the TS sources (node strips the types)
+// a published tscene ships dist/; a checkout may only have the TS sources (node strips the types)
 const ENTRIES = ["dist/lsp.js", "src/lsp.ts"];
 const pick = (dir) => ENTRIES.map((e) => path.join(dir, e)).find(fs.existsSync);
 
-/** the server bundled into the .vsix, next to this file — the fallback when the workspace has no three-scene */
+/** the server bundled into the .vsix, next to this file — the fallback when the workspace has no tscene */
 const bundled = () => [path.join(__dirname, "lsp.js"), path.join(__dirname, "dist", "lsp.js")].find(fs.existsSync);
 
-/** Find three-scene's language server in the workspace, falling back to this extension's own deps. */
+/** Find tscene's language server in the workspace, falling back to this extension's own deps. */
 function resolveServer(folder) {
-  const configured = vscode.workspace.getConfiguration("three-scene").get("serverPath");
+  const configured = vscode.workspace.getConfiguration("tscene").get("serverPath");
   if (configured) return configured;
   const roots = [folder?.uri.fsPath, __dirname, path.join(__dirname, "..", "lib")].filter(Boolean);
   for (const root of roots) {
     try {
       const req = createRequire(path.join(root, "noop.js"));
-      const found = pick(path.dirname(req.resolve("three-scene/package.json")));
+      const found = pick(path.dirname(req.resolve("tscene/package.json")));
       if (found) return found;
     } catch {}
   }
@@ -34,11 +34,11 @@ async function start(context) {
   const folder = vscode.workspace.workspaceFolders?.[0];
   const server = resolveServer(folder);
   if (!server || !fs.existsSync(server)) {
-    vscode.window.showErrorMessage("three-scene: cannot find the language server. Install three-scene in this workspace or set three-scene.serverPath.");
+    vscode.window.showErrorMessage("tscene: cannot find the language server. Install tscene in this workspace or set tscene.serverPath.");
     return;
   }
 
-  const config = vscode.workspace.getConfiguration("three-scene");
+  const config = vscode.workspace.getConfiguration("tscene");
   const node = config.get("nodePath") || process.execPath;
   // the bundled server is plain JS; only a source checkout needs the type stripper
   const strip = server.endsWith(".ts") ? ["--experimental-strip-types", "--disable-warning=ExperimentalWarning"] : [];
@@ -52,11 +52,11 @@ async function start(context) {
   // the debug profile adds --inspect so the attach configuration in .vscode/launch.json can connect
   const debug = { ...run, args: ["--inspect=6009", ...run.args] };
 
-  client = new LanguageClient("three-scene", "three-scene", { run, debug }, {
+  client = new LanguageClient("tscene", "tscene", { run, debug }, {
     documentSelector: [{ scheme: "file", language: "scene" }],
     synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.tscene") },
     initializationOptions: { entry: config.get("entry"), modules: config.get("modules"), declare: config.get("declare") },
-    outputChannelName: "three-scene",
+    outputChannelName: "tscene",
   });
   context.subscriptions.push(client);
   await client.start();
@@ -66,24 +66,24 @@ async function start(context) {
 function runCli(command) {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) return;
-  const terminal = vscode.window.createTerminal({ name: "three-scene", cwd: folder.uri.fsPath });
+  const terminal = vscode.window.createTerminal({ name: "tscene", cwd: folder.uri.fsPath });
   terminal.show();
-  terminal.sendText(`npx three-scene ${command}`);
+  terminal.sendText(`npx tscene ${command}`);
 }
 
 async function activate(context) {
   context.subscriptions.push(
-    vscode.commands.registerCommand("three-scene.format", () => vscode.commands.executeCommand("editor.action.formatDocument")),
-    vscode.commands.registerCommand("three-scene.checkWorkspace", () => runCli("check")),
-    vscode.commands.registerCommand("three-scene.fixWorkspace", () => runCli("fix")),
-    vscode.commands.registerCommand("three-scene.restart", async () => {
+    vscode.commands.registerCommand("tscene.format", () => vscode.commands.executeCommand("editor.action.formatDocument")),
+    vscode.commands.registerCommand("tscene.checkWorkspace", () => runCli("check")),
+    vscode.commands.registerCommand("tscene.fixWorkspace", () => runCli("fix")),
+    vscode.commands.registerCommand("tscene.restart", async () => {
       await client?.stop();
       await start(context);
     }),
   );
 
   vscode.workspace.onDidChangeConfiguration(async (e) => {
-    if (!e.affectsConfiguration("three-scene")) return;
+    if (!e.affectsConfiguration("tscene")) return;
     await client?.stop();
     await start(context);
   }, null, context.subscriptions);

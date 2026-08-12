@@ -78,7 +78,7 @@ await check("every doc links to a file that exists", () => {
 // ---------------------------------------------------------------- generated api
 
 await check("docs/api is what typedoc generates from the current source", async () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), "three-scene-api-"));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "tscene-api-"));
   const { Application } = await import("typedoc");
   // `options: root` so the package's typedoc.json is found no matter where this is run from
   const app = await Application.bootstrapWithPlugins({ options: root, out });
@@ -92,7 +92,7 @@ await check("docs/api is what typedoc generates from the current source", async 
     assert.equal(
       fs.readFileSync(path.join(out, file), "utf8"),
       fs.readFileSync(path.join(committed, file), "utf8"),
-      `docs/api/${file} is stale — run \`pnpm --filter three-scene docs\``,
+      `docs/api/${file} is stale — run \`pnpm --filter tscene docs\``,
     );
   }
   fs.rmSync(out, { recursive: true, force: true });

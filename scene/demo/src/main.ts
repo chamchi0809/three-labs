@@ -1,7 +1,7 @@
-/// <reference types="three-scene/client" />
+/// <reference types="tscene/client" />
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { disposeScene, loadScene, onSceneChange } from "three-scene";
+import { disposeScene, loadScene, onSceneChange, updateScene } from "tscene";
 import sheet from "../scenes/main.tscene";
 
 const msg = document.getElementById("msg")!;
@@ -47,8 +47,12 @@ addEventListener("resize", () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+let last = 0;
 renderer.setAnimationLoop((t) => {
+  const dt = last ? (t - last) / 1000 : 0;
+  last = t;
   if (spinner) spinner.rotation.y = (t / 1000) * Number(spinner.userData.spin ?? 0.5);
+  if (root) updateScene(root, dt); // advances the clips play() started
   controls.update();
   renderer.render(scene, camera);
 });

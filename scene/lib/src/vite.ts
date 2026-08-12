@@ -12,13 +12,14 @@ const relative = (from: string, to: string) => {
 };
 
 const ABSOLUTE = /^(\w+:|\/|data:)/;
-const ASSET_CALL = /\b(?:texture|gltf)\(\s*("[^"]*"|'[^']*')/g;
+// a loader is also usable as a node, so the call may carry a selector: gltf.hero#robot("./r.glb")
+const ASSET_CALL = /\b(?:texture|gltf)(?:\s*[.#][A-Za-z_][\w-]*)*\s*\(\s*("[^"]*"|'[^']*')/g;
 
 export default function threeScene(options: PluginOptions = {}) {
   let schema: Schema | undefined;
   let serve = false;
   return {
-    name: "three-scene",
+    name: "tscene",
     configResolved(config: { command: string }) {
       serve = config.command === "serve";
     },
@@ -36,7 +37,7 @@ export default function threeScene(options: PluginOptions = {}) {
       }
 
       // one module per sheet: positions, relative asset paths and per-file HMR all stay honest
-      const lines = [`import { __sceneRegister, __sceneChanged } from "three-scene";`];
+      const lines = [`import { __sceneRegister, __sceneChanged } from "tscene";`];
       const imports: Record<string, string> = {};
       for (const s of parse(code, file).statements) {
         if (s.kind !== "import" || imports[s.path]) continue;

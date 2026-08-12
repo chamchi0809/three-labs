@@ -7,9 +7,10 @@
     "build": "vite build --configLoader runner",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
-    "check": "node ../lib/dist/cli.js check scenes"
+    "assets": "node tools/make-assets.mjs",
+    "check": "node ../lib/dist/cli.js check scenes && node assets.check.mjs"
   },
   "dependencies": {
-    "three-scene": "workspace:*"
+    "tscene": "workspace:*"
   }
 }

@@ -1,10 +1,10 @@
 name: npm-publish
 
-# Pushing a three-scene-v1.2.3 tag publishes that version of scene/lib to npm.
+# Pushing a tscene-v1.2.3 tag publishes that version of scene/lib to npm.
 # A manual run only builds the tarball artifact (pass publish=true to publish).
 on:
   push:
-    tags: ["three-scene-v*"]
+    tags: ["tscene-v*"]
   workflow_dispatch:
     inputs:
       publish:
@@ -39,7 +39,7 @@ jobs:
 
       - name: Take the version from the tag
         if: startsWith(github.ref, 'refs/tags/')
-        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#three-scene-v}"
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#tscene-v}"
 
       # prepack builds dist/, so the tarball is what would be published
       - name: Pack
@@ -47,8 +47,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: three-scene-npm
-          path: three-scene-*.tgz
+          name: tscene-npm
+          path: tscene-*.tgz
 
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/') || inputs.publish

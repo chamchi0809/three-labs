@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "three-scene-lsp-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tscene-lsp-"));
 const main = path.join(dir, "main.tscene");
 const shared = path.join(dir, "shared.tscene");
 

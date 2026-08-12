@@ -1,8 +1,8 @@
-**three-scene**
+**tscene**
 
 ***
 
-# three-scene
+# tscene
 
 ## Modules
 

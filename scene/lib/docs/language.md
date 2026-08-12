@@ -240,5 +240,5 @@ Errors stop the scene from being built; warnings do not.
 | error | syntax errors, unknown class/property/method, type mismatch, no matching constructor overload, unknown variable/template/`#id`, a child that is not an `Object3D` |
 | warning | a property or variable set twice in one block, `--x` declared twice in one file, a duplicate `#id` (`getObjectByName` only finds the first), a `--x` or `.template` that is never used |
 
-Casing typos (`CastShadow`, `Mesh`) are errors that carry a fix — `three-scene fix` and the editor quick
+Casing typos (`CastShadow`, `Mesh`) are errors that carry a fix — `tscene fix` and the editor quick
 fix apply them. Anything more aggressive (spelling corrections, value conversions) is only reported.

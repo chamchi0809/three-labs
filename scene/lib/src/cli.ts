@@ -20,7 +20,7 @@ for (let i = 0; i < argv.length; i++) {
 const opt = (name: string) => values[name]?.at(-1);
 
 if (flags.has("help")) {
-  console.log(`three-scene check|fix [globs…]
+  console.log(`tscene check|fix [globs…]
 
   --fix            rewrite files (same as the fix command)
   --entry <mod>    three entry point to reflect (default three/webgpu)

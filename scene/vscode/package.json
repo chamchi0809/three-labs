@@ -1,6 +1,6 @@
 {
-  "name": "three-scene-vscode",
-  "displayName": "three-scene",
+  "name": "tscene-vscode",
+  "displayName": "tscene",
   "description": "Syntax highlighting, type checking, completion and formatting for .tscene files",
   "version": "0.1.0",
   "license": "MIT",
@@ -27,7 +27,7 @@
       {
         "id": "scene",
         "aliases": [
-          "three-scene",
+          "tscene",
           "scene"
         ],
         "extensions": [
@@ -55,40 +55,40 @@
     ],
     "commands": [
       {
-        "command": "three-scene.format",
-        "title": "three-scene: Fix and format this file"
+        "command": "tscene.format",
+        "title": "tscene: Fix and format this file"
       },
       {
-        "command": "three-scene.checkWorkspace",
-        "title": "three-scene: Check all .tscene files"
+        "command": "tscene.checkWorkspace",
+        "title": "tscene: Check all .tscene files"
       },
       {
-        "command": "three-scene.fixWorkspace",
-        "title": "three-scene: Fix all .tscene files"
+        "command": "tscene.fixWorkspace",
+        "title": "tscene: Fix all .tscene files"
       },
       {
-        "command": "three-scene.restart",
-        "title": "three-scene: Restart language server"
+        "command": "tscene.restart",
+        "title": "tscene: Restart language server"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "three-scene.format",
+          "command": "tscene.format",
           "when": "editorLangId == scene",
           "group": "1_modification"
         }
       ]
     },
     "configuration": {
-      "title": "three-scene",
+      "title": "tscene",
       "properties": {
-        "three-scene.entry": {
+        "tscene.entry": {
           "type": "string",
           "default": "three/webgpu",
           "description": "three entry point whose typings drive the checker (three/webgpu or three)."
         },
-        "three-scene.modules": {
+        "tscene.modules": {
           "type": "array",
           "items": {
             "type": "string"
@@ -96,23 +96,23 @@
           "default": [],
           "description": "Extra modules whose exported classes become usable nodes and values (e.g. three/addons/objects/Water.js)."
         },
-        "three-scene.declare": {
+        "tscene.declare": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
           "description": "Node names your app registers at runtime (loadScene's `registry`). They are accepted without type checking."
         },
-        "three-scene.nodePath": {
+        "tscene.nodePath": {
           "type": "string",
           "default": "",
           "description": "node binary used to run the language server. Empty uses the one bundled with VS Code."
         },
-        "three-scene.serverPath": {
+        "tscene.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Path to three-scene's language server entry. Empty resolves it from the workspace's node_modules."
+          "description": "Path to tscene's language server entry. Empty resolves it from the workspace's node_modules."
         },
-        "three-scene.trace.server": {
+        "tscene.trace.server": {
           "type": "string",
           "enum": [
             "off",
@@ -120,7 +120,7 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Log LSP traffic to the three-scene output channel."
+          "description": "Log LSP traffic to the tscene output channel."
         }
       }
     },

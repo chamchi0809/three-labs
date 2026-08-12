@@ -7,11 +7,11 @@
     "dev:sdfgi": "pnpm --filter sdfgi-demo dev",
     "dev:rc25d": "pnpm --filter @rc25d/radiance-cascades build && pnpm --filter rc25d-demo dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm --filter @rc25d/radiance-cascades --filter three-scene build && pnpm -r typecheck",
+    "typecheck": "pnpm --filter @rc25d/radiance-cascades --filter tscene build && pnpm -r typecheck",
     "test": "pnpm -r test",
-    "check": "pnpm --filter three-scene build && pnpm -r check",
-    "dev:scene": "pnpm --filter three-scene build && pnpm --filter scene-demo dev",
-    "docs": "pnpm --filter three-scene docs"
+    "check": "pnpm --filter tscene build && pnpm -r check",
+    "dev:scene": "pnpm --filter tscene build && pnpm --filter scene-demo dev",
+    "docs": "pnpm --filter tscene docs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

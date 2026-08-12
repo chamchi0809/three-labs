@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import threeScene from "three-scene/vite";
+import threeScene from "tscene/vite";
 
 export default defineConfig({
   plugins: [threeScene()],

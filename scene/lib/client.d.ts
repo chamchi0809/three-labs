@@ -1,6 +1,6 @@
-// `/// <reference types="three-scene/client" />` makes `import scene from "./main.tscene"` typecheck.
+// `/// <reference types="tscene/client" />` makes `import scene from "./main.tscene"` typecheck.
 declare module "*.tscene" {
-  import type { SceneModule } from "three-scene";
+  import type { SceneModule } from "tscene";
   const scene: SceneModule;
   export default scene;
 }

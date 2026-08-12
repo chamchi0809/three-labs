@@ -1,5 +1,5 @@
 // Builds the two files the .vsix ships. vsce cannot follow pnpm's symlinked node_modules, and the
-// server has to run in workspaces that never installed three-scene, so both are bundled standalone.
+// server has to run in workspaces that never installed tscene, so both are bundled standalone.
 import { build } from "esbuild";
 import { rmSync } from "node:fs";
 

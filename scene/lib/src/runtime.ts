@@ -278,7 +278,7 @@ async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
   }
   const leaf = path.at(-1)!;
   // the checker catches this at build time; at runtime a typo would otherwise just sit on the object
-  if (!(leaf in owner)) console.warn(`three-scene: ${where(m, ctx.sheet)}: ${owner.constructor?.name ?? "object"} has no property ${JSON.stringify(leaf)}`);
+  if (!(leaf in owner)) console.warn(`tscene: ${where(m, ctx.sheet)}: ${owner.constructor?.name ?? "object"} has no property ${JSON.stringify(leaf)}`);
   const current = owner[leaf];
   // read-only three fields (position, rotation, scale, …) are set through copy()
   if (current && typeof current === "object" && typeof current.copy === "function" && value && typeof value === "object" && value.constructor === current.constructor) {

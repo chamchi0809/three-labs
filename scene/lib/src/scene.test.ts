@@ -391,11 +391,12 @@ test("@import resolves bare specifiers out of node_modules", async () => {
 test("the vite plugin emits one module per sheet, with its imports and assets", async () => {
   const plugin = (await import("./vite.ts")).default({ check: false }) as any;
   plugin.configResolved({ command: "serve" });
-  const src = `@import "./lib/mats.tscene";\nmesh { material: meshStandardMaterial { map: texture("./t.png"); }; }\ngltf("https://cdn/m.glb")\n`;
+  const src = `@import "./lib/mats.tscene";\nmesh { material: meshStandardMaterial { map: texture("./t.png"); }; }\ngltf #hero("./m.glb") { }\ngltf("https://cdn/m.glb")\n`;
   const { code } = await plugin.transform(src, "/p/scenes/main.tscene");
   assert.match(code, /import "\.\/lib\/mats\.tscene";/);            // the dep registers itself and vite watches it
   assert.match(code, /import __asset0 from "\.\/t\.png\?url";/);     // the bundler resolves the asset, not the runtime
-  assert.doesNotMatch(code, /import __asset1/);                      // …but remote urls are left to the runtime
+  assert.match(code, /import __asset1 from "\.\/m\.glb\?url";/);     // a loader used as a node carries a selector
+  assert.doesNotMatch(code, /import __asset2/);                      // …but remote urls are left to the runtime
   assert.match(code, /"\.\/lib\/mats\.tscene":"\/p\/scenes\/lib\/mats\.tscene"/);
   assert.match(code, /import\.meta\.hot\.accept/);
   assert.equal(JSON.parse(/source: (".*?"), file:/.exec(code)![1]!), src); // source is verbatim, so positions hold

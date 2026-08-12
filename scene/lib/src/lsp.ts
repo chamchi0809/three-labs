@@ -30,7 +30,7 @@ connection.onInitialize((params) => {
       break;
     } catch (e) {
       if (cwd === roots.at(-1)) {
-        connection.window.showErrorMessage(`three-scene: ${(e as Error).message}`);
+        connection.window.showErrorMessage(`tscene: ${(e as Error).message}`);
         schema = {
           entry: options.entry ?? "three/webgpu", modules: options.modules ?? [], version: "0",
           classes: {}, constants: {}, declared: options.declare,
@@ -109,7 +109,7 @@ async function validate(doc: TextDocument) {
         range: range(doc, d),
         severity: d.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
         message: d.message,
-        source: "three-scene",
+        source: "tscene",
         data: d.fix,
       })),
   });

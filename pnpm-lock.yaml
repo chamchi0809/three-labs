@@ -47,7 +47,7 @@ importers:
 
   scene/demo:
     dependencies:
-      three-scene:
+      tscene:
         specifier: workspace:*
         version: link:../lib
 

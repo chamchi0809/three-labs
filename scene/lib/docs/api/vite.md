@@ -1,8 +1,8 @@
-[**three-scene**](README.md)
+[**tscene**](README.md)
 
 ***
 
-[three-scene](README.md) / vite
+[tscene](README.md) / vite
 
 # vite
 
@@ -64,6 +64,6 @@ function default(options?): {
 
 | Name | Type | Default value |
 | ------ | ------ | ------ |
-| `name` | `string` | `"three-scene"` |
+| `name` | `string` | `"tscene"` |
 | `configResolved()` | (`config`) => `void` | - |
 | `transform()` | (`code`, `id`) => `Promise`\< \| \{ `code`: `string`; `map`: `null`; \} \| `null`\> | - |

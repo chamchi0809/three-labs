@@ -53,7 +53,7 @@ export function buildSchema(opts: SchemaOptions = {}): Schema {
   const entry = opts.entry ?? "three/webgpu";
   const modules = opts.modules ?? [];
   const cwd = opts.cwd ?? process.cwd();
-  const probe = path.join(cwd, "__three-scene-probe__.ts");
+  const probe = path.join(cwd, "__tscene-probe__.ts");
   const source = [entry, ...modules].map((m, i) => `import * as M${i} from ${JSON.stringify(m)};\nexport type P${i} = typeof M${i};\n`).join("");
 
   const options: ts.CompilerOptions = {
@@ -258,7 +258,7 @@ export function loadSchema(opts: SchemaOptions = {}): Schema {
   if (opts.cache === false) return buildSchema({ entry, modules, cwd, declare: opts.declare });
   const version = threeVersion(cwd, entry);
   const key = createHash("sha1").update([entry, ...modules].join("+")).update(stamp(cwd, modules)).digest("hex").slice(0, 12);
-  const file = path.join(cwd, "node_modules", ".cache", "three-scene", `${entry.replace(/\W/g, "_")}-${version}-${key}-v${SCHEMA_VERSION}.json`);
+  const file = path.join(cwd, "node_modules", ".cache", "tscene", `${entry.replace(/\W/g, "_")}-${version}-${key}-v${SCHEMA_VERSION}.json`);
   try {
     return { ...(JSON.parse(fs.readFileSync(file, "utf8")) as Schema), ...declared };
   } catch {}

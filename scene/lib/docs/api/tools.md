@@ -1,8 +1,8 @@
-[**three-scene**](README.md)
+[**tscene**](README.md)
 
 ***
 
-[three-scene](README.md) / tools
+[tscene](README.md) / tools
 
 # tools
 

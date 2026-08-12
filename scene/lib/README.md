@@ -1,4 +1,4 @@
-# three-scene
+# tscene
 
 Write three.js scenes in CSS syntax: the `.tscene` format, plus a type checker, an autofixer and a
 runtime loader.
@@ -48,7 +48,7 @@ group #stage {
 ## Runtime
 
 ```ts
-import { loadScene, loadSceneFromURL, updateScene, disposeScene } from "three-scene";
+import { loadScene, loadSceneFromURL, updateScene, disposeScene } from "tscene";
 import sheet from "./main.tscene";     // a SceneModule, courtesy of the vite plugin
 
 const root = await loadScene(sheet, { registry: { water: Water } });
@@ -71,26 +71,26 @@ Runtime errors carry their location: `main.tscene:12:5: ...`.
 
 The schema is reflected out of the installed `three/webgpu` `.d.ts` with the TypeScript Compiler API:
 classes, constructor signatures, property types. Upgrading three upgrades the schema (cached under
-`node_modules/.cache/three-scene`, keyed by version).
+`node_modules/.cache/tscene`, keyed by version).
 
 Constant unions such as `type Side = typeof FrontSide | ...` keep their names, so `side: NormalBlending`
 is an error (a raw `side: 2` passes, because three accepts it). Completion offers only the members of
 that union.
 
 ```sh
-three-scene check scenes/          # a directory, a glob or a file
-three-scene fix   scenes/          # casing + formatting
-three-scene check --entry three    # when only core three is used
-three-scene check --watch          # re-check on every change
-three-scene check --format json    # for editors and CI
-three-scene check --module three/addons/objects/Water.js   # expose that module's exports as nodes (repeatable)
-three-scene check --declare water     # a node injected through the runtime registry — passes on name alone (repeatable)
+tscene check scenes/          # a directory, a glob or a file
+tscene fix   scenes/          # casing + formatting
+tscene check --entry three    # when only core three is used
+tscene check --watch          # re-check on every change
+tscene check --format json    # for editors and CI
+tscene check --module three/addons/objects/Water.js   # expose that module's exports as nodes (repeatable)
+tscene check --declare water     # a node injected through the runtime registry — passes on name alone (repeatable)
 ```
 
 The autofixer only touches **casing and formatting**. Aggressive fixes such as spelling corrections or
 value conversions are reported but never applied.
 
-Editors talk to the LSP server: `three-scene-lsp --stdio`. It supports:
+Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 
 | Feature | Details |
 | --- | --- |
@@ -109,13 +109,13 @@ workspace check/fix commands).
 
 ```ts
 // from a program
-import { loadSchema, checkSource, fixSource } from "three-scene/tools";
+import { loadSchema, checkSource, fixSource } from "tscene/tools";
 ```
 
 ## Vite
 
 ```ts
-import threeScene from "three-scene/vite";
+import threeScene from "tscene/vite";
 export default defineConfig({ plugins: [threeScene()] });
 ```
 
@@ -128,25 +128,25 @@ Saving fires `onSceneChange` — rebuild the scene and nothing else (passing the
 is fine, the current source is looked up for you):
 
 ```ts
-import { loadScene, disposeScene, onSceneChange } from "three-scene";
+import { loadScene, disposeScene, onSceneChange } from "tscene";
 import sheet from "./main.tscene";
 
 let root = await loadScene(sheet);
 onSceneChange(async () => { disposeScene(root); scene.add(root = await loadScene(sheet)); });
 ```
 
-One line types `import sheet from "./main.tscene"`: `/// <reference types="three-scene/client" />`.
+One line types `import sheet from "./main.tscene"`: `/// <reference types="tscene/client" />`.
 
 ## Why the docs cannot rot
 
-`pnpm --filter three-scene check` verifies three things (`src/docs.check.ts`):
+`pnpm --filter tscene check` verifies three things (`src/docs.check.ts`):
 
 1. Every example in this README and in `docs/language.md` is **compiled by the real parser and checker**.
    A block tagged ` ```css error ` has to fail instead.
 2. Every name in the tables the implementation itself dispatches on (`BUILTINS`, `ALIASES`, `LOADERS`)
    must appear in the language reference — adding a builtin without documenting it fails CI.
 3. `docs/api` must match, byte for byte, what typedoc generates from the current source
-   (`pnpm --filter three-scene docs` refreshes it).
+   (`pnpm --filter tscene docs` refreshes it).
 
 ## Releasing
 
@@ -154,7 +154,7 @@ One line types `import sheet from "./main.tscene"`: `/// <reference types="three
 publishes:
 
 ```sh
-git tag three-scene-v0.1.1 && git push --tags
+git tag tscene-v0.1.1 && git push --tags
 ```
 
 A manual run (workflow_dispatch) only uploads the packed tarball unless `publish=true`. The token comes

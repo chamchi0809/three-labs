@@ -1,5 +1,5 @@
 {
-  "name": "three-scene",
+  "name": "tscene",
   "version": "0.1.0",
   "description": "CSS-like scene description format for three.js, with a type checker driven by the installed three typings",
   "license": "MIT",
@@ -37,8 +37,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "three-scene": "./dist/cli.js",
-    "three-scene-lsp": "./dist/lsp.js"
+    "tscene": "./dist/cli.js",
+    "tscene-lsp": "./dist/lsp.js"
   },
   "files": [
     "dist",

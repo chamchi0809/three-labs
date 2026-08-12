@@ -41,12 +41,12 @@ jobs:
         working-directory: scene/vscode
         run: |
           pnpm run bundle
-          npx --yes @vscode/vsce package --no-dependencies --out "$GITHUB_WORKSPACE/three-scene-vscode.vsix"
+          npx --yes @vscode/vsce package --no-dependencies --out "$GITHUB_WORKSPACE/tscene-vscode.vsix"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: three-scene-vscode
-          path: three-scene-vscode.vsix
+          name: tscene-vscode
+          path: tscene-vscode.vsix
 
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/') || inputs.publish
@@ -55,4 +55,4 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           test -n "$VSCE_PAT" || { echo "VSCE_PAT is not set in the repository secrets"; exit 1; }
-          npx --yes @vscode/vsce publish --no-dependencies --packagePath "$GITHUB_WORKSPACE/three-scene-vscode.vsix"
+          npx --yes @vscode/vsce publish --no-dependencies --packagePath "$GITHUB_WORKSPACE/tscene-vscode.vsix"
