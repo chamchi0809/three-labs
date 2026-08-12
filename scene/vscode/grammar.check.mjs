@@ -108,6 +108,7 @@ has("#head", "entity.other.attribute-name.id", 17); // the alias find() binds
 const manifest = require("./package.json");
 for (const file of [
   manifest.main,
+  manifest.icon, // the marketplace icon has to be a raster, so it is not the same file as the language icon
   ...manifest.contributes.languages.flatMap((l) => [l.configuration, l.icon.light]),
   ...manifest.contributes.grammars.map((g) => g.path),
   ...manifest.contributes.snippets.map((s) => s.path),
