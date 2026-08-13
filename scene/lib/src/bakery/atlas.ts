@@ -28,9 +28,16 @@ export type UnwrapOptions = {
    * which is what you want unless you are baking several scenes to a shared density.
    */
   texelsPerUnit?: number;
-  /** per mesh, 0..1 — how far the unwrap has got. There is no progress inside xatlas' own packing. */
+  /** 0..1 — how far the unwrap has got, straight out of xatlas' own phases */
   onProgress?: (fraction: number) => void;
 };
+
+/**
+ * Where each of xatlas' four phases — add, chart, pack, build — starts and ends in the 0..1 the caller
+ * sees. Sponza splits 17s charting to 38s packing at size 2048, so the two get room to move in;
+ * `addMesh` itself returns immediately, and its share is the join at the front of charting.
+ */
+const PHASE = [0, 0.05, 0.4, 0.98, 1];
 
 export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Promise<Atlas> {
   const size = opts.size ?? 1024;
@@ -48,7 +55,15 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
         meshCountHint: meshes.length,
       });
       if (err !== 0) throw new Error(`tscene/bakery: xatlas rejected "${m.key}": ${xatlas.addMeshErrorString(err)}`);
-      opts.onProgress?.((i + 1) / meshes.length);
+    }
+
+    if (opts.onProgress) {
+      const report = opts.onProgress;
+      atlas.setProgressCallback((category, percent) => {
+        const from = PHASE[category] ?? 0;
+        report(from + ((PHASE[category + 1] ?? 1) - from) * (percent / 100));
+        return true;
+      });
     }
 
     atlas.generate(
@@ -59,9 +74,18 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
         texelsPerUnit: opts.texelsPerUnit ?? 0,
         padding: opts.padding ?? 2,
         bilinear: true,
+        // Brute force tries every offset for every chart, and it is most of the unwrap: 38 of sponza's
+        // 56 seconds at size 2048, against 0.7s for random placement. It stays on anyway, because both
+        // of the ways out are worse. Random placement packs sponza to 77% instead of 94%, and the 21%
+        // larger texture that buys is a cost every viewer pays forever for a saving only the bake sees.
+        // `blockAlign` is as fast and packs *tighter* by xatlas' own metric, but the rasterizer then
+        // covers 0.974M texels where brute force covers 0.855M — it rounds chart footprints up to 4x4
+        // blocks, and the trace pays that 14% back on every sample. At the settings sponza's sheet
+        // actually asks for, the packer is 38s of a 380s bake and the trace is 320s of it.
         bruteForce: true,
       },
     );
+    atlas.setProgressCallback(null);
 
     // xatlas splits into several equally sized sub-atlases when the charts do not fit one. Stacking
     // them into a single tall texture keeps everything downstream — one image, one manifest, one

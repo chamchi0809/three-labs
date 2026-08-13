@@ -40,6 +40,11 @@ export type TraceOptions = {
    * a room-sized default; raise it for a landscape, lower it for a prop.
    */
   aoDistance?: number;
+  /**
+   * a {@link TraceContext} to trace against instead of building one. A bake builds a single context and
+   * hands it to both the atlas trace and the probes; called on their own, each builds and frees its own.
+   */
+  context?: TraceContext;
   onProgress?: (fraction: number) => void;
   /** aborts between dispatches. The GPU work already queued still finishes. */
   signal?: AbortSignal;
@@ -53,23 +58,50 @@ export const SAMPLES = 512;
 
 const WORKGROUP = 64;
 
-/** Irradiance per covered texel: 4 floats each, (E.rgb summed over `samples`, occlusion summed the same). */
-export async function trace(
-  renderer: THREE.WebGPURenderer,
-  scene: BakeScene,
-  texels: Texels,
-  opts: TraceOptions = {},
-): Promise<Float32Array> {
-  const count = texels.index.length;
-  if (count === 0) return new Float32Array(0);
+/**
+ * The Russian roulette policy: the first bounce it may kill a path at, and the smallest survival
+ * probability it will roll. Both exist because the textbook policy — roll from the first bounce at
+ * `q = throughput` — is a bad trade on a real scene, and measurably so. Sponza's interior is lit by
+ * nothing but bounces, and stone at albedo ~0.5 makes that policy a coin flip at every one of them:
+ * against a 4096-sample reference, the darkest three quarters of the atlas came back at 74.8% rms
+ * where killing nothing scored 30.2%. Doubling every surviving path's weight four times over is what
+ * the round blotches in the arcades were. Waiting two bounces and never rolling below a quarter costs
+ * 40% of the roulette's speedup and buys all of that back: 30.8% rms, 13% faster than not rolling at
+ * all, and the best noise-per-second of the nine policies measured (`docs/bakery.md`).
+ */
+const RR = { start: 2, floor: 0.25 };
 
-  const samples = Math.max(1, Math.floor(opts.samples ?? SAMPLES));
-  const bounces = Math.max(0, Math.floor(opts.bounces ?? 4));
-  const batch = Math.min(samples, Math.max(1, Math.floor(opts.batch ?? 32)));
-  const diagonal = scene.bounds.getSize(new THREE.Vector3()).length() || 1;
-  // `||`, not `??`: 0 is what a sheet writes for "pick one for me", and a bias of 0 self-shadows
-  const bias = opts.bias || diagonal * 1e-4;
+/** where each record kind starts in {@link TraceContext.records}, in vec4s */
+export type Bases = { material: number; light: number; emissive: number };
 
+/**
+ * The BVH, the record buffer and the albedo atlas: everything about a scene that neither the atlas
+ * trace nor the probes change. Building one walks every triangle of the scene and uploads it, so a bake
+ * builds a single context and hands it to both stages rather than paying for it twice.
+ */
+export type TraceContext = {
+  bvh: BVHComputeData;
+  /** the proxy meshes the BVH was built from — world space, the bake meshes and then the emitter quads */
+  proxy: THREE.Group;
+  /** materials, then lights, then emissive triangles, in one read-only storage buffer */
+  records: unknown;
+  bases: Bases;
+  /** emissive triangles in `records`. 0 turns next-event estimation off entirely. */
+  emissiveCount: number;
+  /** the atlas a bounce reads the hit texel's own albedo out of, when the bake built one */
+  albedo?: { data: unknown; width: number; height: number };
+  /** frees the BVH and the proxy geometries. Whoever built the context calls it. */
+  dispose(): void;
+};
+
+export type PrepareOptions = Pick<TraceOptions, "lightmapUV" | "albedo"> & {
+  /** the atlas {@link TraceOptions.albedo} is packed in. Required with it, ignored without. */
+  width?: number;
+  height?: number;
+};
+
+/** Builds a {@link TraceContext}. Call `dispose()` on the result when the last stage using it is done. */
+export function prepareTrace(scene: BakeScene, opts: PrepareOptions = {}): TraceContext {
   // the albedo atlas is read with the lightmap uv of the hit point, so the uv has to ride in the BVH
   const perTexelAlbedo = opts.albedo && opts.lightmapUV ? opts.albedo : undefined;
   const proxy = bvhProxy(scene, perTexelAlbedo && opts.lightmapUV);
@@ -80,6 +112,52 @@ export async function trace(
 
   const area = areaLights(scene);
   const { records, bases } = recordBuffer(scene, area);
+  return {
+    bvh,
+    proxy,
+    records: vec4Storage(records),
+    bases,
+    emissiveCount: area.count,
+    ...(perTexelAlbedo
+      ? {
+          albedo: {
+            data: storage(new THREE.StorageBufferAttribute(perTexelAlbedo, 1), "uint", perTexelAlbedo.length).toReadOnly(),
+            width: opts.width ?? 1,
+            height: opts.height ?? 1,
+          },
+        }
+      : {}),
+    dispose() {
+      // the proxy geometries are the bake's biggest allocation and nothing else refers to them; a
+      // watch-mode rebake used to leak a full copy of the scene per bake
+      bvh.dispose();
+      for (const child of proxy.children) (child as THREE.Mesh).geometry.dispose();
+    },
+  };
+}
+
+/** Irradiance per covered texel: 4 floats each, (E.rgb summed over `samples`, occlusion summed the same). */
+export async function trace(
+  renderer: THREE.WebGPURenderer,
+  scene: BakeScene,
+  texels: Texels,
+  opts: TraceOptions = {},
+): Promise<Float32Array> {
+  const count = texels.index.length;
+  if (count === 0) return new Float32Array(0);
+  // the stage has started, and a caller timing it from the first batch instead would miss the setup
+  opts.onProgress?.(0);
+
+  const samples = Math.max(1, Math.floor(opts.samples ?? SAMPLES));
+  const bounces = Math.max(0, Math.floor(opts.bounces ?? 4));
+  const batch = Math.min(samples, Math.max(1, Math.floor(opts.batch ?? 32)));
+  const diagonal = scene.bounds.getSize(new THREE.Vector3()).length() || 1;
+  // `||`, not `??`: 0 is what a sheet writes for "pick one for me", and a bias of 0 self-shadows
+  const bias = opts.bias || diagonal * 1e-4;
+
+  const context =
+    opts.context ??
+    prepareTrace(scene, { lightmapUV: opts.lightmapUV, albedo: opts.albedo, width: texels.width, height: texels.height });
   const padded = Math.ceil(count / WORKGROUP) * WORKGROUP;
 
   // compacted texel inputs, position and normal interleaved; the accumulator is padded so the tail
@@ -93,17 +171,11 @@ export async function trace(
   }
 
   const accumAttribute = new THREE.StorageBufferAttribute(new Float32Array(padded * 4), 4);
-  const albedo = perTexelAlbedo
-    ? storage(new THREE.StorageBufferAttribute(perTexelAlbedo, 1), "uint", perTexelAlbedo.length).toReadOnly()
-    : undefined;
   const accum = storage(accumAttribute, "vec4", padded);
 
   const kernelFn = traceFn({
-    bvh,
+    context,
     surface: vec4Storage(surfaces),
-    records: vec4Storage(records),
-    bases,
-    ...(albedo ? { albedo: { data: albedo, width: texels.width, height: texels.height } } : {}),
     count,
     samples,
     batch,
@@ -112,8 +184,6 @@ export async function trace(
     indirect: Math.max(0, opts.indirect ?? 1),
     aoDistance: opts.aoDistance || diagonal * 0.05,
     lightCount: scene.lights.length,
-    emissiveCount: area.count,
-    totalArea: area.totalArea,
     // a shadow ray only has to walk layers when something is actually see-through
     seeThrough: scene.materials.some((m) => (m.coverage ?? 1) < 1),
     sky: scene.sky,
@@ -136,10 +206,7 @@ export async function trace(
     const raw = new Float32Array(await renderer.getArrayBufferAsync(accumAttribute));
     return raw.subarray(0, count * 4);
   } finally {
-    // the proxy geometries are the bake's biggest allocation and nothing else refers to them; a
-    // watch-mode rebake used to leak a full copy of the scene per bake
-    bvh.dispose();
-    for (const child of proxy.children) (child as THREE.Mesh).geometry.dispose();
+    if (!opts.context) context.dispose();
     (kernel as { dispose?: () => void }).dispose?.();
   }
 }
@@ -160,8 +227,10 @@ export type ProbeImage = {
  * surface it lands on sends back, which is radiance rather than irradiance and includes the emission
  * the lightmap deliberately leaves out.
  *
- * ponytail: its own BVH, built a second time after the atlas' was thrown away — a few seconds against a
- * trace measured in minutes. Thread the BVH through if a bake ever runs probes on their own.
+ * Every probe goes in one dispatch. The origin rides in the surface buffer beside the direction rather
+ * than being interpolated into the shader, so the kernel is compiled once instead of once per probe:
+ * pica's fifteen used to spend three quarters of a minute in the driver before casting a single ray,
+ * and 120k texels in flight saturate a GPU that 8k left mostly idle.
  */
 export async function traceProbes(
   renderer: THREE.WebGPURenderer,
@@ -169,6 +238,7 @@ export async function traceProbes(
   opts: TraceOptions = {},
 ): Promise<ProbeImage[]> {
   if (!scene.probes.length) return [];
+  opts.onProgress?.(0);
 
   const samples = Math.max(1, Math.floor(opts.samples ?? SAMPLES));
   const bounces = Math.max(0, Math.floor(opts.bounces ?? 4));
@@ -176,71 +246,75 @@ export async function traceProbes(
   const diagonal = scene.bounds.getSize(new THREE.Vector3()).length() || 1;
   const bias = opts.bias || diagonal * 1e-4;
 
-  const proxy = bvhProxy(scene);
-  const bvh = new BVHComputeData(proxy, { attributes: { position: "vec4f", normal: "vec4f" } });
-  bvh.update();
-  const area = areaLights(scene);
-  const { records, bases } = recordBuffer(scene, area);
-  const out: ProbeImage[] = [];
+  // where each probe's texels sit in the one buffer the dispatch runs over
+  let total = 0;
+  const layout = scene.probes.map((probe) => {
+    const width = Math.max(4, Math.floor(probe.size));
+    const height = Math.max(2, width >> 1);
+    const at = { key: probe.key, position: probe.position, width, height, offset: total };
+    total += width * height;
+    return at;
+  });
 
-  try {
-    for (const [at, probe] of scene.probes.entries()) {
-      const width = Math.max(4, Math.floor(probe.size));
-      const height = Math.max(2, width >> 1);
-      const count = width * height;
-      const padded = Math.ceil(count / WORKGROUP) * WORKGROUP;
-      const accumAttribute = new THREE.StorageBufferAttribute(new Float32Array(padded * 4), 4);
-      const accum = storage(accumAttribute, "vec4", padded);
-      const kernelFn = probeFn({
-        bvh,
-        // the direction of every texel, computed on the CPU: one mapping, in probe.ts, shared with the
-        // runtime instead of written twice
-        surface: vec4Storage(probeDirections(width, height)),
-        records: vec4Storage(records),
-        bases,
-        origin: probe.position,
-        count,
-        samples,
-        batch,
-        bounces,
-        bias,
-        indirect: Math.max(0, opts.indirect ?? 1),
-        aoDistance: opts.aoDistance || diagonal * 0.05,
-        lightCount: scene.lights.length,
-        emissiveCount: area.count,
-        totalArea: area.totalArea,
-        seeThrough: scene.materials.some((m) => (m.coverage ?? 1) < 1),
-        sky: scene.sky,
-      });
-      const sampleOffset = uniform(0, "uint");
-      const kernel = Fn(() => {
-        accum.element(instanceIndex).addAssign(kernelFn(instanceIndex, sampleOffset));
-      })().computeKernel([WORKGROUP]);
-
-      try {
-        for (let offset = 0; offset < samples; offset += batch) {
-          opts.signal?.throwIfAborted();
-          sampleOffset.value = offset;
-          await renderer.computeAsync(kernel, padded);
-          await drain(renderer);
-          opts.onProgress?.(Math.min(1, (at + (offset + batch) / samples) / scene.probes.length));
-        }
-        const raw = new Float32Array(await renderer.getArrayBufferAsync(accumAttribute));
-        const image = new Float32Array(count * 4);
-        for (let i = 0; i < count; i++) {
-          for (let k = 0; k < 3; k++) image[i * 4 + k] = raw[i * 4 + k]! / samples;
-          image[i * 4 + 3] = 1;
-        }
-        out.push({ key: probe.key, position: probe.position, width, height, image });
-      } finally {
-        (kernel as { dispose?: () => void }).dispose?.();
+  // two vec4 per texel, the same shape the atlas trace uses: (direction.xyz, _) (origin.xyz, _). The
+  // directions come from probe.ts, so there is one mapping shared with the runtime rather than two.
+  const surfaces = new Float32Array(total * 8);
+  for (const probe of layout) {
+    const directions = probeDirections(probe.width, probe.height);
+    for (let i = 0; i < probe.width * probe.height; i++) {
+      const d = (probe.offset + i) * 8;
+      for (let k = 0; k < 3; k++) {
+        surfaces[d + k] = directions[i * 4 + k]!;
+        surfaces[d + 4 + k] = probe.position[k]!;
       }
     }
-  } finally {
-    bvh.dispose();
-    for (const child of proxy.children) (child as THREE.Mesh).geometry.dispose();
   }
-  return out;
+
+  const context = opts.context ?? prepareTrace(scene);
+  const padded = Math.ceil(total / WORKGROUP) * WORKGROUP;
+  const accumAttribute = new THREE.StorageBufferAttribute(new Float32Array(padded * 4), 4);
+  const accum = storage(accumAttribute, "vec4", padded);
+  const kernelFn = probeFn({
+    context,
+    surface: vec4Storage(surfaces),
+    count: total,
+    samples,
+    batch,
+    bounces,
+    bias,
+    indirect: Math.max(0, opts.indirect ?? 1),
+    aoDistance: opts.aoDistance || diagonal * 0.05,
+    lightCount: scene.lights.length,
+    seeThrough: scene.materials.some((m) => (m.coverage ?? 1) < 1),
+    sky: scene.sky,
+  });
+
+  const sampleOffset = uniform(0, "uint");
+  const kernel = Fn(() => {
+    accum.element(instanceIndex).addAssign(kernelFn(instanceIndex, sampleOffset));
+  })().computeKernel([WORKGROUP]);
+
+  try {
+    for (let offset = 0; offset < samples; offset += batch) {
+      opts.signal?.throwIfAborted();
+      sampleOffset.value = offset;
+      await renderer.computeAsync(kernel, padded);
+      await drain(renderer);
+      opts.onProgress?.(Math.min(1, (offset + batch) / samples));
+    }
+    const raw = new Float32Array(await renderer.getArrayBufferAsync(accumAttribute));
+    return layout.map(({ key, position, width, height, offset }) => {
+      const image = new Float32Array(width * height * 4);
+      for (let i = 0; i < width * height; i++) {
+        for (let k = 0; k < 3; k++) image[i * 4 + k] = raw[(offset + i) * 4 + k]! / samples;
+        image[i * 4 + 3] = 1;
+      }
+      return { key, position, width, height, image };
+    });
+  } finally {
+    if (!opts.context) context.dispose();
+    (kernel as { dispose?: () => void }).dispose?.();
+  }
 }
 
 /**
@@ -388,18 +462,11 @@ const coneSample = wgslTagFn/* wgsl */ `
 	}
 `;
 
-/** where each record kind starts in `records`, in vec4s */
-type Bases = { material: number; light: number; emissive: number };
-
 type TraceFnArgs = {
-  bvh: BVHComputeData;
-  /** per texel, two vec4: (position.xyz, _) (normal.xyz, materialId) — one vec4 direction for a probe */
+  /** the scene: BVH, records, albedo atlas — everything neither stage changes */
+  context: TraceContext;
+  /** per texel, two vec4: (position.xyz, _) (normal.xyz, materialId) — (direction.xyz, _) (origin.xyz, _) for a probe */
   surface: unknown;
-  /** materials, then lights, then emissive triangles — see {@link TraceFnArgs.bases} */
-  records: unknown;
-  bases: Bases;
-  /** the atlas a bounce reads the hit texel's own albedo out of. Without it, the material's mean. */
-  albedo?: { data: unknown; width: number; height: number };
   count: number;
   samples: number;
   batch: number;
@@ -408,8 +475,6 @@ type TraceFnArgs = {
   indirect: number;
   aoDistance: number;
   lightCount: number;
-  emissiveCount: number;
-  totalArea: number;
   /** any material with coverage < 1 — without one a shadow ray is a plain opaque test */
   seeThrough: boolean;
   sky: BakeScene["sky"];
@@ -425,7 +490,7 @@ type TraceFnArgs = {
  * shader input that changes between dispatches is the sample offset.
  */
 function estimator(args: TraceFnArgs) {
-  const { bvh, records, bases, albedo } = args;
+  const { bvh, records, bases, albedo } = args.context;
   const raycast = bvh.fns.raycastFirstHit;
   const attributes = bvh.storage.attributes;
   /** `records` index of material `expr`'s first vec4 — (albedo.rgb, coverage) */
@@ -480,6 +545,8 @@ function estimator(args: TraceFnArgs) {
 				var travelled = 0.0;
 				// not \`from\`: WGSL reserves it
 				var at = origin;
+				// 0.1% slack keeps a light's own geometry from shadowing it
+				let reach = dist * 0.999 - ${f(args.bias)};
 
 				for ( var layer = 0u; layer < ${SHADOW_LAYERS}u; layer = layer + 1u ) {
 
@@ -487,16 +554,12 @@ function estimator(args: TraceFnArgs) {
 					ray.origin = at;
 					ray.direction = dir;
 
+					// bounded at what is left of the way to the light, which turns the closest-hit query
+					// into an any-hit test and stops the traversal walking the scene behind the light
 					var hit: ${rayIntersectionResultStruct};
+					hit.didHit = true;
+					hit.dist = reach - travelled;
 					if ( ! ${raycast}( ray, &hit ) ) {
-
-						return transmittance;
-
-					}
-
-					travelled += hit.dist;
-					// 0.1% slack keeps a light's own geometry from shadowing it
-					if ( travelled >= dist * 0.999 - ${f(args.bias)} ) {
 
 						return transmittance;
 
@@ -513,6 +576,7 @@ function estimator(args: TraceFnArgs) {
 					}
 
 					// step past the surface just hit, or the next traversal finds it again
+					travelled += hit.dist + ${f(args.bias)};
 					at = ray.origin + dir * ( hit.dist + ${f(args.bias)} );
 
 				}
@@ -528,21 +592,22 @@ function estimator(args: TraceFnArgs) {
 				ray.origin = origin;
 				ray.direction = dir;
 
-				// ponytail: a closest-hit query stands in for an any-hit test, so a shadow ray costs a full
-				// traversal instead of stopping at the first blocker. Swap in an any-hit shapecast when
-				// three-mesh-bvh grows one.
+				// A closest-hit query bounded at the light is an any-hit test: the traversal culls every
+				// node and triangle at or past \`hit.dist\`, and only ever writes a hit that beats it, so
+				// what it returns is exactly "something blocks before the light". Seeding it costs two
+				// stores and saves walking the whole scene behind the blocker.
+				// 0.1% slack keeps a light's own geometry from shadowing it; a directional light passes
+				// 1e30 and gets the unbounded traversal it always had.
 				var hit: ${rayIntersectionResultStruct};
-				if ( ! ${raycast}( ray, &hit ) ) {
-
-					return 1.0;
-
-				}
-
-				// 0.1% slack keeps a light's own geometry from shadowing it
-				return select( 1.0, 0.0, hit.dist < dist * 0.999 - ${f(args.bias)} );
+				hit.didHit = true;
+				hit.dist = dist * 0.999 - ${f(args.bias)};
+				return select( 1.0, 0.0, ${raycast}( ray, &hit ) );
 
 			}
 		`;
+
+  /** true when {@link lm_sky} is black in every direction, so an escaping ray brings nothing back */
+  const darkSky = ([...args.sky.up, ...args.sky.down] as number[]).every((v) => v <= 0);
 
   const sky = wgslTagFn/* wgsl */ `
 		fn lm_sky( dir: vec3f ) -> vec3f {
@@ -639,7 +704,7 @@ function estimator(args: TraceFnArgs) {
 
 			}
 
-			if ( ${args.emissiveCount}u > 0u ) {
+			if ( ${args.context.emissiveCount}u > 0u ) {
 
 				irradiance += ${area}( origin, nrm, state );
 
@@ -654,19 +719,46 @@ function estimator(args: TraceFnArgs) {
   // the sum as irradiance for the atlas, `albedo/PI` makes it the radiance leaving the surface a probe
   // ray landed on. Bounces are cosine-sampled, so the PI from the estimator cancels the Lambert 1/PI.
   const gather = wgslTagFn/* wgsl */ `
-		fn lm_gather( start: vec3f, startNormal: vec3f, startThroughput: vec3f, startU: vec2f, state: ptr<function, u32> ) -> vec4f {
+		fn lm_gather( start: vec3f, startNormal: vec3f, startThroughput: vec3f, seed: u32, si: u32, state: ptr<function, u32> ) -> vec4f {
 
 			var pos = start;
 			var nrm = startNormal;
 			var throughput = startThroughput;
-			var u = startU;
 			var sum = vec3f( 0.0 );
 			var open = 0.0;
+			// Padded replication: every bounce walks the same stratified Hammersley set, each from its own
+			// Cranley-Patterson offset. \`seed\` is the texel and nothing else, so the offsets come out the
+			// same for every sample of it and the set stays stratified across the whole bake; independent
+			// offsets per bounce are what keeps one bounce's directions from tracking another's.
+			//
+			// Only bounce 0 used to be stratified and the rest drew plain uniforms, which is backwards for
+			// a scene lit by bounces: sponza's interior sees no sun at all, so every photon it gets came
+			// through two or more of the unstratified ones.
+			var offsets = ${hash}( seed );
+			// the roulette below asks how far this path has dimmed, not how bright the product being
+			// estimated is — without this a probe's albedo/PI start would kill nearly every path at once
+			let rrScale = 1.0 / max( 1e-6, max( startThroughput.x, max( startThroughput.y, startThroughput.z ) ) );
 
 			for ( var b = 0u; b <= ${args.bounces}u; b = b + 1u ) {
 
 				sum += throughput * ${direct}( pos, nrm, state );
+${darkSky ? `
+				// The ray leaving the last shading point has exactly two jobs: carry the occlusion test on
+				// the first bounce, and collect the sky when it escapes. A scene with no ambient, no
+				// hemisphere and no sky gradient owes it neither, and what it hits is never read — the
+				// throughput past this point goes nowhere. Sponza's four bounces cast five gather rays for
+				// four bounces' worth of light; this is the fifth.
+				if ( b == ${args.bounces}u && b > 0u ) {
 
+					break;
+
+				}
+` : ""}
+				let rotation = vec2f( ${rand}( &offsets ), ${rand}( &offsets ) );
+				let u = vec2f(
+					fract( ( f32( si ) + 0.5 ) / ${f(args.samples)} + rotation.x ),
+					fract( ${radical}( si ) + rotation.y )
+				);
 				let dir = ${cosineSample}( nrm, u );
 				var ray: ${rayStruct};
 				ray.origin = pos + nrm * ${f(args.bias)};
@@ -697,15 +789,32 @@ function estimator(args: TraceFnArgs) {
 				// past this point and nothing before it.
 				let material = u32( ${attributes}[ hit.indices.x ].normal.w + 0.5 );
 				throughput *= ${reflectance}( hit.indices, hit.barycoord, material ) * select( 1.0, ${f(args.indirect)}, b == 0u );
-				if ( max( throughput.x, max( throughput.y, throughput.z ) ) < 1e-3 ) {
+				let survival = max( throughput.x, max( throughput.y, throughput.z ) ) * rrScale;
+				if ( survival < 1e-3 ) {
 
 					break;
 
 				}
 
+				// Russian roulette: end the path with probability 1 - q and scale the survivors by 1/q,
+				// which leaves the estimate unchanged in expectation. A dark room used to pay for every
+				// one of its bounces to add a percent; now it stops early and the budget goes to the
+				// paths that still carry something. See {@link RR} for why it waits, and for the floor.
+				if ( b >= ${RR.start}u && b < ${args.bounces}u ) {
+
+					let q = min( 1.0, max( ${f(RR.floor)}, survival ) );
+					if ( ${rand}( state ) >= q ) {
+
+						break;
+
+					}
+
+					throughput /= q;
+
+				}
+
 				pos = ray.origin + dir * hit.dist;
 				nrm = normalize( hit.normal );
-				u = vec2f( ${rand}( state ), ${rand}( state ) );
 
 			}
 
@@ -737,26 +846,17 @@ function traceFn(args: TraceFnArgs) {
 			let origin = ${surface}[ index * 2u ].xyz;
 			let surfaceNormal = ${surface}[ index * 2u + 1u ].xyz;
 
-			// Cranley-Patterson rotation: each texel walks the same stratified set from its own offset.
-			// Seeded from the texel alone, so every dispatch of the same texel continues one sequence.
-			var fixedState = ${hash}( index * 9781u + 1u );
-			let rotation = vec2f( ${rand}( &fixedState ), ${rand}( &fixedState ) );
-
-			// everything else — soft shadows, which emitter gets picked, the bounce directions — must
-			// differ per dispatch, or every batch repeats the same batch-many samples
+			// the stratified directions are seeded from the texel alone, so every dispatch of the same
+			// texel continues one sequence — see the rotations in lm_gather. Everything else, soft
+			// shadows and which emitter gets picked, must differ per dispatch or every batch repeats
+			// the same batch-many samples.
 			var state = ${hash}( index * 9781u + sampleOffset * 6151u + 1u );
 
 			var sum = vec3f( 0.0 );
 			var open = 0.0;
 			for ( var s = 0u; s < ${args.batch}u; s = s + 1u ) {
 
-				let si = sampleOffset + s;
-				let u = vec2f(
-					fract( ( f32( si ) + 0.5 ) / ${f(args.samples)} + rotation.x ),
-					fract( ${radical}( si ) + rotation.y )
-				);
-
-				let path = ${gather}( origin, surfaceNormal, vec3f( 1.0 ), u, &state );
+				let path = ${gather}( origin, surfaceNormal, vec3f( 1.0 ), index * 9781u + 1u, sampleOffset + s, &state );
 				sum += path.xyz;
 				open += path.w;
 
@@ -777,8 +877,9 @@ function traceFn(args: TraceFnArgs) {
  * a silhouette crosses a texel. Everything a probe is read through (PMREM, then a roughness lobe) blurs
  * far wider than one texel; jitter the direction here if a mirror-flat metal ever shows the stair steps.
  */
-function probeFn(args: TraceFnArgs & { origin: [number, number, number] }) {
-  const { surface, records } = args;
+function probeFn(args: TraceFnArgs) {
+  const { surface } = args;
+  const { records } = args.context;
   const { attributes, raycast, sky, gather, material, emission } = estimator(args);
 
   return wgslTagFn/* wgsl */ `
@@ -790,14 +891,17 @@ function probeFn(args: TraceFnArgs & { origin: [number, number, number] }) {
 
 			}
 
-			let dir = normalize( ${surface}[ index ].xyz );
+			let dir = normalize( ${surface}[ index * 2u ].xyz );
+			// the probe this texel belongs to rides beside the direction, so every probe of the scene
+			// runs in one dispatch of one compiled kernel. Not \`from\`: WGSL reserves it.
+			let eye = ${surface}[ index * 2u + 1u ].xyz;
 			var state = ${hash}( index * 9781u + sampleOffset * 6151u + 1u );
 
 			var sum = vec3f( 0.0 );
 			for ( var s = 0u; s < ${args.batch}u; s = s + 1u ) {
 
 				var ray: ${rayStruct};
-				ray.origin = ${v3(args.origin)};
+				ray.origin = eye;
 				ray.direction = dir;
 
 				var hit: ${rayIntersectionResultStruct};
@@ -819,9 +923,8 @@ function probeFn(args: TraceFnArgs & { origin: [number, number, number] }) {
 
 				}
 
-				let u = vec2f( ${rand}( &state ), ${rand}( &state ) );
 				sum += ${records}[ ${emission("id")} ].xyz +
-					${gather}( pos, nrm, ${records}[ ${material("id")} ].xyz * ${f(1 / Math.PI)}, u, &state ).xyz;
+					${gather}( pos, nrm, ${records}[ ${material("id")} ].xyz * ${f(1 / Math.PI)}, index * 9781u + 1u, sampleOffset + s, &state ).xyz;
 
 			}
 
@@ -831,27 +934,26 @@ function probeFn(args: TraceFnArgs & { origin: [number, number, number] }) {
 	`;
 }
 
-/** One emissive-triangle sample per shading point, picked with probability proportional to area. */
+/**
+ * One emissive-triangle sample per shading point, picked in constant time with probability proportional
+ * to area * luminance — a dim square metre and a bright one no longer get the same share of the samples.
+ */
 function emissiveNEE(args: TraceFnArgs, visibility: unknown) {
-  const { records, bases } = args;
+  const { records, bases, emissiveCount } = args.context;
+  // lm_area is compiled even for a scene with no emitters, where its `if` is simply never taken
+  const count = Math.max(1, emissiveCount);
   const emitter = (slot: number) => `${bases.emissive}u + pick * 4u + ${slot}u`;
   return wgslTagFn/* wgsl */ `
 		fn lm_area( origin: vec3f, nrm: vec3f, state: ptr<function, u32> ) -> vec3f {
 
-			// ponytail: linear scan of the area CDF. Fine to a few hundred emissive triangles; make it a
-			// binary search (or an alias table) past that.
-			let pickTarget = ${rand}( state ) * ${f(args.totalArea)};
-			var pick = max( ${args.emissiveCount}u, 1u ) - 1u;
-			for ( var i = 0u; i < ${args.emissiveCount}u; i = i + 1u ) {
-
-				if ( ${records}[ ${bases.emissive}u + i * 4u ].w >= pickTarget ) {
-
-					pick = i;
-					break;
-
-				}
-
-			}
+			// Vose's alias table, built on the CPU: pick a bin uniformly, then toss one coin between that
+			// bin and its alias. Two loads whatever the emitter count, where the cumulative-area scan it
+			// replaced averaged half of them — pica's 3,864 emissive triangles were most of its trace.
+			let bin = min( u32( ${rand}( state ) * ${f(count)} ), ${count - 1}u );
+			let entry = ${records}[ ${bases.emissive}u + bin * 4u ];
+			// not \`alias\`: WGSL reserves it
+			let other = ${records}[ ${bases.emissive}u + bin * 4u + 1u ];
+			let pick = select( u32( other.w + 0.5 ), bin, ${rand}( state ) < entry.w );
 
 			let e0 = ${records}[ ${emitter(0)} ];
 			let e1 = ${records}[ ${emitter(1)} ];
@@ -898,13 +1000,19 @@ function emissiveNEE(args: TraceFnArgs, visibility: unknown) {
 
 			}
 
-			// pdf is 1/totalArea in area measure, so the estimator carries totalArea. The product is an
-			// estimate of the emitter's solid angle, which cannot exceed a sphere: without that bound a
-			// shading point a millimetre from a panel returns millions and one path poisons the texel —
-			// and every bounce that lands there sprays fireflies across the rest of the atlas.
-			// ponytail: clamping darkens the first centimetre around an emitter. Sampling the triangle by
-			// solid angle instead (Arvo) removes the singularity outright; do that if it ever shows.
-			let solidAngle = min( cosLight / distSq * ${f(args.totalArea)}, 2.0 * ${TAU} );
+			// e3.w is 1/pdf in area measure — totalWeight/luminance for the triangle that was picked,
+			// which with one radiance across the set is exactly the total area the old area-proportional
+			// pick divided by. The product estimates the emitter set's solid angle, which cannot exceed a
+			// sphere: without that bound a shading point a millimetre from a panel returns millions, one
+			// path poisons the texel, and every bounce that lands there sprays fireflies across the atlas.
+			// ponytail: two things ride on this clamp. It darkens the first centimetre around an emitter,
+			// and "the set's solid angle" is only what the product is when the pick is area-proportional —
+			// weighted by power, a dim emitter carries a larger 1/pdf and so meets the ceiling sooner and
+			// bakes darker for it. Both go away together if the triangle is sampled by solid angle instead
+			// (Arvo): no singularity, so no clamp, so nothing left for the weights to interact with.
+			// Clamping the triangle's own solid angle rather than the set's is not the fix — it is the
+			// right quantity but far too loose a bound, and pica comes back with fireflies at 300x.
+			let solidAngle = min( cosLight / distSq * e3.w, 2.0 * ${TAU} );
 			// the picked triangle's own radiance — a textured emissive panel is a different light per
 			// triangle, and the record carries the texel it was sampled at
 			return e3.xyz * ( cosSurface * solidAngle * shadow );

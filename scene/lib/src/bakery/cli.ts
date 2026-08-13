@@ -89,8 +89,6 @@ const started = Date.now();
 let stage = "";
 let stageStart = started;
 let fraction = 0;
-// a stage reports 1 twice: once when its last item is done, once when the stage itself returns
-let finished = "";
 
 /** `trace  42% · 1m03s · 1m24s left`. Only trace reports a fraction; the rest just show elapsed. */
 const render = () => {
@@ -100,6 +98,16 @@ const render = () => {
   return `${stage} ${percent} · ${clock(elapsed)}${eta}`;
 };
 const paint = () => process.stderr.write(`\r${render().padEnd(48)}`);
+/**
+ * A stage is timed from its own first report to the *next* stage's, and printed then — never when it
+ * reports 1. A stage that reports nothing but its finish would otherwise time itself from that finish
+ * and claim 0s, and anything a stage does after its last item — indexing the raster, sorting for the
+ * exposure — would land in nobody's total. Bake time is the sum of these lines, and has to stay that.
+ */
+const flush = () => {
+  if (!stage) return;
+  process.stderr.write(`${tty ? "\r" : ""}${`${stage} done in ${clock(Date.now() - stageStart)}`.padEnd(48)}\n`);
+};
 // xatlas can sit in one unwrap for a minute, so the clock has to move on its own, not on progress
 const ticker = tty ? setInterval(paint, 1000) : undefined;
 ticker?.unref();
@@ -129,21 +137,17 @@ const result = await bakeSceneFile(positionals[0]!, {
   onWarn: (message) => process.stderr.write(`${tty ? "\r" : ""}${`tscene-bake: ${message}`.padEnd(48)}\n`),
   onProgress: (next, done) => {
     if (next !== stage) {
+      flush();
       stage = next;
       stageStart = Date.now();
     }
     fraction = done;
-    if (done >= 1) {
-      if (finished === next) return;
-      finished = next;
-      process.stderr.write(`${tty ? "\r" : ""}${`${next} done in ${clock(Date.now() - stageStart)}`.padEnd(48)}\n`);
-    } else if (tty) {
-      paint();
-    }
+    if (tty) paint();
   },
 });
 
 clearInterval(ticker);
+flush();
 
 process.stderr.write(
   `${result.width}x${result.height}, ${(result.utilization * 100).toFixed(0)}% packed, ` +

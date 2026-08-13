@@ -25,8 +25,8 @@ Emissive triangles, flattened into an area-light list the tracer can importance-
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="count"></a> `count` | `number` | - |
-| <a id="data"></a> `data` | `Float32Array` | 4 vec4 per triangle: (a.xyz, cumulativeArea) (b.xyz, area) (c.xyz, oneSided) (radiance.xyz, 0) |
-| <a id="totalarea"></a> `totalArea` | `number` | - |
+| <a id="data"></a> `data` | `Float32Array` | 4 vec4 per triangle: (a.xyz, aliasProbability) (b.xyz, aliasIndex) (c.xyz, oneSided) (radiance.xyz, 1/pdf). The first two slots are Vose's alias table, so the shader picks an emitter in two reads; the last is what the estimator divides that pick's probability out by. |
+| <a id="totalarea"></a> `totalArea` | `number` | the emitters' total surface area. Nothing on the GPU reads it — it is the set's size in one number. |
 
 ***
 
@@ -346,10 +346,43 @@ Ambient + hemisphere lights collapse into a two-colour gradient that rays see wh
 ### BakeStage
 
 ```ts
-type BakeStage = "unwrap" | "rasterize" | "trace" | "filter" | "probe";
+type BakeStage = 
+  | "load"
+  | "collect"
+  | "unwrap"
+  | "rasterize"
+  | "prepare"
+  | "trace"
+  | "probe"
+  | "filter"
+  | "write";
 ```
 
-The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` for the runtime half.
+Every stage announces itself when it starts, and the one after it is what marks it finished — so the
+list covers the whole bake with no gaps. `load` and `write` belong to [bakeSceneFile](#bakescenefile); a caller
+that hands `bake()` a scene it already has never sees them.
+
+***
+
+### Bases
+
+```ts
+type Bases = {
+  emissive: number;
+  light: number;
+  material: number;
+};
+```
+
+where each record kind starts in [TraceContext.records](#records), in vec4s
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="emissive-1"></a> `emissive` | `number` |
+| <a id="light"></a> `light` | `number` |
+| <a id="material"></a> `material` | `number` |
 
 ***
 
@@ -370,6 +403,24 @@ type CollectOptions = {
 | <a id="defaultalbedo"></a> `defaultAlbedo?` | `number` | default albedo for materials without a `color` (linear grey) |
 | <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` (the default) bakes every visible mesh except the ones that turn themselves off; `none` bakes only the ones that opt in. Defaults to the root's own `@bakery { include }`. |
 | <a id="onwarn"></a> `onWarn?` | (`message`) => `void` | where "this mesh cannot be baked" goes. Defaults to `console.warn`. |
+
+***
+
+### PrepareOptions
+
+```ts
+type PrepareOptions = Pick<TraceOptions, "lightmapUV" | "albedo"> & {
+  height?: number;
+  width?: number;
+};
+```
+
+#### Type Declaration
+
+| Name | Type | Description |
+| ------ | ------ | ------ |
+| `height?` | `number` | - |
+| `width?` | `number` | the atlas [TraceOptions.albedo](#albedo-2) is packed in. Required with it, ignored without. |
 
 ***
 
@@ -429,6 +480,58 @@ type Texels = {
 
 ***
 
+### TraceContext
+
+```ts
+type TraceContext = {
+  albedo?: {
+     data: unknown;
+     height: number;
+     width: number;
+  };
+  bases: Bases;
+  bvh: BVHComputeData;
+  emissiveCount: number;
+  proxy: THREE.Group;
+  records: unknown;
+  dispose: void;
+};
+```
+
+The BVH, the record buffer and the albedo atlas: everything about a scene that neither the atlas
+trace nor the probes change. Building one walks every triangle of the scene and uploads it, so a bake
+builds a single context and hands it to both stages rather than paying for it twice.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="albedo-1"></a> `albedo?` | \{ `data`: `unknown`; `height`: `number`; `width`: `number`; \} | the atlas a bounce reads the hit texel's own albedo out of, when the bake built one |
+| `albedo.data` | `unknown` | - |
+| `albedo.height` | `number` | - |
+| `albedo.width` | `number` | - |
+| <a id="bases-1"></a> `bases` | [`Bases`](#bases) | - |
+| <a id="bvh"></a> `bvh` | `BVHComputeData` | - |
+| <a id="emissivecount"></a> `emissiveCount` | `number` | emissive triangles in `records`. 0 turns next-event estimation off entirely. |
+| <a id="proxy"></a> `proxy` | `THREE.Group` | the proxy meshes the BVH was built from — world space, the bake meshes and then the emitter quads |
+| <a id="records"></a> `records` | `unknown` | materials, then lights, then emissive triangles, in one read-only storage buffer |
+
+#### Methods
+
+##### dispose()
+
+```ts
+dispose(): void;
+```
+
+frees the BVH and the proxy geometries. Whoever built the context calls it.
+
+###### Returns
+
+`void`
+
+***
+
 ### TraceOptions
 
 ```ts
@@ -438,6 +541,7 @@ type TraceOptions = {
   batch?: number;
   bias?: number;
   bounces?: number;
+  context?: TraceContext;
   indirect?: number;
   lightmapUV?: Float32Array[];
   onProgress?: (fraction) => void;
@@ -450,11 +554,12 @@ type TraceOptions = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="albedo-1"></a> `albedo?` | `Uint32Array` | albedo per atlas texel, packed RGBA8, alpha = covered. Without it every bounce uses the material's mean. |
+| <a id="albedo-2"></a> `albedo?` | `Uint32Array` | albedo per atlas texel, packed RGBA8, alpha = covered. Without it every bounce uses the material's mean. |
 | <a id="aodistance"></a> `aoDistance?` | `number` | how far an ambient-occlusion ray looks for a blocker. Defaults to 5% of the scene diagonal — a room-sized default; raise it for a landscape, lower it for a prop. |
 | <a id="batch"></a> `batch?` | `number` | paths per dispatch. Lower it if the driver kills long compute passes. |
 | <a id="bias"></a> `bias?` | `number` | ray origin offset along the normal. Defaults to 1e-4 of the scene diagonal. |
 | <a id="bounces"></a> `bounces?` | `number` | diffuse bounces after the first hit — 4 is plenty indoors, 2 outdoors |
+| <a id="context"></a> `context?` | [`TraceContext`](#tracecontext) | a [TraceContext](#tracecontext) to trace against instead of building one. A bake builds a single context and hands it to both the atlas trace and the probes; called on their own, each builds and frees its own. |
 | <a id="indirect"></a> `indirect?` | `number` | gain on everything past the first bounce — 1 is physical, >1 the usual cheat for a flat-looking interior. Direct light and the sky seen straight from a texel are untouched. |
 | <a id="lightmapuv"></a> `lightmapUV?` | `Float32Array`[] | per bake mesh, the atlas uv the unwrap produced — what a bounce is looked up in `albedo` with |
 | <a id="onprogress"></a> `onProgress?` | (`fraction`) => `void` | - |
@@ -478,7 +583,7 @@ type UnwrapOptions = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="onprogress-1"></a> `onProgress?` | (`fraction`) => `void` | per mesh, 0..1 — how far the unwrap has got. There is no progress inside xatlas' own packing. |
+| <a id="onprogress-1"></a> `onProgress?` | (`fraction`) => `void` | 0..1 — how far the unwrap has got, straight out of xatlas' own phases |
 | <a id="padding"></a> `padding?` | `number` | texels of empty space around every chart. Keep it at or above the bake's `dilateRadius`: dilation grows the lit region outwards, and anything it grows past the padding bleeds into the next chart. |
 | <a id="size-1"></a> `size?` | `number` | target atlas edge length in texels. xatlas picks the chart scale from this and then packs, so the atlas it returns is around this size rather than exactly it — read `Atlas.width` for the truth. |
 | <a id="texelsperunit"></a> `texelsPerUnit?` | `number` | texels per world unit. 0 (the default) lets xatlas pick the scale that fills `size`, which is what you want unless you are baking several scenes to a shared density. |
@@ -506,6 +611,11 @@ type WriteOptions = {
 ```ts
 function areaLights(scene): AreaLights;
 ```
+
+Emissive triangles, ready to importance-sample: the geometry, the radiance, and an alias table over
+the set weighted by **power** — area times luminance, not area alone. A dim emitter the same size as
+a bright one used to be picked as often and contribute a fraction as much, which is variance the
+bake paid for in samples.
 
 #### Parameters
 
@@ -738,6 +848,27 @@ Reads a `.tscene` file from disk, `@import`s and all, and returns the built scen
 
 ***
 
+### prepareTrace()
+
+```ts
+function prepareTrace(scene, opts?): TraceContext;
+```
+
+Builds a [TraceContext](#tracecontext). Call `dispose()` on the result when the last stage using it is done.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `scene` | [`BakeScene`](#bakescene) |
+| `opts` | [`PrepareOptions`](#prepareoptions) |
+
+#### Returns
+
+[`TraceContext`](#tracecontext)
+
+***
+
 ### rasterize()
 
 ```ts
@@ -805,8 +936,10 @@ the difference is only where a path starts: a probe shoots one ray per texel and
 surface it lands on sends back, which is radiance rather than irradiance and includes the emission
 the lightmap deliberately leaves out.
 
-ponytail: its own BVH, built a second time after the atlas' was thrown away — a few seconds against a
-trace measured in minutes. Thread the BVH through if a bake ever runs probes on their own.
+Every probe goes in one dispatch. The origin rides in the surface buffer beside the direction rather
+than being interpolated into the shader, so the kernel is compiled once instead of once per probe:
+pica's fifteen used to spend three quarters of a minute in the driver before casting a single ray,
+and 120k texels in flight saturate a GPU that 8k left mostly idle.
 
 #### Parameters
 

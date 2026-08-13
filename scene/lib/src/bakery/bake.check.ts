@@ -244,6 +244,41 @@ const close = (got: number, want: number, tol: number, what: string) =>
   close(away[0], 0, 1e-6, "back-facing probe");
 }
 
+// --- 5: two emitters, four fifths of the picks going to one of them -------------------------------
+// One emitter is its own control: with a single light in the scene every weighting agrees, and an
+// area-proportional pick, a power-proportional one and a plain 1/n all bake the same picture. Put a
+// small bright square under the probe and a large dim one well above it and they stop agreeing — the
+// bright one takes 80% of the picks and the dim one has to be worth five times as much when it is
+// finally drawn. Each probe sees exactly one of the two, so both closed forms are the single-emitter
+// one, unchanged. The heights are chosen so that cosLight/distSq * (1/pdf) stays under the estimator's
+// solid-angle ceiling everywhere on both squares — 80/3^2 and 1.25/1^2 against 4PI — because that
+// clamp is a known bias and this check is about the pick, not about it.
+{
+  const root = new THREE.Group();
+  const white = (intensity: number) =>
+    new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffffff, emissiveIntensity: intensity });
+  // 16 m^2 at radiance 1 above, 1 m^2 at radiance 64 below: 16 of the light against 64, a fifth of it
+  root.add(plane(3, 4, false, white(1)));
+  root.add(plane(-1, 1, true, white(64)));
+
+  const samples = 1 << 16;
+  const up = Math.PI * squareViewFactor(2, 3);
+  const down = Math.PI * 64 * squareViewFactor(0.5, 1);
+  const [over, under] = await measure(
+    root,
+    [
+      { p: [0, 0, 0], n: [0, 1, 0] },
+      { p: [0, 0, 0], n: [0, -1, 0] },
+    ],
+    samples,
+    0,
+  );
+  // the rarely picked one: 1/pdf has to carry the five times back, or the dim half of a scene bakes dark
+  close(over[0], up, up * 0.04, "the dim emitter survives being picked a fifth as often");
+  // and the one taking the picks must not be paid the whole set's area for them
+  close(under[0], down, down * 0.04, "the bright emitter is not overcounted for taking most of them");
+}
+
 // --- the whole pipeline, once, on a scene with an actual unwrap -----------------------------------
 {
   const root = new THREE.Group();
@@ -271,7 +306,9 @@ const close = (got: number, want: number, tol: number, what: string) =>
   };
   const result = await bake(root, settings);
 
-  assert.deepEqual(stages, ["unwrap", "rasterize", "trace", "filter"]);
+  // every stage announces itself when it starts, and the next one is what marks it finished — a
+  // stage missing from here is a stage whose seconds land in its neighbour's total
+  assert.deepEqual(stages, ["collect", "unwrap", "rasterize", "prepare", "trace", "filter"]);
   // xatlas scales the charts from `size` and then packs, so the atlas lands near it, not on it
   assert.ok(result.width >= 32 && result.width < 256, `atlas ${result.width}x${result.height}`);
   assert.equal(result.image.length, result.width * result.height * 4);

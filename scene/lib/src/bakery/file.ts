@@ -41,6 +41,9 @@ export type BakeFileResult = BakeResult & {
  * themselves when the scene is not a sheet on disk, or when one renderer bakes several scenes.
  */
 export async function bakeSceneFile(file: string, opts: BakeFileOptions = {}): Promise<BakeFileResult> {
+  // the sheet's `@import`s are downloaded and parsed here, which for a scene the size of sponza is not
+  // a rounding error next to the trace — so it is a stage of the bake like any other
+  opts.onProgress?.("load", 0);
   const root = await loadSceneFile(file);
   validateBakery(root, file);
   const sheet = bakerySettings<SceneBakery>(root) ?? {};
@@ -57,6 +60,7 @@ export async function bakeSceneFile(file: string, opts: BakeFileOptions = {}): P
   const gpu = renderer ?? (await createHeadlessRenderer());
   try {
     const result = await bake(root, { ...rest, previous, renderer: gpu });
+    rest.onProgress?.("write", 0);
     // the EXR is the only lossless copy, and the next `--only` run needs it
     const files = await writeBake(result, dir, base, { ...rest, exr: rest.exr || !!previous });
     return { ...result, files };

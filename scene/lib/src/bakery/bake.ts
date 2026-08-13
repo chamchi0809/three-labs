@@ -6,10 +6,24 @@ import { denoise, dilate } from "./filter.ts";
 import type { Texels } from "./raster.ts";
 import { rasterizeParallel } from "./raster.ts";
 import { collectScene, sampleTexture, type BakeScene, type CollectOptions } from "./scene.ts";
-import { SAMPLES, trace, traceProbes, type ProbeImage, type TraceOptions } from "./tracer.ts";
+import { prepareTrace, SAMPLES, trace, traceProbes, type ProbeImage, type TraceOptions } from "./tracer.ts";
 import { decodeFloats, encodeFloats, MANIFEST_VERSION, type LightmapManifest } from "./apply.ts";
 
-export type BakeStage = "unwrap" | "rasterize" | "trace" | "filter" | "probe";
+/**
+ * Every stage announces itself when it starts, and the one after it is what marks it finished — so the
+ * list covers the whole bake with no gaps. `load` and `write` belong to {@link bakeSceneFile}; a caller
+ * that hands `bake()` a scene it already has never sees them.
+ */
+export type BakeStage =
+  | "load"
+  | "collect"
+  | "unwrap"
+  | "rasterize"
+  | "prepare"
+  | "trace"
+  | "probe"
+  | "filter"
+  | "write";
 
 export type BakeOptions = Omit<UnwrapOptions, "onProgress"> &
   Omit<TraceOptions, "onProgress"> &
@@ -60,6 +74,7 @@ export type BakeResult = {
 };
 
 export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<BakeResult> {
+  opts.onProgress?.("collect", 0);
   const scene = collectScene(root, opts);
   if (!scene.meshes.length) throw new Error("tscene/bakery: nothing to bake — no visible meshes under the root");
   const warn = opts.onWarn ?? ((message: string) => console.warn(`tscene/bakery: ${message}`));
@@ -75,7 +90,6 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
         padding: opts.padding ?? dilateRadius,
         onProgress: (fraction) => opts.onProgress?.("unwrap", fraction),
       });
-  opts.onProgress?.("unwrap", 1);
 
   opts.onProgress?.("rasterize", 0);
   const texels = await rasterizeParallel(scene.meshes, atlas, {
@@ -83,20 +97,35 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     onProgress: (fraction) => opts.onProgress?.("rasterize", fraction),
   });
   if (!texels.index.length) throw new Error("tscene/bakery: the unwrap produced no usable texels");
-  const index = opts.only?.length ? subset(texels, scene, opts.only) : texels.index;
-  opts.onProgress?.("rasterize", 1);
 
-  const traced = await trace(
-    opts.renderer,
-    scene,
-    { ...texels, index },
-    {
+  opts.onProgress?.("prepare", 0);
+  const index = opts.only?.length ? subset(texels, scene, opts.only) : texels.index;
+  // both GPU stages run off one context. Building it walks and uploads every triangle in the scene, and
+  // the probes used to build a second one after the atlas trace had already thrown the first away.
+  const context = prepareTrace(scene, {
+    lightmapUV: atlas.uv,
+    albedo: albedoAtlas(scene, texels),
+    width: texels.width,
+    height: texels.height,
+  });
+  let traced: Float32Array;
+  let probes: ProbeImage[];
+  try {
+    traced = await trace(opts.renderer, scene, { ...texels, index }, {
       ...opts,
-      lightmapUV: atlas.uv,
-      albedo: albedoAtlas(scene, texels),
+      context,
       onProgress: (fraction) => opts.onProgress?.("trace", fraction),
-    },
-  );
+    });
+    // the probes see nothing the atlas didn't: same lights, same emitters, same geometry, same context.
+    // They are independent of it otherwise — no unwrap, no filters, one equirect each.
+    probes = await traceProbes(opts.renderer, scene, {
+      ...opts,
+      context,
+      onProgress: (fraction) => opts.onProgress?.("probe", fraction),
+    });
+  } finally {
+    context.dispose();
+  }
 
   opts.onProgress?.("filter", 0);
   // a partial rebake starts from the atlas it is patching, so untouched charts keep their light
@@ -135,15 +164,8 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     if ((opts.denoiseRadius ?? 1) > 0) denoise(ao, texels, opts.denoiseRadius ?? 1);
     dilate(ao, texels.mask, atlas.width, atlas.height, dilateRadius);
   }
-  opts.onProgress?.("filter", 1);
 
-  // last, so the probes see nothing the atlas didn't: same lights, same emitters, same geometry. They
-  // are independent of the atlas otherwise — no unwrap, no filters, one equirect each.
-  const probes = await traceProbes(opts.renderer, scene, {
-    ...opts,
-    onProgress: (fraction) => opts.onProgress?.("probe", fraction),
-  });
-
+  // the exposure percentile and the manifest's uv encoding are the tail of this stage, not free
   const exposure = opts.exposure && opts.exposure > 0 ? opts.exposure : autoExposure(image, texels.mask);
 
   return {

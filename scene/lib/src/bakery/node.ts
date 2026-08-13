@@ -19,7 +19,16 @@ export {
   type AreaLights,
   type CollectOptions,
 } from "./scene.ts";
-export { trace, traceProbes, type ProbeImage, type TraceOptions } from "./tracer.ts";
+export {
+  prepareTrace,
+  trace,
+  traceProbes,
+  type Bases,
+  type PrepareOptions,
+  type ProbeImage,
+  type TraceContext,
+  type TraceOptions,
+} from "./tracer.ts";
 export { writeBake, type WriteOptions } from "./io.ts";
 export { installNodeLoaders, loadSceneFile } from "./tscene.ts";
 export * from "./index.ts";

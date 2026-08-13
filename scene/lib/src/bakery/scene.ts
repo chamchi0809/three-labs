@@ -376,17 +376,30 @@ export function bvhProxy(scene: BakeScene, lightmapUV?: Float32Array[]): THREE.G
 
 /** Emissive triangles, flattened into an area-light list the tracer can importance-sample. */
 export type AreaLights = {
-  /** 4 vec4 per triangle: (a.xyz, cumulativeArea) (b.xyz, area) (c.xyz, oneSided) (radiance.xyz, 0) */
+  /**
+   * 4 vec4 per triangle: (a.xyz, aliasProbability) (b.xyz, aliasIndex) (c.xyz, oneSided)
+   * (radiance.xyz, 1/pdf). The first two slots are Vose's alias table, so the shader picks an emitter
+   * in two reads; the last is what the estimator divides that pick's probability out by.
+   */
   data: Float32Array;
   count: number;
+  /** the emitters' total surface area. Nothing on the GPU reads it — it is the set's size in one number. */
   totalArea: number;
 };
 
 /** how many floats one triangle of {@link AreaLights.data} takes. The shader indexes with this too. */
 export const AREA_STRIDE = 16;
 
+/**
+ * Emissive triangles, ready to importance-sample: the geometry, the radiance, and an alias table over
+ * the set weighted by **power** — area times luminance, not area alone. A dim emitter the same size as
+ * a bright one used to be picked as often and contribute a fraction as much, which is variance the
+ * bake paid for in samples.
+ */
 export function areaLights(scene: BakeScene): AreaLights {
   const tris: number[] = [];
+  /** area * luminance per triangle: how much of the scene's light it is, which is how often it is picked */
+  const weights: number[] = [];
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
@@ -398,9 +411,12 @@ export function areaLights(scene: BakeScene): AreaLights {
       const material = scene.materials[m.faceMaterial[t]!];
       if (!material) continue;
       // the radiance is baked into the record, not looked up per sample: a textured emissive panel
-      // is a different light per triangle, and the CDF has to weigh it that way
+      // is a different light per triangle, and the table has to weigh it that way
       const radiance = triangleRadiance(material, m, t);
-      if (radiance[0] + radiance[1] + radiance[2] <= 0) continue;
+      // Rec. 709, the same weights the exposure percentile uses. Any positive radiance has a positive
+      // luminance, so this is the old "emits anything at all" test as well.
+      const luminance = 0.2126 * radiance[0] + 0.7152 * radiance[1] + 0.0722 * radiance[2];
+      if (!(luminance > 0)) continue;
       const o = t * 9;
       a.set(m.positions[o]!, m.positions[o + 1]!, m.positions[o + 2]!);
       b.set(m.positions[o + 3]!, m.positions[o + 4]!, m.positions[o + 5]!);
@@ -408,16 +424,61 @@ export function areaLights(scene: BakeScene): AreaLights {
       const area = b.clone().sub(a).cross(c.clone().sub(a)).length() * 0.5;
       if (!(area > 0)) continue;
       totalArea += area;
+      weights.push(area * luminance);
       count++;
       tris.push(
-        a.x, a.y, a.z, totalArea,
-        b.x, b.y, b.z, area,
+        a.x, a.y, a.z, 0,
+        b.x, b.y, b.z, 0,
         c.x, c.y, c.z, material.oneSided ? 1 : 0,
-        radiance[0]!, radiance[1]!, radiance[2]!, 0,
+        // the luminance is parked in the last slot until the total is known and it can become 1/pdf
+        radiance[0]!, radiance[1]!, radiance[2]!, luminance,
       );
     }
   }
-  return { data: new Float32Array(tris), count, totalArea };
+
+  const data = new Float32Array(tris);
+  const { probability, alias } = aliasTable(weights);
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  for (let i = 0; i < count; i++) {
+    data[i * AREA_STRIDE + 3] = probability[i]!;
+    data[i * AREA_STRIDE + 7] = alias[i]!;
+    // p(triangle) is weight/totalWeight and the point on it is uniform over its area, so the pdf in
+    // area measure is luminance/totalWeight. With one radiance across the whole set that reciprocal is
+    // exactly the total area the old area-proportional pick divided by — same estimator, better weights.
+    data[i * AREA_STRIDE + 15] = totalWeight / data[i * AREA_STRIDE + 15]!;
+  }
+  return { data, count, totalArea };
+}
+
+/**
+ * Vose's alias table: bin `i` returns `i` with probability `probability[i]` and `alias[i]` otherwise,
+ * which draws from `weights` in constant time. It replaces a linear walk down a cumulative-area list —
+ * on a scene with a few thousand emissive triangles that walk was two thirds of the trace.
+ */
+function aliasTable(weights: number[]): { probability: Float64Array; alias: Uint32Array } {
+  const n = weights.length;
+  // 1 is the identity entry: a bin that always returns itself never reads its alias
+  const probability = new Float64Array(n).fill(1);
+  const alias = new Uint32Array(n);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  if (!(total > 0)) return { probability, alias };
+
+  // in units of one bin's worth, so the table is built around 1 rather than around 1/n
+  const scaled = weights.map((w) => (w * n) / total);
+  const small: number[] = [];
+  const large: number[] = [];
+  for (let i = 0; i < n; i++) (scaled[i]! < 1 ? small : large).push(i);
+
+  while (small.length && large.length) {
+    const s = small.pop()!;
+    const l = large.pop()!;
+    probability[s] = scaled[s]!;
+    alias[s] = l;
+    scaled[l] = scaled[l]! - (1 - scaled[s]!);
+    (scaled[l]! < 1 ? small : large).push(l);
+  }
+  // whatever is left over is a full bin to within rounding, and starts out as one
+  return { probability, alias };
 }
 
 /** `emissive` is the map's mean; one triangle of a textured panel gets its own texel instead. */

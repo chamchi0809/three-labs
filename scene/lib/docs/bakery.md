@@ -250,17 +250,98 @@ layout it no longer speaks: the fix is always a re-bake.
 | collect | [`scene.ts`](../src/bakery/scene.ts) | scene → world-space triangle soup, materials, lights, sky, emissive triangle list |
 | unwrap | [`atlas.ts`](../src/bakery/atlas.ts) | lightmap uvs from xatlas (wasm), one atlas for the whole scene |
 | rasterize | [`raster.ts`](../src/bakery/raster.ts) | atlas texel → the world position and normal to shade, across `--jobs` worker threads writing into one `SharedArrayBuffer` |
+| prepare | [`tracer.ts`](../src/bakery/tracer.ts) | the BVH, the record buffer and the albedo atlas — one `TraceContext` both GPU stages run off |
 | trace | [`tracer.ts`](../src/bakery/tracer.ts) | the estimator, as WGSL, over three-mesh-bvh's `BVHComputeData` |
+| probe | [`probe.ts`](../src/bakery/probe.ts) + `tracer.ts` | one equirect of radiance per placed probe, from the same estimator and the same context |
 | filter | [`filter.ts`](../src/bakery/filter.ts) | edge-aware denoise, then dilation past the chart edges so bilinear taps never read black |
-| probe | [`probe.ts`](../src/bakery/probe.ts) + `tracer.ts` | one equirect of radiance per placed probe, from the same estimator |
 | pack | [`io.ts`](../src/bakery/io.ts) | PNG / EXR / manifest |
+
+The CLI prints one line per stage, and a stage is timed from its own first report to the next one's —
+so the lines add up to the bake time with nothing unattributed. They used to be timed from the *last*
+progress report instead, which let xatlas' `generate()` run for half a minute inside a stage that had
+already reported itself finished and printed `0s`.
 
 The estimator is the part worth reading twice. It integrates **irradiance**, so bounces are
 cosine-sampled and the π from the estimator cancels the 1/π from the Lambert BRDF — every bounce is just
 a multiply by the hit surface's albedo. Direct lighting is next-event estimation only (analytic for delta
 lights, area sampling for emissive triangles) and emission is never added on a bounce hit, so nothing is
-counted twice and there is no MIS weight to get wrong. Bounce 0 walks a randomized Hammersley set, which
-is what keeps the sample counts low.
+counted twice and there is no MIS weight to get wrong.
+
+**Every** bounce walks the same stratified Hammersley set, each from its own Cranley-Patterson rotation —
+a padded replication — and that is what keeps the sample counts low. Only bounce 0 used to be stratified,
+which is backwards for a scene lit by bounces: sponza's arcades see no sun at all, so every photon they
+get arrived through two or more of the unstratified ones. Stratifying the rest costs nothing measurable
+and takes the shadowed three quarters of sponza's atlas from 34.2% to 30.2% rms against a 8192-sample
+reference, with the energy bias down from +1.24% to +0.24%.
+
+Five things keep it fast, and each one is a constant factor rather than a heuristic:
+
+- **Emitters are picked from an alias table**, built on the CPU with weight `area × luminance` — two
+  loads whatever the emitter count, where a cumulative-area scan averaged half of them, and a dim square
+  metre no longer gets the same share of the samples as a bright one.
+- **Shadow rays are distance-bounded.** Seeding the intersection result with the distance to the light
+  makes the traversal cull everything past it, which turns three-mesh-bvh's closest-hit query into an
+  any-hit test: it stops at the first blocker instead of walking the scene behind it.
+- **Paths end by Russian roulette** from the third bounce on, with probability `1 - q` and a `1/q` scale
+  on the survivors, so a dark surface stops paying for the full bounce depth to add a percent. It waits
+  two bounces and never rolls `q` below `0.25`, because the textbook policy — roll from the first bounce
+  at `q = throughput` — is a bad trade on a real scene and measurably so; see the table below.
+- **The last gather ray is skipped when the sky is black.** The ray leaving the last shading point has
+  exactly two jobs: carry the occlusion test on the first bounce, and collect the sky when it escapes. A
+  scene with no ambient, no hemisphere and no sky gradient owes it neither, and what it hits is never
+  read — sponza's four bounces used to cast five gather rays for four bounces' worth of light.
+- **The whole bake shares one `TraceContext`** — the BVH, the record buffer and the albedo atlas — and
+  every probe in the scene runs in a single dispatch of a single compiled kernel, with its origin in the
+  surface buffer beside the texel's direction.
+
+### Why the roulette waits
+
+Sponza's interior is lit by nothing but bounces, and stone at albedo ~0.5 makes the textbook policy a
+coin flip at every one of them. Doubling every surviving path's weight four times over is not a saving,
+it is noise — and the edge-aware denoise then smears that noise into round blotches. The policies that
+were measured, same scene and samples throughout, scored as relative rms against a 4096-sample reference
+over the darkest three quarters of the atlas (where the demo's tone curve lives):
+
+| first bounce it rolls at | floor on `q` | rms | bias | trace |
+| --- | --- | --- | --- | --- |
+| never | — | 30.2% | +0.16% | 30s |
+| 1 | none | 74.8% | +0.13% | 19s |
+| 1 | 0.5 | 34.1% | +0.24% | 25s |
+| 1 | 0.75 | 31.7% | +0.23% | 28s |
+| 2 | none | 43.1% | +0.30% | 25s |
+| **2** | **0.25** | **30.8%** | +0.23% | 27s |
+| 2 | 0.5 | 30.4% | +0.19% | 29s |
+| 3 | 0.25 | 30.0% | +0.18% | 30s |
+
+Every one of them is unbiased, which is the point of the `1/q` — the bias column stays inside a quarter
+of a percent throughout, and what moves is the variance. The metric that decides it is noise per second,
+`rms² × time`: 25,610 for `(2, 0.25)` against 27,360 for rolling nothing and 106,300 for the textbook
+policy. Waiting two bounces and never rolling below a quarter gives back 40% of the roulette's speedup
+and buys all of the quality back — still 13% faster than casting every path to full depth.
+
+### What it is worth
+
+Two scenes, each at the settings its own sheet asks for, each baked twice on one machine — the same
+atlas, the same auto-exposure, only the estimator between them.
+
+| | pica (2061x2369, 15 probes, 3,864 emitters) | sponza (1341x2260, one sun, no emitters, no probes) |
+| --- | --- | --- |
+| unwrap | 12s → 12s | 34s → 34s |
+| trace | 3m18s → **1m12s** | 21s → 21s |
+| probe | 2m58s → **13s** | — |
+| **bake** | **6m53s → 1m42s** | 1m04s → 1m04s |
+| rms in the shadowed three quarters | — | 34.2% → **30.2%** |
+
+Pica is where the emitters, the probes and the shared context land, and it is four times faster for
+them. Sponza is the other end of the range and worth being plain about: one directional light, nothing
+emissive and no probes means the alias table, the distance-bounded shadow ray and the single-dispatch
+probe stage have nothing to bite on, and its trace comes out the same 21s it always took. What it gets
+instead is 1.28x less variance for those 21 seconds — equal quality at 200 samples where it needed 256 —
+and its 34 seconds of unwrap now printed against the stage that actually spends them.
+
+The two agree on the answer as well as on the picture: pica's fifteen probes come back within 0.43% of
+HEAD's in mean radiance, thirteen of them within 0.1%, and both bakes pick the same auto-exposure to
+four significant figures.
 
 ## Checks
 
@@ -314,13 +395,22 @@ ones worth knowing about:
   (`metalness: 0.5`) double counts half of the environment's diffuse contribution — the atlas already has
   that half. Splitting the probe into its specular and diffuse parts is the fix, which means two textures
   per probe.
-- **Shadow rays run a closest-hit query** because three-mesh-bvh has no any-hit shapecast yet, so a
-  shadow ray costs a full traversal.
-- **The area-light estimator clamps its solid angle**, which slightly darkens the first centimetre around
-  an emitter. It is what stops a shading point a millimetre from a panel from returning millions and
-  spraying fireflies across the atlas; sampling the triangle by solid angle (Arvo) would remove the
-  singularity outright. Texels *on* an emissive surface are still noisy — harmless, since their own
-  albedo is what the lightmap gets multiplied by.
+- **A probe fires one ray per texel, down its centre, with no jitter inside it**, so the primary hit
+  aliases where a silhouette crosses a texel. Everything a probe is read through — PMREM, then a
+  roughness lobe — blurs far wider than one texel, so it has never shown.
+- **The area-light estimator clamps its solid angle**, and it is the largest error in the bake. It is
+  what stops a shading point a millimetre from a panel from returning millions and spraying fireflies
+  across the atlas, but it only ever removes energy: measured against a 2048-sample reference, pica's
+  near-emitter texels come out 9% dark, and its brightest 0.1% come out 55% dark. That is bias, not
+  noise — four times the samples does not move it. Two further things ride on it. The product it bounds
+  is only "the emitter set's solid angle" when the pick is area-proportional; weighted by power, a dim
+  emitter carries a larger `1/pdf`, meets the ceiling sooner and bakes darker for it — which is why
+  power weighting *raised* pica's mean by 2.9%, all of it in the texels the clamp had been eating. And
+  bounding the picked triangle's own solid angle instead, which is the physically right quantity, is far
+  too loose a bound: it was tried, and pica came back with texels at 300 against a peak of 7. Sampling
+  the triangle by solid angle (Arvo) removes the singularity outright and is the only real fix. Texels
+  *on* an emissive surface are still noisy — harmless, since their own albedo is what the lightmap gets
+  multiplied by.
 - **No seam fixing.** Charts meet exactly, but a bilinear tap across a seam does not solve for
   continuity; dilation hides the worst of it.
 - `three-mesh-bvh`'s WebGPU API is documented as unstable, and [one small `.d.ts`](../src/bakery/three-mesh-bvh-webgpu.d.ts)

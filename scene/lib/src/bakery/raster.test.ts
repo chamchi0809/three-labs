@@ -158,11 +158,69 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   assert.equal(area.count, 2, "the emissive panel contributes both of its triangles");
   assert.equal(area.data.length, area.count * AREA_STRIDE);
   assert.ok(Math.abs(area.totalArea - 1) < 1e-5, "a 1x1 panel has unit area");
-  assert.ok(Math.abs(area.data[3] - 0.5) < 1e-5, "the first triangle's cdf entry is its own area");
-  assert.ok(Math.abs(area.data[7] - 0.5) < 1e-5, "and slot 1 carries the area itself, not the running sum");
+  // two triangles of equal area and one radiance are equal weights, so neither bin ever aliases away
+  assert.equal(area.data[3], 1, "an evenly weighted alias bin always returns itself");
+  assert.equal(area.data[7], 0, "and never reads the alias it points at");
   assert.equal(area.data[11], 0, "a mesh emits both ways; only a RectAreaLight is one-sided");
   // the radiance rides along per triangle, so an emissiveMap can differ across one mesh
   assert.deepEqual(Array.from(area.data.subarray(12, 15)), [3, 3, 3], "emissive is emissive * emissiveIntensity");
+  // with one radiance across the set the power-weighted pdf is the area-proportional one, so its
+  // reciprocal is the total area — the estimator the CDF scan used to carry, arrived at from weights
+  assert.ok(Math.abs(area.data[15] - 1) < 1e-5, "1/pdf in area measure is the panel's own area");
+}
+
+// --- the emitter alias table: right marginals, and a 1/pdf that matches them ----------------------
+// The shader draws a bin uniformly and then tosses one coin, so a wrong table is not a crash — it is a
+// panel that quietly gets a tenth of the samples it should and bakes noisy.
+{
+  const root = new THREE.Group();
+  root.name = "root";
+  root.add(new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshStandardMaterial()));
+  // three emitters spanning two orders of magnitude in both size and brightness, so an area-only or a
+  // luminance-only weighting fails this and a table built around 1/n fails it too
+  for (const [i, [size, intensity]] of ([[2, 1], [0.5, 40], [1, 0.25]] as const).entries()) {
+    const panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshStandardMaterial({ emissive: 0xffffff, emissiveIntensity: intensity }),
+    );
+    panel.name = `panel${i}`;
+    panel.position.set(i * 3, 2, 0);
+    root.add(panel);
+  }
+
+  const area = areaLights(collectScene(root));
+  assert.equal(area.count, 6, "three quads, two triangles each");
+
+  const vertex = (t: number, v: number) =>
+    new THREE.Vector3(...area.data.subarray(t * AREA_STRIDE + v * 4, t * AREA_STRIDE + v * 4 + 3));
+  const triangleArea = (t: number) =>
+    vertex(t, 1).sub(vertex(t, 0)).cross(vertex(t, 2).sub(vertex(t, 0))).length() * 0.5;
+
+  // what the shader actually draws: bin `i` uniformly, then `i` with probability[i] and alias[i] otherwise
+  const marginal = new Float64Array(area.count);
+  for (let i = 0; i < area.count; i++) {
+    const probability = area.data[i * AREA_STRIDE + 3]!;
+    const alias = area.data[i * AREA_STRIDE + 7]!;
+    assert.ok(probability >= 0 && probability <= 1, `bin ${i} holds a probability`);
+    assert.ok(Number.isInteger(alias) && alias >= 0 && alias < area.count, `bin ${i} aliases a real emitter`);
+    marginal[i]! += probability / area.count;
+    marginal[alias]! += (1 - probability) / area.count;
+  }
+  assert.ok(Math.abs(marginal.reduce((a, b) => a + b, 0) - 1) < 1e-12, "the table is a distribution");
+
+  const weights = Array.from({ length: area.count }, (_, t) => triangleArea(t) * area.data[t * AREA_STRIDE + 12]!);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let sampled = 0;
+  // the table lands in a Float32Array, so everything below is exact to about seven digits and no more
+  for (let t = 0; t < area.count; t++) {
+    assert.ok(Math.abs(marginal[t]! - weights[t]! / total) < 1e-7, `emitter ${t} is picked in proportion to its power`);
+    // and the estimator's own reciprocal pdf agrees with that pick, in area measure
+    assert.ok(Math.abs((marginal[t]! / triangleArea(t)) * area.data[t * AREA_STRIDE + 15]! - 1) < 1e-6, "1/pdf matches");
+    sampled += marginal[t]!;
+  }
+  assert.ok(Math.abs(sampled - 1) < 1e-12, "every emitter is reachable");
+  // the brightest panel is a sixteenth of the area of the largest and still takes most of the samples
+  assert.ok(marginal[2]! + marginal[3]! > 0.5, "power weighting follows the light, not the surface");
 }
 
 // --- bakeGeometry is deterministic, which is what lets the manifest be just uvs -------------------
