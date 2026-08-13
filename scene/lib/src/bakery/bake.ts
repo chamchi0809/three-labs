@@ -22,6 +22,11 @@ export type BakeOptions = Omit<UnwrapOptions, "onProgress"> &
     dilateRadius?: number;
     /** also build an ambient-occlusion atlas — {@link BakeResult.ao}, and `<name>.ao.png` on disk */
     ao?: boolean;
+    /**
+     * The divisor that maps irradiance into the 8-bit PNG, and the `lightMapIntensity` that undoes it.
+     * Absent, it is the atlas' 95th percentile. Fixing it makes two bakes of one scene quantize alike.
+     */
+    exposure?: number;
     /** worker threads to rasterize with (Node only). 1 keeps the rasterizer on the calling thread. */
     jobs?: number;
     /**
@@ -139,7 +144,7 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     onProgress: (fraction) => opts.onProgress?.("probe", fraction),
   });
 
-  const exposure = autoExposure(image, texels.mask);
+  const exposure = opts.exposure && opts.exposure > 0 ? opts.exposure : autoExposure(image, texels.mask);
 
   return {
     width: atlas.width,
@@ -236,6 +241,16 @@ export function albedoAtlas(scene: BakeScene, texels: Texels): Uint32Array | und
  * so one blown texel next to a lamp doesn't crush the whole atlas into the bottom of an 8-bit range.
  * Clipping above it is the intended trade — use the EXR output when clipping is unacceptable.
  */
+/**
+ * The divisor that maps this atlas into [0,1] for the PNG. The 95th percentile, not the 99th: the top
+ * few per cent of a scene with emissive props is their own noisy neighbourhood, and a percentile that
+ * lands in it moves with the fireflies — pica came out 0.9, 1.6 and 2.1 across three bakes of the same
+ * sheet, spending a stop of 8-bit range on texels the tone mapper rolls off anyway. What sits above the
+ * divisor clips in the PNG and survives in the EXR.
+ *
+ * ponytail: still a percentile of raw texels, so it is only as steady as the noise floor. `@bakery
+ * { exposure }` is the way to pin it; a firefly filter before the sort would fix the cause.
+ */
 function autoExposure(image: Float32Array, mask: Uint8Array): number {
   const luminance: number[] = [];
   // every 7th texel is plenty for a percentile and keeps the sort off a million element array
@@ -245,6 +260,6 @@ function autoExposure(image: Float32Array, mask: Uint8Array): number {
   }
   if (!luminance.length) return 1;
   luminance.sort((a, b) => a - b);
-  const p99 = luminance[Math.min(luminance.length - 1, Math.floor(luminance.length * 0.99))];
-  return Math.max(1e-4, p99);
+  const p95 = luminance[Math.min(luminance.length - 1, Math.floor(luminance.length * 0.95))];
+  return Math.max(1e-4, p95);
 }

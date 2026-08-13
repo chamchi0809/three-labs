@@ -255,7 +255,7 @@ const close = (got: number, want: number, tol: number, what: string) =>
   root.add(lamp);
 
   const stages: string[] = [];
-  const result = await bake(root, {
+  const settings = {
     renderer,
     size: 64,
     samples: 64,
@@ -265,10 +265,11 @@ const close = (got: number, want: number, tol: number, what: string) =>
     ao: true,
     // the lamp is 4 units up, well past the 5% of the scene diagonal aoDistance defaults to
     aoDistance: 8,
-    onProgress: (stage) => {
+    onProgress: (stage: string) => {
       if (stages.at(-1) !== stage) stages.push(stage);
     },
-  });
+  };
+  const result = await bake(root, settings);
 
   assert.deepEqual(stages, ["unwrap", "rasterize", "trace", "filter"]);
   // xatlas scales the charts from `size` and then packs, so the atlas lands near it, not on it
@@ -311,6 +312,11 @@ const close = (got: number, want: number, tol: number, what: string) =>
     "the manifest keys the runtime by node path and pins the de-indexed vertex count",
   );
   assert.equal(result.manifest.intensity, result.exposure);
+
+  // `@bakery { exposure }` is how a scene whose percentile wanders gets the same quantization twice
+  const fixed = await bake(root, { ...settings, exposure: 0.5 });
+  assert.equal(fixed.exposure, 0.5, "a given exposure wins over the percentile");
+  assert.equal(fixed.manifest.intensity, 0.5, "and the runtime undoes exactly that");
 }
 
 // --- the bounce reads the albedo map under the point it hit, not the whole texture's mean ----------

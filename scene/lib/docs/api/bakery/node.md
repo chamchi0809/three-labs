@@ -205,6 +205,7 @@ type BakeOptions = Omit<UnwrapOptions, "onProgress"> & Omit<TraceOptions, "onPro
   ao?: boolean;
   denoiseRadius?: number;
   dilateRadius?: number;
+  exposure?: number;
   jobs?: number;
   only?: string[];
   onProgress?: (stage, fraction) => void;
@@ -226,6 +227,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 | `ao?` | `boolean` | also build an ambient-occlusion atlas — [BakeResult.ao](#ao), and `<name>.ao.png` on disk |
 | `denoiseRadius?` | `number` | 0 disables the edge-aware blur; 1 is a 3x3 kernel |
 | `dilateRadius?` | `number` | texels of lit-region growth past the chart edges. The atlas padding follows this by default. |
+| `exposure?` | `number` | The divisor that maps irradiance into the 8-bit PNG, and the `lightMapIntensity` that undoes it. Absent, it is the atlas' 95th percentile. Fixing it makes two bakes of one scene quantize alike. |
 | `jobs?` | `number` | worker threads to rasterize with (Node only). 1 keeps the rasterizer on the calling thread. |
 | `only?` | `string`[] | with [previous](#bakeoptions), the `nodeKey()`s to re-trace. Everything else is copied over. |
 | `onProgress()?` | (`stage`, `fraction`) => `void` | - |

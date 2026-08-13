@@ -48,6 +48,12 @@ export type SceneBakery = {
   ao?: boolean;
   /** how far an occlusion ray looks for a blocker; 0 (the default) picks 5% of the scene diagonal */
   aoDistance?: number;
+  /**
+   * The divisor that packs the atlas into the 8-bit PNG, undone at runtime by `lightMapIntensity`, so
+   * it decides quantization and not brightness. Absent, the bake picks the 95th percentile of the
+   * atlas — which moves a little between bakes of a noisy scene. Set it to make that reproducible.
+   */
+  exposure?: number;
   /** where to write, relative to the sheet */
   out?: string;
   name?: string;
@@ -115,6 +121,7 @@ export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>
     defaultAlbedo: { type: "number" },
     ao: { type: "boolean" },
     aoDistance: { type: "number" },
+    exposure: { type: "number" },
     out: { type: "string" },
     name: { type: "string" },
     exr: { type: "boolean" },

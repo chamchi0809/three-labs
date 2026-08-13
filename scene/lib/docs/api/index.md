@@ -460,6 +460,7 @@ type SceneBakery = {
   defaultAlbedo?: number;
   denoiseRadius?: number;
   dilateRadius?: number;
+  exposure?: number;
   exr?: boolean;
   include?: "all" | "none";
   indirect?: number;
@@ -487,6 +488,7 @@ What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()`
 | <a id="defaultalbedo"></a> `defaultAlbedo?` | `number` | reflectance of a material with no `color` at all |
 | <a id="denoiseradius"></a> `denoiseRadius?` | `number` | - |
 | <a id="dilateradius"></a> `dilateRadius?` | `number` | - |
+| <a id="exposure"></a> `exposure?` | `number` | The divisor that packs the atlas into the 8-bit PNG, undone at runtime by `lightMapIntensity`, so it decides quantization and not brightness. Absent, the bake picks the 95th percentile of the atlas — which moves a little between bakes of a noisy scene. Set it to make that reproducible. |
 | <a id="exr"></a> `exr?` | `boolean` | - |
 | <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` bakes every mesh but the ones that turn themselves off; `none` bakes only the ones that opt in |
 | <a id="indirect"></a> `indirect?` | `number` | - |

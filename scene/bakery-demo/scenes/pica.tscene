@@ -10,9 +10,9 @@
 // vite plugin hashes it into this bundle from there. Nothing is copied.
 //
 // Three of its 28 materials are metals, which no lightmap can light — three's diffuse colour is
-// `albedo * (1 - metalness)` — so the bake also captures a reflection probe in the middle of the
-// diorama for them to reflect. That is the specular half of the same trace, and it is why the screws
-// and the gauge front show the diorama's own red and cyan glow instead of rendering black.
+// `albedo * (1 - metalness)` — so the bake also captures reflection probes for them to reflect. That
+// is the specular half of the same trace, and it is why the screws and the gauge front show the
+// diorama's own red and cyan glow instead of rendering black.
 
 @bakery {
   out: "../public/lightmaps";
@@ -41,12 +41,32 @@ gltf #diorama("../../../rc-25d/demo/public/assets/pica_pica/mini_diorama_01.glb"
   }
 }
 
-// What the metals reflect: one probe, in the open middle of the diorama — 1.1 above the floor, and
-// clear of the two walls. A single cell is enough for a scene this size; a room per probe is the rule.
-object3D #probe {
-  position: vec3(-0.6, 1.1, -0.9);
-  @bakery { probe: 256 };
-}
+// What the metals reflect. `nearestProbe` gives a mesh the probe closest to its bounding-box centre,
+// so a probe per metal is a probe per reflection: 32 metal meshes here, grouped into these 15 by
+// distance — anything within 0.7 of a neighbour reflects near enough the same surroundings to share
+// one — and each sitting just above its group rather than inside it, since a probe inside a screw
+// sees the inside of a screw. 128 wide is a blurry mirror, which is what a bolt is.
+//
+// The pipes and the bolts come in pairs because the diorama has two copies of the same machine, a and
+// b, one against each wall. The ones marked tight are within a few centimetres of the surface their
+// group rests on, so most of what they reflect is that surface — correct for a bolt lying on a plate.
+object3D #probe_junk_pile   { position: vec3(-0.77, 0.75, 1.01);  @bakery { probe: 128 }; }  // 5 meshes
+object3D #probe_junk_bolts  { position: vec3(-2.13, 0.40, 0.60);  @bakery { probe: 128 }; }
+object3D #probe_led_wire    { position: vec3(0.62, 1.04, 1.46);   @bakery { probe: 128 }; }  // 4 meshes
+object3D #probe_interior    { position: vec3(1.03, 1.22, 1.26);   @bakery { probe: 128 }; }
+object3D #probe_screw       { position: vec3(1.59, 0.94, 1.38);   @bakery { probe: 128 }; }
+
+object3D #probe_pipes_a1    { position: vec3(-4.59, 0.08, -0.54); @bakery { probe: 128 }; }
+object3D #probe_pipes_a2    { position: vec3(-4.60, 0.08, 0.40);  @bakery { probe: 128 }; }
+object3D #probe_bolts_a1    { position: vec3(-3.33, 0.20, 0.41);  @bakery { probe: 128 }; }  // tight
+object3D #probe_bolts_a2    { position: vec3(-3.35, 0.20, -0.57); @bakery { probe: 128 }; }  // tight
+object3D #probe_inlet_a     { position: vec3(-3.65, 1.40, -0.08); @bakery { probe: 128 }; }
+
+object3D #probe_pipes_b1    { position: vec3(-1.11, 0.07, -3.99); @bakery { probe: 128 }; }
+object3D #probe_pipes_b2    { position: vec3(-2.05, 0.07, -3.99); @bakery { probe: 128 }; }
+object3D #probe_bolts_b1    { position: vec3(-2.06, 0.19, -2.72); @bakery { probe: 128 }; }  // tight
+object3D #probe_bolts_b2    { position: vec3(-1.08, 0.19, -2.74); @bakery { probe: 128 }; }  // tight
+object3D #probe_inlet_b     { position: vec3(-1.58, 1.39, -3.04); @bakery { probe: 128 }; }
 
 // the diorama is a corner: two walls, an open front, and nothing above it
 hemisphereLight #sky(#cfe4ff, #4a4038, 0.8)

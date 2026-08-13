@@ -24,6 +24,7 @@ Every option below can also live in the scene's own \`@bakery { … }\` block; a
   --ao                 also write <name>.ao.png and put it on the materials' aoMap
   --ao-distance <units>  how far an occlusion ray looks; 0 picks 5% of the scene diagonal
   --jobs <n>           worker threads for the rasterizer (default: one per core)
+  --exposure <n>       fix the PNG divisor instead of taking the atlas' 95th percentile
   --exr                also write 32-bit float irradiance
   --only <keys>        re-trace only these meshes (comma separated), keeping the rest of the
                        atlas that is already there. Needs a previous bake made with --exr.
@@ -48,6 +49,7 @@ const { values, positionals } = parseArgs({
     include: { type: "string" },
     ao: { type: "boolean" },
     "ao-distance": { type: "string" },
+    exposure: { type: "string" },
     jobs: { type: "string" },
     exr: { type: "boolean" },
     only: { type: "string" },
@@ -121,6 +123,7 @@ const result = await bakeSceneFile(positionals[0]!, {
   include: values.include as "all" | "none" | undefined,
   ao: values.ao,
   aoDistance: num("ao-distance", values["ao-distance"]),
+  exposure: num("exposure", values.exposure),
   jobs: num("jobs", values.jobs),
   // a warning mid-progress has to start its own line or the rewriting one eats it
   onWarn: (message) => process.stderr.write(`${tty ? "\r" : ""}${`tscene-bake: ${message}`.padEnd(48)}\n`),

@@ -221,6 +221,7 @@ Three worth knowing:
 | `--indirect <gain>` | the one knob that is not physical: a gain on everything gathered past the first bounce, so an interior that bakes flat can be pushed without touching the direct light. 1 is the truth |
 | `--ao` `--ao-distance` | also write `<name>.ao.png` and put it on the materials' `aoMap`. The occlusion rides the first bounce ray, so it is free; `--ao-distance 0` picks 5% of the scene diagonal, which is a room-scale guess and the thing to set when the scene is not room-scale |
 | `--bias <units>` | ray origin offset along the normal, against self-intersection. 0 picks 1e-4 of the scene diagonal; raise it if the atlas shows shadow acne, lower it if contact shadows detach |
+| `--exposure <n>` | the divisor that packs the atlas into the 8-bit png, undone at runtime by `lightMapIntensity` — so it decides quantization, not brightness. Left alone it is the atlas' 95th percentile, which wanders a little between bakes of a noisy scene; fix it to get the same png twice |
 
 `--jobs` is the rasterizer's worker count (one per core by default) — `--jobs 1` to rasterize on the main
 thread. It only moves the rasterize stage; the trace is already on the GPU.
@@ -231,7 +232,7 @@ thread. It only moves the rasterize stage; the trace is already on the GPU.
 
 | File | What |
 | --- | --- |
-| `<name>.png` | irradiance divided by an auto exposure, sRGB encoded. `manifest.intensity` is the divisor, and `applyLightmap` puts it back as `lightMapIntensity` |
+| `<name>.png` | irradiance divided by an exposure — the atlas' 95th percentile, or `--exposure` — and sRGB encoded. `manifest.intensity` is the divisor, and `applyLightmap` puts it back as `lightMapIntensity` |
 | `<name>.lightmap.json` | the manifest: version, atlas size, exposure, and base64 `uv1` per baked mesh, keyed by node path |
 | `<name>.ao.png` | with `--ao`: cosine-weighted openness, 1 = unoccluded. `applyLightmap` puts it on `aoMap` |
 | `<name>.exr` | with `--exr`: the same irradiance as 32-bit float, unclipped. Also what `--only` re-traces from |
