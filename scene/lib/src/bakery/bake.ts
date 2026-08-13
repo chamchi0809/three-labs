@@ -1,30 +1,34 @@
-// collect -> unwrap -> rasterize -> trace -> filter -> pack. Browser or Node; the only requirement is
+// collect -> unwrap -> rasterize -> trace -> filter -> probe -> pack. Browser or Node; the only requirement is
 // a WebGPURenderer, and `createHeadlessRenderer()` supplies one in Node.
 import * as THREE from "three/webgpu";
 import { unwrap, type Atlas, type UnwrapOptions } from "./atlas.ts";
 import { denoise, dilate } from "./filter.ts";
 import type { Texels } from "./raster.ts";
-import { rasterize } from "./raster.ts";
+import { rasterizeParallel } from "./raster.ts";
 import { collectScene, sampleTexture, type BakeScene, type CollectOptions } from "./scene.ts";
-import { trace, type TraceOptions } from "./tracer.ts";
-import { decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
+import { SAMPLES, trace, traceProbes, type ProbeImage, type TraceOptions } from "./tracer.ts";
+import { decodeFloats, encodeFloats, MANIFEST_VERSION, type LightmapManifest } from "./apply.ts";
 
-export type BakeStage = "unwrap" | "rasterize" | "trace" | "filter";
+export type BakeStage = "unwrap" | "rasterize" | "trace" | "filter" | "probe";
 
-export type BakeOptions = UnwrapOptions &
+export type BakeOptions = Omit<UnwrapOptions, "onProgress"> &
   Omit<TraceOptions, "onProgress"> &
   CollectOptions & {
     /** an initialized WebGPURenderer. Required — `createHeadlessRenderer()` makes one in Node. */
     renderer: THREE.WebGPURenderer;
     /** 0 disables the edge-aware blur; 1 is a 3x3 kernel */
     denoiseRadius?: number;
-    /** texels of lit-region growth past the chart edges. Keep >= the atlas padding. */
+    /** texels of lit-region growth past the chart edges. The atlas padding follows this by default. */
     dilateRadius?: number;
+    /** also build an ambient-occlusion atlas — {@link BakeResult.ao}, and `<name>.ao.png` on disk */
+    ao?: boolean;
+    /** worker threads to rasterize with (Node only). 1 keeps the rasterizer on the calling thread. */
+    jobs?: number;
     /**
      * A finished bake to rebake on top of: its uv layout is reused (no unwrap), and every texel
-     * outside {@link only} keeps the irradiance it already had.
+     * outside {@link only} keeps the irradiance (and occlusion) it already had.
      */
-    previous?: { manifest: LightmapManifest; image: Float32Array };
+    previous?: { manifest: LightmapManifest; image: Float32Array; ao?: Float32Array };
     /** with {@link previous}, the `nodeKey()`s to re-trace. Everything else is copied over. */
     only?: string[];
     onProgress?: (stage: BakeStage, fraction: number) => void;
@@ -35,6 +39,13 @@ export type BakeResult = {
   height: number;
   /** linear irradiance, RGBA, `width * height * 4`, bottom row first. Alpha marks covered texels. */
   image: Float32Array;
+  /**
+   * with `ao`, cosine-weighted openness in all three colour channels — 1 unoccluded, 0 fully closed,
+   * which is what three's `aoMap` reads. Same layout as {@link BakeResult.image}.
+   */
+  ao?: Float32Array;
+  /** one equirect per `@bakery { probe }` node, in the order the scene walk found them */
+  probes: ProbeImage[];
   /** divisor that maps `image` into [0,1] for an 8-bit texture; also the `lightMapIntensity` to use */
   exposure: number;
   /** fraction of the atlas the charts cover */
@@ -46,13 +57,26 @@ export type BakeResult = {
 export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<BakeResult> {
   const scene = collectScene(root, opts);
   if (!scene.meshes.length) throw new Error("tscene/bakery: nothing to bake — no visible meshes under the root");
+  const warn = opts.onWarn ?? ((message: string) => console.warn(`tscene/bakery: ${message}`));
+  const dilateRadius = opts.dilateRadius ?? 4;
 
   opts.onProgress?.("unwrap", 0);
-  const atlas = opts.previous ? reuseAtlas(opts.previous.manifest, scene) : await unwrap(scene.meshes, opts);
+  const atlas = opts.previous
+    ? reuseAtlas(opts.previous.manifest, scene)
+    : // dilation grows the lit region by `dilateRadius` texels, so anything less than that between two
+      // charts is one chart's light bleeding into the other's
+      await unwrap(scene.meshes, {
+        ...opts,
+        padding: opts.padding ?? dilateRadius,
+        onProgress: (fraction) => opts.onProgress?.("unwrap", fraction),
+      });
   opts.onProgress?.("unwrap", 1);
 
   opts.onProgress?.("rasterize", 0);
-  const texels = rasterize(scene.meshes, atlas);
+  const texels = await rasterizeParallel(scene.meshes, atlas, {
+    jobs: opts.jobs,
+    onProgress: (fraction) => opts.onProgress?.("rasterize", fraction),
+  });
   if (!texels.index.length) throw new Error("tscene/bakery: the unwrap produced no usable texels");
   const index = opts.only?.length ? subset(texels, scene, opts.only) : texels.index;
   opts.onProgress?.("rasterize", 1);
@@ -77,16 +101,43 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
   if (image.length !== atlas.width * atlas.height * 4) {
     throw new Error("tscene/bakery: the previous image does not match its manifest — rebake the whole scene");
   }
+  let ao: Float32Array | undefined;
+  if (opts.ao) {
+    if (opts.previous && !opts.previous.ao && opts.only?.length) {
+      warn("this rebake has no previous occlusion atlas to patch — the charts it does not touch bake black");
+    }
+    ao = opts.previous?.ao ? Float32Array.from(opts.previous.ao) : new Float32Array(image.length);
+  }
+
+  // the divisor is the sample count the tracer was asked for, not one read back out of the buffer:
+  // the .w slot carries the occlusion sum now
+  const samples = Math.max(1, Math.floor(opts.samples ?? SAMPLES));
   for (let i = 0; i < index.length; i++) {
-    const samples = traced[i * 4 + 3] || 1;
-    const d = index[i] * 4;
-    for (let k = 0; k < 3; k++) image[d + k] = traced[i * 4 + k] / samples;
+    const d = index[i]! * 4;
+    for (let k = 0; k < 3; k++) image[d + k] = traced[i * 4 + k]! / samples;
     image[d + 3] = 1;
+    if (ao) {
+      const open = traced[i * 4 + 3]! / samples;
+      for (let k = 0; k < 3; k++) ao[d + k] = open;
+      ao[d + 3] = 1;
+    }
   }
 
   if ((opts.denoiseRadius ?? 1) > 0) denoise(image, texels, opts.denoiseRadius ?? 1);
-  dilate(image, texels.mask, atlas.width, atlas.height, opts.dilateRadius ?? 4);
+  dilate(image, texels.mask, atlas.width, atlas.height, dilateRadius);
+  if (ao) {
+    // the occlusion atlas is a monte carlo estimate of the same rays, so it wants the same two passes
+    if ((opts.denoiseRadius ?? 1) > 0) denoise(ao, texels, opts.denoiseRadius ?? 1);
+    dilate(ao, texels.mask, atlas.width, atlas.height, dilateRadius);
+  }
   opts.onProgress?.("filter", 1);
+
+  // last, so the probes see nothing the atlas didn't: same lights, same emitters, same geometry. They
+  // are independent of the atlas otherwise — no unwrap, no filters, one equirect each.
+  const probes = await traceProbes(opts.renderer, scene, {
+    ...opts,
+    onProgress: (fraction) => opts.onProgress?.("probe", fraction),
+  });
 
   const exposure = autoExposure(image, texels.mask);
 
@@ -94,10 +145,12 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     width: atlas.width,
     height: atlas.height,
     image,
+    ao,
+    probes,
     exposure,
     utilization: opts.previous ? texels.index.length / (atlas.width * atlas.height) : atlas.utilization,
     manifest: {
-      version: 1,
+      version: MANIFEST_VERSION,
       width: atlas.width,
       height: atlas.height,
       intensity: exposure,

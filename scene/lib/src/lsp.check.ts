@@ -325,7 +325,7 @@ await check("@bakery completes its own keys, never three's names", async () => {
   assert.ok(!sheet.includes("ambientLight"), "three class names leaked into @bakery");
   assert.ok(!sheet.includes("castShadow"), "three properties leaked into @bakery");
 
-  assert.deepEqual(labels(await request("textDocument/completion", blank(1))).sort(), ["enabled", "radius"]);
+  assert.deepEqual(labels(await request("textDocument/completion", blank(1))).sort(), ["density", "enabled", "probe", "radius"]);
   assert.deepEqual(labels(await request("textDocument/completion", blank(2))), ["albedo"]);
 
   // after a key, the values that key accepts, and hover reads the same table

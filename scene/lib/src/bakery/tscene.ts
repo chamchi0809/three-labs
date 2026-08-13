@@ -2,11 +2,12 @@
 // decodes images through the DOM. A handful of small shims is enough to make it work headless.
 import { resolveObjectURL } from "node:buffer";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as THREE from "three/webgpu";
 import { loadScene, type LoadOptions } from "../index.ts";
 import { threeRegistry } from "../three.ts";
+import { resolveSheet } from "../tools.ts";
 import sharp from "sharp";
 
 let shimmed = false;
@@ -76,8 +77,13 @@ export async function loadSceneFile(file: string, opts: LoadOptions = {}): Promi
     // read off disk, so no bundler ever saw it — the baker needs all of three available by name
     registry: threeRegistry,
     base: pathToFileURL(entry).href,
+    // the sheet's own `@bakery { lightmap }` is this bake's output; applying it here would zero the
+    // lights before they are traced and bake a scene lit by its own previous atlas
+    lightmap: false,
+    // resolveSheet, not a plain join: `@import "some-pkg/room.tscene"` is what the vite plugin and the
+    // checker both accept, and a bake that could not read the sheet the editor checks is no bake
     load: async (path, from) => {
-      const target = resolve(from ? dirname(fileURLToPath(from)) : dirname(entry), path);
+      const target = resolveSheet(path, from ? fileURLToPath(from) : entry);
       return { text: await readFile(target, "utf8"), file: pathToFileURL(target).href };
     },
     ...opts,

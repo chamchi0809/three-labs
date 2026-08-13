@@ -13,12 +13,13 @@ export {
   type BakeLight,
   type BakeMaterial,
   type BakeMesh,
+  type BakeProbe,
   type BakeScene,
   type BakeSky,
   type AreaLights,
   type CollectOptions,
 } from "./scene.ts";
-export { trace, type TraceOptions } from "./tracer.ts";
+export { trace, traceProbes, type ProbeImage, type TraceOptions } from "./tracer.ts";
 export { writeBake, type WriteOptions } from "./io.ts";
 export { installNodeLoaders, loadSceneFile } from "./tscene.ts";
 export * from "./index.ts";

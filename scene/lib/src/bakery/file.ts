@@ -6,7 +6,7 @@ import type { SceneBakery } from "../names.ts";
 import type { LightmapManifest } from "./apply.ts";
 import { bake, type BakeOptions, type BakeResult } from "./bake.ts";
 import { createHeadlessRenderer } from "./headless.ts";
-import { readEXR, writeBake, type WriteOptions } from "./io.ts";
+import { readEXR, readGrey, writeBake, type WriteOptions } from "./io.ts";
 import { bakerySettings, validateBakery } from "./scene.ts";
 import { loadSceneFile } from "./tscene.ts";
 
@@ -65,8 +65,11 @@ export async function bakeSceneFile(file: string, opts: BakeFileOptions = {}): P
   }
 }
 
-/** The manifest and the float image of the bake already sitting in `dir`. */
-async function readBake(dir: string, name: string): Promise<{ manifest: LightmapManifest; image: Float32Array }> {
+/** The manifest, the float image and the occlusion of the bake already sitting in `dir`. */
+async function readBake(
+  dir: string,
+  name: string,
+): Promise<{ manifest: LightmapManifest; image: Float32Array; ao?: Float32Array }> {
   const path = join(dir, `${name}.lightmap.json`);
   const manifest = JSON.parse(await readFile(path, "utf8")) as LightmapManifest;
   if (!manifest.hdr) {
@@ -76,6 +79,8 @@ async function readBake(dir: string, name: string): Promise<{ manifest: Lightmap
   if (width !== manifest.width || height !== manifest.height) {
     throw new Error(`tscene/bakery: ${manifest.hdr} is ${width}x${height}, not the ${manifest.width}x${manifest.height} its manifest claims`);
   }
-  return { manifest, image };
+  // 8 bits is all the occlusion atlas ever had, so reading the PNG back loses nothing
+  const ao = manifest.ao ? (await readGrey(join(dir, manifest.ao))).image : undefined;
+  return { manifest, image, ...(ao && ao.length === image.length ? { ao } : {}) };
 }
 

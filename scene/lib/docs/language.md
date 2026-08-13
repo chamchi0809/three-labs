@@ -75,6 +75,11 @@ mesh #box {
 Read-only fields (`position`, `rotation`, `scale`, `color`, …) are assigned through `copy()`, which is
 why `position: vec3(...)` works. A read-only field without a `copy()` cannot be set at all.
 
+A dotted path is checked against the declared type of each segment, with one widening: `Mesh.material`
+is declared as the abstract `Material`, so its members resolve against `MeshPhysicalMaterial` — that is
+what makes `material.emissive` on a mesh inside a loaded glTF check. The widening is unsound on
+purpose: a path that a `MeshBasicMaterial` has no slot for checks, and then does nothing at runtime.
+
 ## Values
 
 ```css

@@ -18,13 +18,18 @@ export type UnwrapOptions = {
    * atlas it returns is around this size rather than exactly it — read `Atlas.width` for the truth.
    */
   size?: number;
-  /** texels of empty space around every chart — must be >= the dilation radius */
+  /**
+   * texels of empty space around every chart. Keep it at or above the bake's `dilateRadius`: dilation
+   * grows the lit region outwards, and anything it grows past the padding bleeds into the next chart.
+   */
   padding?: number;
   /**
    * texels per world unit. 0 (the default) lets xatlas pick the scale that fills `size`,
    * which is what you want unless you are baking several scenes to a shared density.
    */
   texelsPerUnit?: number;
+  /** per mesh, 0..1 — how far the unwrap has got. There is no progress inside xatlas' own packing. */
+  onProgress?: (fraction: number) => void;
 };
 
 export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Promise<Atlas> {
@@ -32,13 +37,18 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
   const xatlas = await createXAtlas();
   const atlas = xatlas.createAtlas();
   try {
-    for (const m of meshes) {
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i]!;
       const err = atlas.addMesh({
-        positions: m.positions,
+        // `@bakery { density }` is a scale on the geometry xatlas measures: charts are sized in texels
+        // per world unit, so a mesh handed in twice as large gets twice the atlas area at the same
+        // density. The uv it returns is in atlas space, so nothing has to be scaled back.
+        positions: m.density && m.density !== 1 ? scaled(m.positions, m.density) : m.positions,
         normals: m.normals,
         meshCountHint: meshes.length,
       });
       if (err !== 0) throw new Error(`tscene/bakery: xatlas rejected "${m.key}": ${xatlas.addMeshErrorString(err)}`);
+      opts.onProgress?.((i + 1) / meshes.length);
     }
 
     atlas.generate(
@@ -78,3 +88,9 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
     atlas.destroy();
   }
 }
+
+const scaled = (positions: Float32Array, by: number): Float32Array => {
+  const out = new Float32Array(positions.length);
+  for (let i = 0; i < positions.length; i++) out[i] = positions[i]! * by;
+  return out;
+};

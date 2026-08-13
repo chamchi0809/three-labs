@@ -10,7 +10,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BUILTINS, className, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
 
@@ -522,7 +522,7 @@ connection.onHover(async (params) => {
   let cls = hit.cls;
   for (const seg of path0.slice(0, -1)) {
     const t = cls ? schema.classes[cls]?.props[seg]?.type : undefined;
-    cls = t?.kind === "class" ? t.name : undefined;
+    cls = t?.kind === "class" ? concrete(t.name) : undefined;
   }
   const leaf = path0.at(-1)!;
   const prop = cls ? schema.classes[cls]?.props[leaf] : undefined;

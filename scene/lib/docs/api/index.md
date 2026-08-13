@@ -207,6 +207,7 @@ type LoadOptions = {
      path: string;
      renderer: unknown;
   };
+  lightmap?: boolean;
   load?: Loader;
   manager?: LoadingManager;
   registry?: Record<string, any>;
@@ -222,6 +223,7 @@ type LoadOptions = {
 | <a id="ktx2"></a> `ktx2?` | \{ `path`: `string`; `renderer`: `unknown`; \} | transcoder path + the renderer whose support is probed, for gltf() files with ktx2 textures |
 | `ktx2.path` | `string` | - |
 | `ktx2.renderer` | `unknown` | - |
+| <a id="lightmap"></a> `lightmap?` | `boolean` | `false` ignores the sheet's own `@bakery { lightmap }`. What the baker passes — it is the thing producing the atlas, and applying one mid-bake would zero the lights it is about to trace. |
 | <a id="load"></a> `load?` | [`Loader`](#loader) | - |
 | <a id="manager"></a> `manager?` | `LoadingManager` | shared LoadingManager — its onProgress/onLoad see every texture() and gltf() |
 | <a id="registry"></a> `registry?` | `Record`\<`string`, `any`\> | Constructors and constants by name, e.g. `{ water: Water }` — looked up before the sheet's own build-time imports. A sheet loaded from a string has none of those, so it needs the whole set: `import { threeRegistry } from "tscene/three"`. |
@@ -364,18 +366,22 @@ type MountOptions = LoadOptions & {
 
 ```ts
 type NodeBakery = {
-  enabled?: boolean;
+  density?: number;
+  enabled?: boolean | "occluder";
+  probe?: number;
   radius?: number;
 };
 ```
 
-A node's own `@bakery { … }`. `enabled` is inherited by the whole subtree unless a child overrides it.
+A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a child overrides them.
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="enabled"></a> `enabled?` | `boolean` | `false` keeps the node out of the bake — as an occluder *and* a receiver. On a light: stays live at runtime |
+| <a id="density"></a> `density?` | `number` | lightmap texels per world unit, relative to the rest of the scene. 2 gives this node twice the resolution in each direction — so four times the atlas area — and 0.5 a quarter of it. |
+| <a id="enabled"></a> `enabled?` | `boolean` \| `"occluder"` | `false` keeps the node out of the bake entirely — as an occluder *and* a receiver — and on a light means it stays live at runtime. `occluder` keeps it in the ray tracing but gives it no lightmap of its own, which is what a proxy or a mesh too big to unwrap wants. |
+| <a id="probe"></a> `probe?` | `number` | Bake a reflection probe at this node's world position: an equirectangular map of the radiance leaving every direction, `probe` texels wide and half that tall. A metal has no diffuse lobe for the atlas to light, so this is what it reflects instead. 256 is plenty for anything but a mirror. |
 | <a id="radius"></a> `radius?` | `number` | soft shadows: the light becomes a sphere of this world radius (a directional light reads radians) |
 
 ***
@@ -446,13 +452,18 @@ type RecordValue = Extract<Value, {
 
 ```ts
 type SceneBakery = {
+  ao?: boolean;
+  aoDistance?: number;
   batch?: number;
+  bias?: number;
   bounces?: number;
+  defaultAlbedo?: number;
   denoiseRadius?: number;
   dilateRadius?: number;
   exr?: boolean;
   include?: "all" | "none";
   indirect?: number;
+  lightmap?: string;
   name?: string;
   out?: string;
   padding?: number;
@@ -468,13 +479,18 @@ What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()`
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="ao"></a> `ao?` | `boolean` | also write `<name>.ao.png` and point the materials' `aoMap` at it |
+| <a id="aodistance"></a> `aoDistance?` | `number` | how far an occlusion ray looks for a blocker; 0 (the default) picks 5% of the scene diagonal |
 | <a id="batch"></a> `batch?` | `number` | - |
+| <a id="bias"></a> `bias?` | `number` | ray origin offset along the normal; 0 (the default) picks 1e-4 of the scene diagonal |
 | <a id="bounces"></a> `bounces?` | `number` | - |
+| <a id="defaultalbedo"></a> `defaultAlbedo?` | `number` | reflectance of a material with no `color` at all |
 | <a id="denoiseradius"></a> `denoiseRadius?` | `number` | - |
 | <a id="dilateradius"></a> `dilateRadius?` | `number` | - |
 | <a id="exr"></a> `exr?` | `boolean` | - |
 | <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` bakes every mesh but the ones that turn themselves off; `none` bakes only the ones that opt in |
 | <a id="indirect"></a> `indirect?` | `number` | - |
+| <a id="lightmap-1"></a> `lightmap?` | `string` | Runtime, not bake: the manifest `loadScene` applies to this sheet once it is built — what `tscene-bake` wrote with the settings above. The handle lands on `root.userData.lightmap`. Resolved against the sheet's url, and against the document for a sheet a bundler inlined (it has a file path, not a url). The manifest's own siblings — the png and the exr — are never bundled either, so a built app wants all three in `public/` and a path like `/lightmaps/room.lightmap.json`. |
 | <a id="name"></a> `name?` | `string` | - |
 | <a id="out"></a> `out?` | `string` | where to write, relative to the sheet |
 | <a id="padding"></a> `padding?` | `number` | - |
@@ -731,6 +747,32 @@ function className(name): string;
 | Parameter | Type |
 | ------ | ------ |
 | `name` | `string` |
+
+#### Returns
+
+`string`
+
+***
+
+### concrete()
+
+```ts
+function concrete(cls): string;
+```
+
+The class to resolve `a.b` against when `a`'s declared type is an abstract base. `Mesh.material` is
+declared `Material`, so `material.emissive: …` on a mesh inside a loaded glTF would not type-check
+even though every material a loader produces has it.
+
+ponytail: a table of one, and it widens rather than narrows — `material.emissive` on a mesh whose
+material really is a `MeshBasicMaterial` type-checks and then does nothing at runtime. Add entries
+as other abstract classes turn up in paths; a per-object check would need the loaded scene.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `cls` | `string` |
 
 #### Returns
 

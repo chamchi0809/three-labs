@@ -15,15 +15,16 @@
 // (5) is the colour-bleeding check and it is the sharpest one: with albedo 1 the red channel is a
 // furnace, so any energy the bounce loses or invents shows up as a deviation from PI.
 //
-// The probes are just positions and normals handed to trace() — they are not in the BVH, so they
-// measure without occluding. Then one real bake at the end, to catch the wiring between the stages.
+// The measurement points are just positions and normals handed to trace() — they are not in the BVH,
+// so they measure without occluding. Then a reflection probe, whose texels are radiance rather than
+// irradiance, and one real bake at the end to catch the wiring between the stages.
 import assert from "node:assert/strict";
 import * as THREE from "three/webgpu";
 import { albedoAtlas, bake, reuseAtlas, subset } from "./bake.ts";
 import { createHeadlessRenderer, hasWebGPU } from "./headless.ts";
 import { rasterize, type Texels } from "./raster.ts";
 import { collectScene } from "./scene.ts";
-import { trace } from "./tracer.ts";
+import { trace, traceProbes } from "./tracer.ts";
 
 /** View factor from a differential element to a parallel square of side 2a, centred h above it. */
 function squareViewFactor(a: number, h: number): number {
@@ -74,14 +75,23 @@ if (!(await hasWebGPU())) {
 
 const renderer = await createHeadlessRenderer();
 
-/** Irradiance per probe, as [r, g, b] triples. */
+/**
+ * Irradiance per probe, as [r, g, b] triples. The divisor is the requested sample count — `.w` of the
+ * accumulator is openness, not a running count, so nothing on the GPU has to be read back to know it.
+ */
 async function measure(root: THREE.Object3D, list: Probe[], samples: number, bounces: number, indirect = 1) {
   const raw = await trace(renderer, collectScene(root), probes(list), { samples, bounces, batch: 256, indirect });
   return list.map((_, i) => {
-    const n = raw[i * 4 + 3];
-    assert.equal(n, samples, "every probe must accumulate exactly the requested sample count");
-    return [raw[i * 4] / n, raw[i * 4 + 1] / n, raw[i * 4 + 2] / n] as [number, number, number];
+    const open = raw[i * 4 + 3] / samples;
+    assert.ok(open >= 0 && open <= 1 + 1e-6, `openness must be a fraction of the samples, got ${open}`);
+    return [raw[i * 4] / samples, raw[i * 4 + 1] / samples, raw[i * 4 + 2] / samples] as [number, number, number];
   });
+}
+
+/** Cosine-weighted openness per probe — exactly what the occlusion atlas holds. */
+async function openness(root: THREE.Object3D, list: Probe[], samples: number, aoDistance: number) {
+  const raw = await trace(renderer, collectScene(root), probes(list), { samples, bounces: 0, batch: 256, aoDistance });
+  return list.map((_, i) => raw[i * 4 + 3] / samples);
 }
 
 const close = (got: number, want: number, tol: number, what: string) =>
@@ -115,6 +125,70 @@ const close = (got: number, want: number, tol: number, what: string) =>
   // a 45-degree surface takes cos(45) of it, and nothing about the falloff should change that
   const [tilted] = await measure(root, [{ p: [10, 0, 0], n: [Math.SQRT1_2, Math.SQRT1_2, 0] }], 64, 0);
   close(tilted[0], Math.SQRT1_2, 1e-5, "cosine term");
+}
+
+// --- a see-through occluder attenuates the shadow ray instead of stopping it -----------------------
+//
+// Direct light through a delta light is analytic, so the expected transmittance is a product of
+// coverages and nothing here is noisy. The last probe is the documented ceiling: the layered walk
+// gives up after SHADOW_LAYERS surfaces and calls itself blocked.
+{
+  const root = new THREE.Group();
+  const glass = () => new THREE.MeshStandardMaterial({ color: 0x000000, transparent: true, opacity: 0.25 });
+  root.add(plane(1, 4, true, glass()), plane(2, 4, true, glass()));
+  // glTF glass: `transmission` alone, no opacity and not transparent
+  const pane = plane(1, 4, true, new THREE.MeshPhysicalMaterial({ color: 0x000000, transmission: 0.9 }));
+  pane.position.x = 10;
+  root.add(pane);
+  for (let i = 1; i <= 5; i++) {
+    const layer = plane(i, 4, true, glass());
+    layer.position.x = -10;
+    root.add(layer);
+  }
+  const sun = new THREE.DirectionalLight(0xffffff, 1);
+  sun.position.set(0, 20, 0);
+  root.add(sun);
+
+  const [stacked, transmissive, clear, tooMany] = await measure(
+    root,
+    [
+      { p: [0, 0, 0], n: [0, 1, 0] },
+      { p: [10, 0, 0], n: [0, 1, 0] },
+      { p: [20, 0, 0], n: [0, 1, 0] },
+      { p: [-10, 0, 0], n: [0, 1, 0] },
+    ],
+    64,
+    0,
+  );
+  close(stacked[0], 0.75 * 0.75, 1e-5, "two panes of coverage 0.25 each");
+  close(transmissive[0], 0.9, 1e-5, "transmission 0.9 lets 0.9 of the ray through");
+  close(clear[0], 1, 1e-5, "nothing in the way");
+  close(tooMany[0], 0, 1e-6, "past SHADOW_LAYERS the ray reports blocked");
+}
+
+// --- ambient occlusion: the cosine-weighted fraction of the hemisphere nothing blocks -------------
+//
+// which is the view factor again, so the closed form is free: a square lid of half-side a at height h
+// covers exactly F of the cosine-weighted hemisphere, and openness is 1 - F.
+{
+  const root = new THREE.Group();
+  root.add(plane(2, 4, true, black()));
+  const F = squareViewFactor(2, 2);
+  const list: Probe[] = [
+    { p: [0, 0, 0], n: [0, 1, 0] }, // under the lid
+    { p: [10, 0, 0], n: [0, 1, 0] }, // clear of it
+  ];
+
+  const [under, clear] = await openness(root, list, 1 << 14, 10);
+  close(under, 1 - F, 0.02, "occlusion under a square lid");
+  // not exactly 1: from 8 units to the side the lid is still a sliver above the horizon, and 10 units
+  // of search reach it
+  close(clear, 1, 5e-3, "nothing overhead is as good as fully open");
+
+  // the lid is 2 units up, so a 1-unit search must not find it — this is the knob a room-scale bake
+  // turns down to stop distant walls darkening everything
+  const [ranged] = await openness(root, list, 1 << 12, 1);
+  close(ranged, 1, 1e-6, "a blocker past aoDistance does not occlude");
 }
 
 // --- 3 + 5: a uniform sky, and one bounce off a perfectly red floor -------------------------------
@@ -188,6 +262,9 @@ const close = (got: number, want: number, tol: number, what: string) =>
     bounces: 2,
     batch: 32,
     dilateRadius: 2,
+    ao: true,
+    // the lamp is 4 units up, well past the 5% of the scene diagonal aoDistance defaults to
+    aoDistance: 8,
     onProgress: (stage) => {
       if (stages.at(-1) !== stage) stages.push(stage);
     },
@@ -211,6 +288,19 @@ const close = (got: number, want: number, tol: number, what: string) =>
   }
   assert.ok(covered > 64, `expected a decent covered area, got ${covered} texels`);
   assert.ok(lit > 64, `the lamp should light the floor, got ${lit} lit texels`);
+
+  // the occlusion atlas rides on the same texels, and the floor under a lamp is not fully open
+  assert.ok(result.ao, "ao: true has to produce an atlas");
+  assert.equal(result.ao!.length, result.image.length);
+  assert.ok(
+    [...result.ao!].every((v) => v >= 0 && v <= 1),
+    "openness is a fraction, and the PNG writer clamps rather than scales",
+  );
+  const open = [...result.ao!].filter((_, i) => i % 4 === 0 && result.image[i + 3]! > 0);
+  assert.ok(
+    open.some((v) => v < 0.999) && open.some((v) => v > 0.5),
+    "a floor with a lamp over it is neither fully open nor fully closed",
+  );
 
   assert.deepEqual(
     result.manifest.meshes.map((m) => [m.key, m.vertices]),
@@ -309,6 +399,93 @@ const close = (got: number, want: number, tol: number, what: string) =>
   const before = mean(subset(texels, scene, ["floor"]), first.image);
   const after = mean(subset(texels, scene, ["floor"]), second.image);
   close(after, before * 2, before * 0.3, "twice the lamp is twice the irradiance on the retraced floor");
+}
+
+// --- a reflection probe: radiance per direction, mapped the way the runtime unmaps it --------------
+//
+// A probe texel is `L = emission + albedo/PI * E`, so an albedo-1 red floor under a sky of radiance 1
+// reads exactly 1 in red — the furnace of (5), seen from the other side. Which texel is which is the
+// part nothing else would catch: the mapping has to be the inverse of three's `equirectUV`, or every
+// reflection in the scene comes out rotated. A blue emissive patch lying on the floor is the landmark,
+// coplanar so it blocks none of the sky the rest of the floor is lit by.
+{
+  const root = new THREE.Group();
+  root.add(plane(0, 200, true, new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0 })));
+  root.add(new THREE.AmbientLight(0xffffff, Math.PI)); // == a sky of radiance 1
+  const patch = plane(0.01, 1.2, true, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x0000ff, emissiveIntensity: 3 }));
+  patch.position.x = 1.5;
+  root.add(patch);
+
+  const node = new THREE.Object3D();
+  node.name = "probe";
+  node.position.set(0, 1, 0);
+  Object.assign(node, { bakery: { probe: 16 } });
+  root.add(node);
+
+  const [equirect] = await traceProbes(renderer, collectScene(root), { samples: 512, bounces: 0, batch: 128 });
+  assert.ok(equirect, "the sheet placed a probe, so the bake captured one");
+  assert.deepEqual([equirect.width, equirect.height], [16, 8], "an equirect is twice as wide as it is tall");
+  const texel = (x: number, y: number) => [0, 1, 2].map((k) => equirect.image[(y * 16 + x) * 4 + k]!);
+
+  close(texel(4, 7)[0]!, 1, 1e-6, "the last row looks up, at nothing but sky");
+  close(texel(4, 7)[2]!, 1, 1e-6, "the last row looks up, at nothing but sky (b)");
+  close(texel(4, 0)[0]!, 1, 0.02, "row 0 looks down, at a floor that gives back all the red it gets");
+  close(texel(4, 0)[1]!, 0, 0.02, "and gives back none of the green");
+
+  // +x is u = 0.5, so the emissive patch 1.5 units along +x is straight ahead in the middle column
+  const [aheadR, , aheadB] = texel(8, 2);
+  close(aheadB!, 3, 0.02, "the middle column of row 2 looks at the patch, which emits 3");
+  close(aheadR!, 0, 0.02, "and the patch is black in red, so nothing but its emission is there");
+  const behind = texel(0, 2);
+  close(behind[2]!, 0, 0.02, "the opposite column looks at bare floor: no blue anywhere in it");
+  close(behind[0]!, 1, 0.02, "which is the same red as straight down");
+}
+
+// --- which row of an equirect three reads as "down" ----------------------------------------------------
+// The probe writer's whole convention rests on this: a DataTextureLoader (EXR, RGBE) hands back
+// `flipY: false`, and three then samples row 0 of the data at v = 0, which `equirectUV` reads as
+// straight down. Get it backwards and the metals reflect the floor as sky, which no in-memory check of
+// the probe itself can see.
+{
+  const [w, h] = [16, 8];
+  const data = new Float32Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    // row 0 red, last row green — the halves of the image, not of the sphere
+    data[i * 4 + (Math.floor(i / w) < h / 2 ? 0 : 1)] = 1;
+    data[i * 4 + 3] = 1;
+  }
+  const map = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+  map.flipY = false;
+  map.mapping = THREE.EquirectangularReflectionMapping;
+  map.minFilter = map.magFilter = THREE.NearestFilter;
+  map.generateMipmaps = false;
+  map.needsUpdate = true;
+
+  const sky = new THREE.Scene();
+  sky.background = map;
+  const eye = new THREE.PerspectiveCamera(20, 1, 0.1, 10);
+  eye.up.set(0, 0, 1);
+  const target = new THREE.RenderTarget(8, 8, { type: THREE.FloatType });
+  renderer.setRenderTarget(target);
+  const look = async (at: [number, number, number]) => {
+    eye.position.set(0, 0, 0);
+    eye.lookAt(...at);
+    eye.updateMatrixWorld(true);
+    renderer.render(sky, eye);
+    const px = (await renderer.readRenderTargetPixelsAsync(target, 0, 0, 8, 8)) as unknown as Float32Array;
+    let red = 0;
+    let green = 0;
+    for (let i = 0; i < 64; i++) (red += px[i * 4]!), (green += px[i * 4 + 1]!);
+    return { red: red / 64, green: green / 64 };
+  };
+  const down = await look([0, -1, 0]);
+  const up = await look([0, 1, 0]);
+  renderer.setRenderTarget(null);
+  target.dispose();
+  map.dispose();
+
+  assert.ok(down.red > down.green, "looking down reads row 0 of the data — which is where the bake puts v = 0");
+  assert.ok(up.green > up.red, "and looking up reads the last row");
 }
 
 console.log("bake.check.ts ok");

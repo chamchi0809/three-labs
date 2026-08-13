@@ -1,21 +1,23 @@
 /// <reference types="tscene/client" />
-// Two scenes, each shown twice over: lit by its baked atlas, or by the realtime lights the sheet
+// Three scenes, each shown twice over: lit by its baked atlas, or by the realtime lights the sheet
 // declares. [G] swaps between the two, [S] cycles the scene, and three's own inspector carries the
-// same switches plus the knobs that decide how a bake reads: lightmap gain, exposure, tone mapping.
+// same switches plus the knobs that decide how a bake reads: lightmap gain, exposure, tone mapping,
+// and the gain on the reflection probes the bake wrote for the metals.
 import * as THREE from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Inspector } from "three/addons/inspector/Inspector.js";
 import { loadScene, type SceneModule } from "tscene";
 import { applyLightmap, type Lightmap } from "tscene/bakery";
 import room from "../scenes/room.tscene";
+import pica from "../scenes/pica.tscene";
 import sponza from "../scenes/sponza.tscene";
 
 /** how a scene wants to be shown. The atlas carries irradiance, not a look, so this is per scene. */
-type View = { lightmap: number; exposure: number; toneMapping: THREE.ToneMapping };
+type View = { lightmap: number; exposure: number; toneMapping: THREE.ToneMapping; env: number };
 
 // Khronos PBR Neutral, not ACES. three's ACES is the Narkowicz curve, whose toe is ~0.21x near black,
 // and a bake's whole subject is what sits down there — the toe pushes the indirect term under a byte.
-const DEFAULT_VIEW: View = { lightmap: 1, exposure: 1, toneMapping: THREE.NeutralToneMapping };
+const DEFAULT_VIEW: View = { lightmap: 1, exposure: 1, toneMapping: THREE.NeutralToneMapping, env: 1 };
 
 type Entry = {
   name: string;
@@ -26,11 +28,28 @@ type Entry = {
   /** what to run when there is no lightmap on disk yet */
   bake: string;
   note?: string;
+  /** an attribution the asset's licence asks for, shown in the hud */
+  credit?: string;
   view?: Partial<View>;
 };
 
 const SCENES: Entry[] = [
   { name: "room", sheet: room, eye: [0.4, 1.7, 6.4], target: [0, 1.35, 0], maxDistance: 12, bake: "pnpm bake:bakery" },
+  // 170 meshes and 28 materials out of one glb, so the unwrap packs a real scene rather than nine quads.
+  // Its light is the diorama's own three emissive props plus the sky over the open corner, which the
+  // realtime pass can also do — what the atlas adds is the bounce between them, and the AO in the clutter.
+  {
+    name: "pica",
+    sheet: pica,
+    eye: [0.05, 1.7, 7.8],
+    target: [-0.6, 0.9, -0.9],
+    maxDistance: 24,
+    bake: "pnpm bake:bakery:pica",
+    credit: "Scene by SEED.EA · CC BY-NC 4.0",
+    // its screws, clamps and gauge front are metals: base colour white, metalness 1. three's lightMap
+    // feeds the diffuse lobe and a metal has none, so the atlas cannot light them at all — the sheet's
+    // `@bakery { probe }` is what they reflect instead, and `env` is the gain on it.
+  },
   // the model is fetched from a CDN, so the first switch to it sits on ~50 MB of glTF. Sponza is a sunlit
   // exterior seen from a shaded interior, so its 99th-percentile exposure sits far above what the arcades
   // read: it wants the gain and the headroom back, and a curve that keeps rolling instead of clamping.
@@ -85,7 +104,17 @@ let baked = true;
 // `lightmap` multiplies the manifest's exposure, `sun`/`sky` the intensity the sheet declares, so 1 is
 // "as authored" for all three. The light gains only bite in the realtime pass — a bake already froze
 // its lights in — which makes them the way to pick a value worth spending a rebake on.
-const tune = { lightmap: DEFAULT_VIEW.lightmap, sun: 1, sky: 1 };
+const tune = { lightmap: DEFAULT_VIEW.lightmap, sun: 1, sky: 1, env: DEFAULT_VIEW.env };
+
+/**
+ * The gain on the reflection probes the bake wrote — the specular half of it, which is the only half a
+ * metal can show. The handle owns which material gets which probe and the metalness split; a scene with
+ * no `@bakery { probe }` in it has nothing here to scale.
+ */
+function setEnv(intensity: number) {
+  tune.env = intensity;
+  if (current?.lightmap) current.lightmap.environment = intensity;
+}
 const view: { scene: number; baked: boolean; exposure: number; toneMapping: THREE.ToneMapping } = {
   scene: 0,
   baked: true,
@@ -115,6 +144,7 @@ function setToneMapping(next: THREE.ToneMapping) {
 function applyView(entry: Entry) {
   const wanted = { ...DEFAULT_VIEW, ...entry.view };
   tune.lightmap = wanted.lightmap;
+  setEnv(wanted.env);
   view.exposure = renderer.toneMappingExposure = wanted.exposure;
   setToneMapping(wanted.toneMapping);
 }
@@ -140,9 +170,11 @@ function setBaked(on: boolean) {
   }
 
   const entry = SCENES[index]!;
-  hud.textContent = lightmap
-    ? `[S] ${entry.name}   [G] ${baked ? "baked GI" : "realtime direct only"}\n${lightmap.width}px atlas, ${lightmap.meshes} meshes`
-    : `[S] ${entry.name}   realtime only`;
+  hud.textContent = [
+    lightmap ? `[S] ${entry.name}   [G] ${baked ? "baked GI" : "realtime direct only"}` : `[S] ${entry.name}   realtime only`,
+    lightmap && `${lightmap.width}px atlas, ${lightmap.meshes} meshes`,
+    entry.credit,
+  ].filter(Boolean).join("\n");
 }
 
 let pending = Promise.resolve();
@@ -187,6 +219,7 @@ const lightGroup = inspector.createParameters("lighting");
 lightGroup.add(tune, "lightmap", 0, 8, 0.05).name("lightmap ×").onChange(() => setBaked(baked)).listen();
 lightGroup.add(tune, "sun", 0, 4, 0.05).name("sun × (realtime)").onChange(() => setBaked(baked));
 lightGroup.add(tune, "sky", 0, 8, 0.05).name("sky × (realtime)").onChange(() => setBaked(baked));
+lightGroup.add(tune, "env", 0, 2, 0.05).name("env × (metals)").onChange(setEnv).listen();
 
 const outputGroup = inspector.createParameters("output");
 outputGroup.add(view, "exposure", 0, 6, 0.05).onChange((v) => (renderer.toneMappingExposure = v)).listen();

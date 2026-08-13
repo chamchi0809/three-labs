@@ -14,6 +14,7 @@
     "dev:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo dev",
     "bake:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo bake",
     "bake:bakery:sponza": "pnpm --filter tscene build && pnpm --filter bakery-demo bake:sponza",
+    "bake:bakery:pica": "pnpm --filter tscene build && pnpm --filter bakery-demo bake:pica",
     "docs": "pnpm --filter tscene docs"
   },
   "devDependencies": {

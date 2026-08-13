@@ -14,10 +14,16 @@ Every option below can also live in the scene's own \`@bakery { … }\` block; a
   --bounces <n>        diffuse bounces (default 4)
   --indirect <gain>    gain on everything past the first bounce (default 1)
   --batch <n>          paths per dispatch (default 32)
-  --padding <texels>   space around each chart (default 2)
+  --bias <units>       ray origin offset along the normal; 0 picks 1e-4 of the scene diagonal
+  --padding <texels>   space around each chart (default: --dilate)
   --texels-per-unit <n>  fixed lightmap density; 0 fits the atlas (default 0)
   --denoise <radius>   edge-aware blur, 0 to disable (default 1)
   --dilate <texels>    lit-region growth past chart edges (default 4)
+  --default-albedo <n>   reflectance of a material with no colour at all (default 0.8)
+  --include <all|none>   bake every mesh, or only the ones with \`@bakery { enabled: true }\`
+  --ao                 also write <name>.ao.png and put it on the materials' aoMap
+  --ao-distance <units>  how far an occlusion ray looks; 0 picks 5% of the scene diagonal
+  --jobs <n>           worker threads for the rasterizer (default: one per core)
   --exr                also write 32-bit float irradiance
   --only <keys>        re-trace only these meshes (comma separated), keeping the rest of the
                        atlas that is already there. Needs a previous bake made with --exr.
@@ -33,15 +39,26 @@ const { values, positionals } = parseArgs({
     bounces: { type: "string" },
     indirect: { type: "string" },
     batch: { type: "string" },
+    bias: { type: "string" },
     padding: { type: "string" },
     "texels-per-unit": { type: "string" },
     denoise: { type: "string" },
     dilate: { type: "string" },
+    "default-albedo": { type: "string" },
+    include: { type: "string" },
+    ao: { type: "boolean" },
+    "ao-distance": { type: "string" },
+    jobs: { type: "string" },
     exr: { type: "boolean" },
     only: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
+
+if (values.include !== undefined && values.include !== "all" && values.include !== "none") {
+  process.stderr.write(`tscene-bake: --include expects "all" or "none", got ${JSON.stringify(values.include)}\n`);
+  process.exit(1);
+}
 
 if (values.help || positionals.length !== 1) {
   process.stdout.write(USAGE);
@@ -70,6 +87,8 @@ const started = Date.now();
 let stage = "";
 let stageStart = started;
 let fraction = 0;
+// a stage reports 1 twice: once when its last item is done, once when the stage itself returns
+let finished = "";
 
 /** `trace  42% · 1m03s · 1m24s left`. Only trace reports a fraction; the rest just show elapsed. */
 const render = () => {
@@ -93,10 +112,18 @@ const result = await bakeSceneFile(positionals[0]!, {
   bounces: num("bounces", values.bounces),
   indirect: num("indirect", values.indirect),
   batch: num("batch", values.batch),
+  bias: num("bias", values.bias),
   padding: num("padding", values.padding),
   texelsPerUnit: num("texels-per-unit", values["texels-per-unit"]),
   denoiseRadius: num("denoise", values.denoise),
   dilateRadius: num("dilate", values.dilate),
+  defaultAlbedo: num("default-albedo", values["default-albedo"]),
+  include: values.include as "all" | "none" | undefined,
+  ao: values.ao,
+  aoDistance: num("ao-distance", values["ao-distance"]),
+  jobs: num("jobs", values.jobs),
+  // a warning mid-progress has to start its own line or the rewriting one eats it
+  onWarn: (message) => process.stderr.write(`${tty ? "\r" : ""}${`tscene-bake: ${message}`.padEnd(48)}\n`),
   onProgress: (next, done) => {
     if (next !== stage) {
       stage = next;
@@ -104,6 +131,8 @@ const result = await bakeSceneFile(positionals[0]!, {
     }
     fraction = done;
     if (done >= 1) {
+      if (finished === next) return;
+      finished = next;
       process.stderr.write(`${tty ? "\r" : ""}${`${next} done in ${clock(Date.now() - stageStart)}`.padEnd(48)}\n`);
     } else if (tty) {
       paint();

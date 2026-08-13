@@ -35,7 +35,14 @@ function default(options?): {
   transform: Promise<
      | {
      code: string;
-     map: null;
+     map: {
+        file: string;
+        mappings: string;
+        names: never[];
+        sources: string[];
+        sourcesContent: string[];
+        version: number;
+     };
    }
     | null>;
 };
@@ -56,7 +63,14 @@ function default(options?): {
   transform: Promise<
      | {
      code: string;
-     map: null;
+     map: {
+        file: string;
+        mappings: string;
+        names: never[];
+        sources: string[];
+        sourcesContent: string[];
+        version: number;
+     };
    }
     | null>;
 }
@@ -66,4 +80,4 @@ function default(options?): {
 | ------ | ------ | ------ |
 | `name` | `string` | `"tscene"` |
 | `configResolved()` | (`config`) => `void` | - |
-| `transform()` | (`code`, `id`) => `Promise`\< \| \{ `code`: `string`; `map`: `null`; \} \| `null`\> | - |
+| `transform()` | (`code`, `id`) => `Promise`\< \| \{ `code`: `string`; `map`: \{ `file`: `string`; `mappings`: `string`; `names`: `never`[]; `sources`: `string`[]; `sourcesContent`: `string`[]; `version`: `number`; \}; \} \| `null`\> | - |

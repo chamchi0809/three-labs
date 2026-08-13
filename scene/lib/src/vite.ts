@@ -170,7 +170,14 @@ export default function threeScene(options: PluginOptions = {}) {
       );
       // an edited sheet re-runs this module, re-registers itself, and pokes every listener
       if (hot) lines.push(`if (import.meta.hot) import.meta.hot.accept((m) => m && __sceneChanged(m.default));`);
-      return { code: lines.join("\n"), map: null };
+      // an empty mappings list, not `map: null`: null makes vite fall back to treating the generated
+      // module as its own source, so a stack frame from it pointed at whatever line of the sheet
+      // happened to share the number. This says "no line of the output maps to the sheet" instead,
+      // which is the truth — the generated module is not a transform of the sheet's syntax.
+      return {
+        code: lines.join("\n"),
+        map: { version: 3, file, sources: [file], sourcesContent: [code], names: [], mappings: "" },
+      };
     },
   };
 }

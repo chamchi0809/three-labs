@@ -1,9 +1,9 @@
 // Runtime loader: .tscene source -> live three objects. Browser-safe.
 //
-// Nothing here reaches into three by name at runtime: the four values below are the only ones this
-// module imports, and every class a sheet mentions arrives through a registry the vite plugin built
-// at compile time. That is what lets a bundler tree-shake three down to what the scene actually uses.
-import { AnimationClip, AnimationMixer, Group, TextureLoader } from "three/webgpu";
+// Nothing here reaches into three by name at runtime: the handful of values below are the only ones
+// this module imports, and every class a sheet mentions arrives through a registry the vite plugin
+// built at compile time. That is what lets a bundler tree-shake three down to what the scene uses.
+import { AnimationClip, AnimationMixer, Group, SRGBColorSpace, TextureLoader } from "three/webgpu";
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
 import { className } from "./names.ts";
@@ -49,6 +49,11 @@ export type LoadOptions = {
   draco?: string;
   /** transcoder path + the renderer whose support is probed, for gltf() files with ktx2 textures */
   ktx2?: { path: string; renderer: unknown };
+  /**
+   * `false` ignores the sheet's own `@bakery { lightmap }`. What the baker passes — it is the thing
+   * producing the atlas, and applying one mid-bake would zero the lights it is about to trace.
+   */
+  lightmap?: boolean;
 };
 
 const documentBase = () => (typeof document !== "undefined" ? document.baseURI : "file:///");
@@ -126,7 +131,23 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
   ctx.settled = true;
   for (const replay of ctx.deferred) await replay();
   if (ctx.mixers.length) root.userData.mixers = ctx.mixers;
+  await applySheetLightmap(root, ctx);
   return root;
+}
+
+/**
+ * `@bakery { lightmap: "…/room.lightmap.json" }` — the bake this sheet was made for, applied as soon as
+ * the tree exists so a scene ships lit without the demo wiring it up. The handle lands on
+ * `root.userData.lightmap` (that is where you reach for `.intensity` / `.enabled`), and
+ * {@link disposeScene} disposes it.
+ *
+ * The import is dynamic on purpose: a sheet with no lightmap must not pull the bakery into the bundle.
+ */
+async function applySheetLightmap(root: Group, ctx: Ctx): Promise<void> {
+  const url = (root as { bakery?: { lightmap?: unknown } }).bakery?.lightmap;
+  if (ctx.opts.lightmap === false || typeof url !== "string") return;
+  const { applyLightmap } = await import("./bakery/apply.ts");
+  root.userData.lightmap = await applyLightmap(root, resolveUrl(url, ctx.opts.base), { manager: ctx.opts.manager });
 }
 
 /** `file:line:col` for a diagnostic — an offset alone is useless in a browser console */
@@ -164,9 +185,19 @@ export function shareAssets(root: Object3D): void {
     if (o.geometry) cached.add(o.geometry);
     for (const material of [o.material].flat().filter(Boolean)) {
       cached.add(material as object);
-      for (const v of Object.values(material as object)) if ((v as any)?.isTexture) cached.add(v as object);
+      for (const t of textures(material as object)) cached.add(t);
     }
   });
+}
+
+/**
+ * The textures a material holds. `.flat()` because a slot may be a list — `MeshPhysicalNodeMaterial`
+ * and anything hand-written can keep an array of maps, and those used to be walked past and leaked.
+ */
+function textures(material: object): object[] {
+  return Object.values(material)
+    .flat()
+    .filter((v) => (v as any)?.isTexture) as object[];
 }
 
 /**
@@ -175,11 +206,18 @@ export function shareAssets(root: Object3D): void {
  * asset cache is left alone: it is shared with every other use of the same url.
  */
 export function disposeScene(root: Object3D): void {
+  // the atlas this sheet loaded itself is the scene's too, and it holds the materials it patched
+  (root.userData.lightmap as { dispose?: () => void } | undefined)?.dispose?.();
   root.traverse((o: any) => {
     if (!cached.has(o.geometry)) o.geometry?.dispose?.();
+    // a scene() node owns its background/environment, and neither is a material slot — the two most
+    // expensive textures a sheet can hold used to be the two nothing freed
+    for (const slot of [o.background, o.environment]) {
+      if (slot?.isTexture && !cached.has(slot)) slot.dispose();
+    }
     for (const material of [o.material].flat().filter(Boolean)) {
       if (cached.has(material as object)) continue;
-      for (const v of Object.values(material as object)) if ((v as any)?.isTexture && !cached.has(v as object)) (v as any).dispose();
+      for (const t of textures(material as object)) if (!cached.has(t)) (t as any).dispose();
       (material as any).dispose?.();
     }
   });
@@ -231,8 +269,13 @@ export async function mountScene(parent: Object3D, src: string | SceneModule, op
   // a hot update during a load — or a slow gltf — would otherwise leave two roots racing to be added
   let pending = Promise.resolve();
 
+  let gone = false;
+
   const build = async () => {
     const next = await loadScene(src, opts);
+    // dispose() may have landed while this build was still loading its gltfs — adding the root now
+    // would put a scene nobody holds back on screen, and leak it
+    if (gone) return disposeScene(next);
     if (current) disposeScene(current);
     parent.add((current = next));
     opts.onLoad?.(next);
@@ -259,6 +302,7 @@ export async function mountScene(parent: Object3D, src: string | SceneModule, op
     },
     reload: () => rebuild(),
     dispose() {
+      gone = true;
       stop?.();
       if (current) disposeScene(current);
       current = undefined;
@@ -322,7 +366,15 @@ const clipsOf = new WeakMap<object, AnimationClip[]>();
 const mixerOf = new WeakMap<object, AnimationMixer>();
 function asset<T>(url: string, load: () => Promise<T>): Promise<T> {
   let pending = assets.get(url) as Promise<T> | undefined;
-  if (!pending) assets.set(url, (pending = load()));
+  if (!pending) {
+    // a rejection must not be cached: one offline moment would otherwise fail every later reload,
+    // which is exactly when a hot-reloading editor asks again
+    pending = load().catch((e: unknown) => {
+      assets.delete(url);
+      throw e;
+    });
+    assets.set(url, pending);
+  }
   return pending;
 }
 
@@ -368,6 +420,8 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
     const source = await asset(url(), () => new TextureLoader(ctx.opts.manager).loadAsync(url()));
     target = source.clone(); // shares the decoded image, but each use gets its own wrap/repeat state
     target.needsUpdate = true;
+    // which slot this ends up in is not known yet, so the ones the sheet left alone are remembered
+    if (!o.body.some((m) => m.kind === "prop" && m.name === "colorSpace")) untagged.add(target);
   } else if (o.name === "gltf") {
     // ponytail: a cached gltf is cloned per use; skinned meshes need SkeletonUtils.clone if that ever comes up
     const gltf = await asset(url(), async () => {
@@ -390,6 +444,19 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   for (const m of o.body) await apply(target, m, ctx);
   return target;
 }
+
+/** textures from a `texture()` whose body did not state a `colorSpace`, so this module may pick one */
+const untagged = new WeakSet<object>();
+
+/**
+ * The texture slots three reads as colour. Everything left out (roughness, metalness, normals, ao,
+ * displacement, alpha, …) is data and has to stay linear.
+ * ponytail: three has no such table to import, so this one is by hand — add the slot if one is missing.
+ */
+const COLOR_SLOTS = new Set([
+  "map", "emissiveMap", "specularMap", "specularColorMap", "sheenColorMap", "matcap",
+  "background", "environment", "envMap", "lightMap",
+]);
 
 async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
   if (m.kind === "var") return;
@@ -424,6 +491,9 @@ async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
     if (owner == null) fail(`cannot set ${m.name}: ${seg} is not set`, m, ctx);
   }
   const leaf = path.at(-1)!;
+  // `map: texture("./wall.png")` is a colour, and TextureLoader hands every file back as raw data —
+  // so an untagged texture in a colour slot renders washed out until somebody types `colorSpace: srgb`
+  if (COLOR_SLOTS.has(leaf) && untagged.delete(value as object)) (value as { colorSpace: string }).colorSpace = SRGBColorSpace;
   // the checker catches this at build time; at runtime a typo would otherwise just sit on the object
   if (!(leaf in owner)) console.warn(`tscene: ${where(m, ctx.sheet)}: ${owner.constructor?.name ?? "object"} has no property ${JSON.stringify(leaf)}`);
   const current = owner[leaf];

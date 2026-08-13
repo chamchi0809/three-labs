@@ -9,6 +9,8 @@ export type BakeEmitter = {
   normals: Float32Array;
   /** per-triangle material index into BakeScene.materials */
   faceMaterial: Uint32Array;
+  /** the mesh's own uv0, 2 floats per vertex — what an albedo or emissive map is sampled with. */
+  uv?: Float32Array;
 };
 
 /** One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and its own lightmap uv). */
@@ -16,8 +18,8 @@ export type BakeMesh = BakeEmitter & {
   /** stable path from the bake root — the key both the manifest and applyLightmap() use */
   key: string;
   mesh: THREE.Mesh;
-  /** the mesh's own uv0, 2 floats per vertex — what an albedo map is sampled with. Absent: no uv0. */
-  uv?: Float32Array;
+  /** `@bakery { density }` — texel density relative to the rest of the scene. 1 (or absent) is the default. */
+  density?: number;
 };
 
 export type BakeMaterial = {
@@ -31,6 +33,15 @@ export type BakeMaterial = {
   map?: THREE.Texture;
   /** what one texel of {@link map} is multiplied by — colour × (1 - metalness). `albedo` is its mean. */
   mapScale?: [number, number, number];
+  /** the emissive map, sampled per triangle so a textured panel is not one flat colour */
+  emissiveMap?: THREE.Texture;
+  /** what one texel of {@link emissiveMap} is multiplied by. `emissive` already holds its mean. */
+  emissiveScale?: [number, number, number];
+  /**
+   * how much of a shadow ray this surface stops: 1 opaque, 0 invisible to light. Read from
+   * `opacity`/`transparent` and from the mean alpha of an `alphaMap`/cutout `map`.
+   */
+  coverage?: number;
 };
 
 /** 0 = directional, 1 = point, 2 = spot. Matches the `kind` the shader switches on. */
@@ -50,6 +61,15 @@ export type BakeLight = {
   radius: number;
 };
 
+/** `@bakery { probe }` on a node — a point the bake captures the radiance around. */
+export type BakeProbe = {
+  /** `nodeKey()` of the node that declared it */
+  key: string;
+  position: [number, number, number];
+  /** equirect width in texels; the height is half of it */
+  size: number;
+};
+
 /** Ambient + hemisphere lights collapse into a two-colour gradient that rays see when they escape. */
 export type BakeSky = {
   /** radiance looking along +axis */
@@ -64,6 +84,8 @@ export type BakeScene = {
   emitters: BakeEmitter[];
   materials: BakeMaterial[];
   lights: BakeLight[];
+  /** the reflection probes the sheet placed, in the order they were walked */
+  probes: BakeProbe[];
   sky: BakeSky;
   /** world-space bounds of everything collected, for picking a default ray bias */
   bounds: THREE.Box3;
@@ -99,12 +121,23 @@ export const bakerySettings = <T extends NodeBakery | MaterialBakery | SceneBake
 
 /**
  * Whether `o` is in the bake: its own `@bakery { enabled }`, or the nearest ancestor that states one.
- * `undefined` means nobody said, and the sheet's `include` decides.
+ * `undefined` means nobody said, and the sheet's `include` decides. `"occluder"` is in the ray tracing
+ * but gets no lightmap.
  */
-export function bakeEnabled(o: THREE.Object3D): boolean | undefined {
+export function bakeEnabled(o: THREE.Object3D): boolean | "occluder" | undefined {
+  return inherited(o, "enabled");
+}
+
+/** `@bakery { density }` — the nearest one at or above `o`, or `undefined` for the scene's own scale. */
+export function bakeDensity(o: THREE.Object3D): number | undefined {
+  const density = inherited(o, "density");
+  return density !== undefined && density > 0 ? density : undefined;
+}
+
+function inherited<K extends keyof NodeBakery>(o: THREE.Object3D, key: K): NodeBakery[K] {
   for (let n: THREE.Object3D | null = o; n; n = n.parent) {
-    const enabled = bakerySettings<NodeBakery>(n)?.enabled;
-    if (enabled !== undefined) return enabled;
+    const value = bakerySettings<NodeBakery>(n)?.[key];
+    if (value !== undefined) return value;
   }
   return undefined;
 }
@@ -140,6 +173,8 @@ export type CollectOptions = {
    * bakes only the ones that opt in. Defaults to the root's own `@bakery { include }`.
    */
   include?: "all" | "none";
+  /** where "this mesh cannot be baked" goes. Defaults to `console.warn`. */
+  onWarn?: (message: string) => void;
 };
 
 /** Walks the scene once and flattens everything the path tracer needs. Does not mutate `root`. */
@@ -150,6 +185,7 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   const emitters: BakeEmitter[] = [];
   const materials: BakeMaterial[] = [];
   const lights: BakeLight[] = [];
+  const probes: BakeProbe[] = [];
   const bounds = new THREE.Box3();
   const matIds = new Map<THREE.Material, number>();
   const sky: BakeSky = { up: [0, 0, 0], down: [0, 0, 0], axis: [0, 1, 0] };
@@ -159,10 +195,23 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   const lightDir = new THREE.Vector3();
 
   const byDefault = (opts.include ?? bakerySettings<SceneBakery>(root)?.include ?? "all") === "all";
+  const warn = opts.onWarn ?? ((message: string) => console.warn(`tscene/bakery: ${message}`));
+  /** materials the atlas will be written for and then thrown away by — see the warning below */
+  const metals = new Set<string>();
 
   // traverseVisible, not traverse: `traverse` ignores what the callback returns, so an invisible
   // group used to hide only itself and bake its children anyway
   root.traverseVisible((o) => {
+    // a probe is a place, not a thing: its own `@bakery { probe }` only, never inherited, and whatever
+    // else the node is (a group, an empty, a mesh) it still gets baked as itself
+    const size = bakerySettings<NodeBakery>(o)?.probe;
+    if (size !== undefined && size >= 4) {
+      v.setFromMatrixPosition(o.matrixWorld);
+      probes.push({ key: nodeKey(root, o), position: [v.x, v.y, v.z], size: Math.floor(size) });
+    } else if (size !== undefined) {
+      warn(`"${nodeKey(root, o)}" asks for a ${size}-texel probe, which is smaller than a mip — skipped`);
+    }
+
     const enabled = bakeEnabled(o);
     // a light is an input, not a receiver: `include: none` picks the meshes to bake, and only an
     // explicit `@bakery { enabled: false }` takes a light out (it stays live at runtime instead)
@@ -173,9 +222,19 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
       else collectLight(o as THREE.Light, lights, sky);
       return;
     }
-    if (!(enabled ?? byDefault)) return;
+    if (enabled === false || (enabled === undefined && !byDefault)) return;
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || (mesh as unknown as { isSkinnedMesh?: boolean }).isSkinnedMesh) return;
+    if (!mesh.isMesh) return;
+
+    // a lightmap is one uv1 per vertex of one geometry, which neither of these has: an instance has
+    // many transforms behind that geometry, a skinned mesh a pose the bake never sees. Silence here
+    // used to look like a bake that worked.
+    const brand = mesh as unknown as Record<string, boolean | undefined>;
+    const unbakeable = brand.isSkinnedMesh ? "skinned" : brand.isInstancedMesh ? "instanced" : brand.isBatchedMesh ? "batched" : undefined;
+    if (unbakeable) {
+      warn(`"${nodeKey(root, mesh)}" is ${unbakeable} and cannot carry a lightmap — left out of the bake`);
+      return;
+    }
 
     const geometry = bakeGeometry(mesh);
     const position = geometry.getAttribute("position");
@@ -210,22 +269,34 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
       }
     }
 
-    meshes.push({
-      key: nodeKey(root, mesh),
-      mesh,
-      positions,
-      normals,
-      uv,
-      faceMaterial: faceMaterials(mesh, geometry, count / 3, materials, matIds, opts.defaultAlbedo ?? 0.8),
-    });
+    for (const m of ([] as THREE.Material[]).concat(mesh.material)) {
+      if (((m as THREE.MeshStandardMaterial).metalness ?? 0) >= 0.9) metals.add(m.name || nodeKey(root, mesh));
+    }
+
+    const faceMaterial = faceMaterials(mesh, geometry, count / 3, materials, matIds, opts.defaultAlbedo ?? 0.8);
+    // `enabled: occluder` is exactly an emitter: in the BVH, in the area-light list if it glows, and
+    // out of the atlas — so it needs no key, no unwrap and no uv1 at runtime
+    if (enabled === "occluder") emitters.push({ positions, normals, uv, faceMaterial });
+    else meshes.push({ key: nodeKey(root, mesh), mesh, positions, normals, uv, faceMaterial, density: bakeDensity(mesh) });
   });
+
+  // three's diffuse colour is `albedo * (1 - metalness)`, and the lightmap only ever multiplies that:
+  // a metal renders the atlas' irradiance as black however well the trace went. A probe is the fix —
+  // a metal reflects, and reflections are what a diffuse lightmap is not.
+  if (metals.size && !probes.length) {
+    const names = [...metals].slice(0, 3).join(", ");
+    warn(
+      `${metals.size} material(s) are metalness >= 0.9 (${names}${metals.size > 3 ? ", …" : ""}) — three throws a ` +
+        `lightmap away on a metal, so place a reflection probe (\`@bakery { probe: 256 }\`) for them to reflect`,
+    );
+  }
 
   if (bounds.isEmpty()) bounds.set(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
   // a scene with no ambient at all still needs an axis for the sky gradient
   lightDir.set(sky.axis[0], sky.axis[1], sky.axis[2]);
   if (lightDir.lengthSq() < 1e-12) sky.axis = [0, 1, 0];
 
-  return { meshes, emitters, materials, lights, sky, bounds };
+  return { meshes, emitters, materials, lights, probes, sky, bounds };
 }
 
 /**
@@ -305,11 +376,14 @@ export function bvhProxy(scene: BakeScene, lightmapUV?: Float32Array[]): THREE.G
 
 /** Emissive triangles, flattened into an area-light list the tracer can importance-sample. */
 export type AreaLights = {
-  /** 3 vec4 per triangle: (a.xyz, cumulativeArea) (b.xyz, area) (c.xyz, materialId) */
+  /** 4 vec4 per triangle: (a.xyz, cumulativeArea) (b.xyz, area) (c.xyz, oneSided) (radiance.xyz, 0) */
   data: Float32Array;
   count: number;
   totalArea: number;
 };
+
+/** how many floats one triangle of {@link AreaLights.data} takes. The shader indexes with this too. */
+export const AREA_STRIDE = 16;
 
 export function areaLights(scene: BakeScene): AreaLights {
   const tris: number[] = [];
@@ -321,20 +395,42 @@ export function areaLights(scene: BakeScene): AreaLights {
 
   for (const m of [...scene.meshes, ...scene.emitters]) {
     for (let t = 0; t < m.faceMaterial.length; t++) {
-      const emissive = scene.materials[m.faceMaterial[t]]?.emissive;
-      if (!emissive || emissive[0] + emissive[1] + emissive[2] <= 0) continue;
+      const material = scene.materials[m.faceMaterial[t]!];
+      if (!material) continue;
+      // the radiance is baked into the record, not looked up per sample: a textured emissive panel
+      // is a different light per triangle, and the CDF has to weigh it that way
+      const radiance = triangleRadiance(material, m, t);
+      if (radiance[0] + radiance[1] + radiance[2] <= 0) continue;
       const o = t * 9;
-      a.set(m.positions[o], m.positions[o + 1], m.positions[o + 2]);
-      b.set(m.positions[o + 3], m.positions[o + 4], m.positions[o + 5]);
-      c.set(m.positions[o + 6], m.positions[o + 7], m.positions[o + 8]);
+      a.set(m.positions[o]!, m.positions[o + 1]!, m.positions[o + 2]!);
+      b.set(m.positions[o + 3]!, m.positions[o + 4]!, m.positions[o + 5]!);
+      c.set(m.positions[o + 6]!, m.positions[o + 7]!, m.positions[o + 8]!);
       const area = b.clone().sub(a).cross(c.clone().sub(a)).length() * 0.5;
       if (!(area > 0)) continue;
       totalArea += area;
       count++;
-      tris.push(a.x, a.y, a.z, totalArea, b.x, b.y, b.z, area, c.x, c.y, c.z, m.faceMaterial[t]);
+      tris.push(
+        a.x, a.y, a.z, totalArea,
+        b.x, b.y, b.z, area,
+        c.x, c.y, c.z, material.oneSided ? 1 : 0,
+        radiance[0]!, radiance[1]!, radiance[2]!, 0,
+      );
     }
   }
   return { data: new Float32Array(tris), count, totalArea };
+}
+
+/** `emissive` is the map's mean; one triangle of a textured panel gets its own texel instead. */
+function triangleRadiance(material: BakeMaterial, m: BakeEmitter, t: number): [number, number, number] {
+  const { emissiveMap, emissiveScale, emissive } = material;
+  if (!emissiveMap || !emissiveScale || !m.uv) return emissive;
+  const o = t * 6;
+  const texel = sampleTexture(
+    emissiveMap,
+    (m.uv[o]! + m.uv[o + 2]! + m.uv[o + 4]!) / 3,
+    (m.uv[o + 1]! + m.uv[o + 3]! + m.uv[o + 5]!) / 3,
+  );
+  return texel ? [texel[0] * emissiveScale[0], texel[1] * emissiveScale[1], texel[2] * emissiveScale[2]] : emissive;
 }
 
 /** Geometry with no normal attribute at all — flat-shade it rather than bake pitch black. */
@@ -421,14 +517,44 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
   if (!override && m.metalness !== undefined) albedo = [albedo[0] * diffuse, albedo[1] * diffuse, albedo[2] * diffuse];
 
   const intensity = m.emissiveIntensity ?? 1;
-  const emissive: [number, number, number] = m.emissive
+  // what one texel of the emissive map is multiplied by; with no map it is the radiance itself
+  const emissiveScale: [number, number, number] = m.emissive
     ? [m.emissive.r * intensity, m.emissive.g * intensity, m.emissive.b * intensity]
     : [0, 0, 0];
+  let emissive = emissiveScale;
+  if (m.emissiveMap) {
+    const mean = meanColor(m.emissiveMap);
+    if (mean) emissive = [emissiveScale[0] * mean[0], emissiveScale[1] * mean[1], emissiveScale[2] * mean[2]];
+  }
+
+  const coverage = coverageOf(m);
   return {
     albedo: albedo.map((c) => Math.min(1, Math.max(0, c))) as [number, number, number],
     emissive,
+    ...(m.emissiveMap ? { emissiveMap: m.emissiveMap, emissiveScale } : {}),
+    ...(coverage < 1 ? { coverage } : {}),
     ...(override || !m.map ? {} : { map: m.map, mapScale: base.map((c) => c * diffuse) as [number, number, number] }),
   };
+}
+
+/**
+ * How much of a shadow ray this material stops. A glass pane, a fence texture and a scrim all used to
+ * cast the shadow of a solid wall.
+ * ponytail: one number per material, from `opacity` and the map's mean alpha — no per-texel cutout in
+ * the shadow ray. A leaf card reads as uniform haze; sample the alpha map in `lm_visibility` if that
+ * ever shows.
+ */
+function coverageOf(m: THREE.MeshStandardMaterial): number {
+  let coverage = m.transparent ? Math.min(1, Math.max(0, m.opacity ?? 1)) : 1;
+  // glTF glass (KHR_materials_transmission) states `transmission` and leaves `transparent` false: an
+  // opaque-looking pane that light goes straight through
+  const transmission = (m as THREE.MeshPhysicalMaterial).transmission ?? 0;
+  coverage *= 1 - Math.min(1, Math.max(0, transmission));
+  // three reads alphaMap's green channel and map's alpha; a cutout leaves `transparent` false and
+  // states an alphaTest instead
+  if (m.alphaMap) coverage *= meanColor(m.alphaMap)?.[1] ?? 1;
+  else if ((m.transparent || (m.alphaTest ?? 0) > 0) && m.map) coverage *= meanColor(m.map)?.[3] ?? 1;
+  return coverage;
 }
 
 /**
@@ -456,11 +582,17 @@ const SRGB_TO_LINEAR = Float32Array.from({ length: 256 }, (_, i) => {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 });
 
+/** at most this many texels are read for a mean — a 4K map is 16M of them and this is one average. */
+const MEAN_SAMPLES = 4096;
+
 /**
- * Mean linear reflectance of an albedo map — the fallback for a texel the albedo atlas could not
- * cover (no uv0, no decoded image), and what metalness is read out of.
+ * Mean linear value of a texture, rgb + alpha — the fallback for a texel the albedo atlas could not
+ * cover (no uv0, no decoded image), and what metalness and coverage are read out of.
+ * ponytail: strides to {@link MEAN_SAMPLES} texels. A stride that lands on the same column of every
+ * tile of a repeating texture would read one stripe; make the step coprime with the width if that
+ * ever shows up.
  */
-function meanColor(texture: THREE.Texture): [number, number, number] | undefined {
+export function meanColor(texture: THREE.Texture): [number, number, number, number] | undefined {
   const image = texture.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;
   const data = image?.data;
   if (!data || data.length < 4) return undefined;
@@ -471,8 +603,11 @@ function meanColor(texture: THREE.Texture): [number, number, number] | undefined
   let r = 0;
   let g = 0;
   let b = 0;
+  let a = 0;
+  let n = 0;
   const px = Math.floor(data.length / 4);
-  for (let i = 0; i < px; i++) {
+  const stride = Math.max(1, Math.floor(px / MEAN_SAMPLES));
+  for (let i = 0; i < px; i += stride) {
     const o = i * 4;
     if (byte && srgb) {
       r += SRGB_TO_LINEAR[data[o]! & 255]!;
@@ -487,8 +622,11 @@ function meanColor(texture: THREE.Texture): [number, number, number] | undefined
       g += data[o + 1]!;
       b += data[o + 2]!;
     }
+    // alpha is never colour-encoded, so it is the raw channel either way
+    a += byte ? data[o + 3]! / 255 : data[o + 3]!;
+    n++;
   }
-  return [r / px, g / px, b / px];
+  return [r / n, g / n, b / n, a / n];
 }
 
 function collectLight(light: THREE.Light, lights: BakeLight[], sky: BakeSky): void {

@@ -1,21 +1,28 @@
 // node --experimental-strip-types src/raster.test.ts
 // The atlas arithmetic: nothing here touches a GPU, and every mistake in it is silent.
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as THREE from "three/webgpu";
 import { unwrap, type Atlas } from "./atlas.ts";
 import { albedoAtlas, reuseAtlas, subset } from "./bake.ts";
-import { rasterize } from "./raster.ts";
+import { rasterize, rasterizeParallel } from "./raster.ts";
 import {
   areaLights,
+  AREA_STRIDE,
   bakeGeometry,
   collectScene,
+  meanColor,
   nodeKey,
   validateBakery,
   type BakeMesh,
   type BakeScene,
 } from "./scene.ts";
 import { dilate } from "./filter.ts";
-import { applyLightmap, decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
+import { nearestProbe, probeDirection, probeDirections } from "./probe.ts";
+import { applyLightmap, decodeFloats, encodeFloats, MANIFEST_VERSION, type LightmapManifest } from "./apply.ts";
+import { readEXR, writeBake } from "./io.ts";
 import type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";
 
 /** what `@bakery { … }` leaves behind, written by hand — three's own types know nothing about it */
@@ -149,11 +156,13 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
 
   const area = areaLights(scene);
   assert.equal(area.count, 2, "the emissive panel contributes both of its triangles");
+  assert.equal(area.data.length, area.count * AREA_STRIDE);
   assert.ok(Math.abs(area.totalArea - 1) < 1e-5, "a 1x1 panel has unit area");
   assert.ok(Math.abs(area.data[3] - 0.5) < 1e-5, "the first triangle's cdf entry is its own area");
-  assert.equal(area.data[11], scene.meshes[1].faceMaterial[0], "material id travels with the triangle");
-  const radiance = scene.materials[area.data[11]].emissive;
-  assert.deepEqual(radiance, [3, 3, 3], "emissive is emissive * emissiveIntensity");
+  assert.ok(Math.abs(area.data[7] - 0.5) < 1e-5, "and slot 1 carries the area itself, not the running sum");
+  assert.equal(area.data[11], 0, "a mesh emits both ways; only a RectAreaLight is one-sided");
+  // the radiance rides along per triangle, so an emissiveMap can differ across one mesh
+  assert.deepEqual(Array.from(area.data.subarray(12, 15)), [3, 3, 3], "emissive is emissive * emissiveIntensity");
 }
 
 // --- bakeGeometry is deterministic, which is what lets the manifest be just uvs -------------------
@@ -372,6 +381,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
     emitters: [],
     materials,
     lights: [],
+    probes: [],
     sky: { up: [0, 0, 0], down: [0, 0, 0], axis: [0, 1, 0] },
     bounds: new THREE.Box3(),
   };
@@ -502,6 +512,291 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
 
   bakery(mesh, { enabld: true } as unknown as NodeBakery);
   assert.throws(() => validateBakery(root, "room.tscene"), /floor: @bakery has no node setting "enabld"/);
+}
+
+// --- the mean is strided, so the only thing that can go wrong is the divisor ---------------------------
+{
+  const flat = (w: number, h: number, rgba: number[]) => {
+    const data = new Uint8Array(w * h * 4);
+    for (let i = 0; i < w * h; i++) data.set(rgba, i * 4);
+    return new THREE.DataTexture(data, w, h);
+  };
+  // 4096 texels is exactly the sample budget (stride 1), 65536 is 16x over it (stride 16)
+  for (const [w, h] of [[64, 64], [256, 256]] as const) {
+    const mean = meanColor(flat(w, h, [128, 64, 0, 51]))!;
+    assert.ok(Math.abs(mean[0] - 128 / 255) < 1e-6, `${w}x${h} mean r`);
+    assert.ok(Math.abs(mean[1] - 64 / 255) < 1e-6, `${w}x${h} mean g`);
+    assert.ok(Math.abs(mean[3] - 51 / 255) < 1e-6, `${w}x${h} mean alpha — never sRGB-decoded`);
+  }
+  const srgb = flat(8, 8, [188, 188, 188, 255]);
+  srgb.colorSpace = THREE.SRGBColorSpace;
+  assert.ok(Math.abs(meanColor(srgb)![0] - 0.5) < 0.01, "an sRGB map is averaged in linear");
+}
+
+// --- coverage: a transparent material stops less of a shadow ray ---------------------------------------
+{
+  const root = new THREE.Group();
+  const glass = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.25 }),
+  );
+  glass.name = "glass";
+  const solid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  solid.name = "solid";
+  // a cutout: alphaTest, not transparent, and the alpha lives in the map
+  const pixels = new Uint8Array([255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0]);
+  const fence = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshStandardMaterial({ map: new THREE.DataTexture(pixels, 2, 2), alphaTest: 0.5 }),
+  );
+  fence.name = "fence";
+  // glTF glass: transmission, and nothing else says it is see-through
+  const pane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshPhysicalMaterial({ transmission: 0.9 }));
+  pane.name = "pane";
+  root.add(glass, solid, fence, pane);
+
+  const scene = collectScene(root);
+  // absent means 1: the tracer only builds its layered shadow ray when some material states one
+  const coverage = (mesh: number) => scene.materials[scene.meshes[mesh]!.faceMaterial[0]!]!.coverage ?? 1;
+  assert.equal(coverage(0), 0.25, "opacity is how much of the ray gets through");
+  assert.equal(coverage(1), 1, "an opaque material stops all of it");
+  assert.ok(Math.abs(coverage(2)! - 0.5) < 1e-6, "a half-cut alpha map halves it");
+  assert.ok(Math.abs(coverage(3)! - 0.1) < 1e-6, "transmission alone is enough to make it see-through");
+}
+
+// --- occluder, density and the meshes a bake cannot carry ----------------------------------------------
+{
+  const root = new THREE.Group();
+  const mesh = (name: string) => Object.assign(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial()), { name });
+  const proxy = bakery(mesh("proxy"), { enabled: "occluder" } satisfies NodeBakery);
+  const group = new THREE.Group();
+  group.name = "detail";
+  bakery(group, { density: 2 } satisfies NodeBakery);
+  const child = mesh("child");
+  const coarse = bakery(mesh("coarse"), { density: 0.5 } satisfies NodeBakery);
+  group.add(child, coarse);
+  const skinned = Object.assign(new THREE.SkinnedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial()), { name: "rig" });
+  root.add(proxy, group, skinned);
+
+  const warnings: string[] = [];
+  const scene = collectScene(root, { onWarn: (m) => warnings.push(m) });
+
+  assert.deepEqual(scene.meshes.map((m) => m.key), ["detail/child", "detail/coarse"], "an occluder takes no texels");
+  assert.equal(scene.emitters.length, 1, "but it is still in the BVH");
+  assert.equal(scene.emitters[0]!.positions.length, proxy.geometry.toNonIndexed().getAttribute("position").count * 3);
+  assert.equal(scene.meshes[0]!.density, 2, "density is inherited from the group");
+  assert.equal(scene.meshes[1]!.density, 0.5, "and a child overrides it");
+  assert.equal(warnings.length, 1, `expected one warning, got ${warnings.join(" / ")}`);
+  assert.match(warnings[0]!, /"rig" is skinned and cannot carry a lightmap/);
+}
+
+// --- a metal is baked and then thrown away, so it has to say so -----------------------------------------
+{
+  const root = new THREE.Group();
+  const chrome = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ metalness: 1 }));
+  chrome.material.name = "Metal_Blue";
+  const painted = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ metalness: 0.4 }));
+  root.add(chrome, painted);
+
+  const warnings: string[] = [];
+  collectScene(root, { onWarn: (m) => warnings.push(m) });
+  assert.equal(warnings.length, 1, `expected one warning, got ${warnings.join(" / ")}`);
+  assert.match(warnings[0]!, /1 material\(s\) are metalness >= 0\.9 \(Metal_Blue\)/);
+
+  // …unless the sheet placed something for it to reflect
+  const probe = bakery(new THREE.Object3D(), { probe: 64 } satisfies NodeBakery);
+  root.add(probe);
+  const quiet: string[] = [];
+  collectScene(root, { onWarn: (m) => quiet.push(m) });
+  assert.deepEqual(quiet, [], "a probe is the answer to the metal warning, so it stops asking");
+}
+
+// --- probes: where the sheet put them, and which direction each texel of one looks --------------------
+{
+  const root = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  mesh.name = "floor";
+  const here = bakery(new THREE.Object3D(), { probe: 64.7 } satisfies NodeBakery);
+  here.name = "here";
+  here.position.set(1, 2, 3);
+  const tiny = bakery(new THREE.Object3D(), { probe: 2 } satisfies NodeBakery);
+  tiny.name = "tiny";
+  root.add(mesh, here, tiny);
+  root.position.set(10, 0, 0);
+  root.updateMatrixWorld(true);
+
+  const warnings: string[] = [];
+  const scene = collectScene(root, { onWarn: (m) => warnings.push(m) });
+  assert.equal(scene.probes.length, 1, "one probe placed, one too small to be a mip");
+  assert.equal(scene.probes[0]!.key, "here");
+  assert.deepEqual(scene.probes[0]!.position, [11, 2, 3], "world space, not local — a probe is a place");
+  assert.equal(scene.probes[0]!.size, 64, "a fractional texel count is floored");
+  assert.match(warnings[0]!, /"tiny" asks for a 2-texel probe/);
+  assert.equal(scene.meshes.length, 1, "an empty carrying a probe is not a mesh to bake");
+
+  // the mapping has to be the exact inverse of three's `equirectUV`, or the reflection is rotated
+  const [width, height] = [16, 8];
+  const equirectUV = (d: readonly number[]) => [
+    Math.atan2(d[2]!, d[0]!) / (Math.PI * 2) + 0.5,
+    Math.asin(d[1]!) / Math.PI + 0.5,
+  ];
+  for (const [x, y] of [
+    [0, 0],
+    [5, 3],
+    [15, 7],
+  ] as const) {
+    const [u, v] = equirectUV(probeDirection(x, y, width, height));
+    assert.ok(Math.abs(u! * width - (x + 0.5)) < 1e-6, `u of texel ${x},${y} is ${u! * width}, want ${x + 0.5}`);
+    assert.ok(Math.abs(v! * height - (y + 0.5)) < 1e-6, `v of texel ${x},${y} is ${v! * height}, want ${y + 0.5}`);
+  }
+  assert.ok(probeDirection(0, 0, width, height)[1] < -0.9, "row 0 looks down, which is what the file's last row is");
+  assert.ok(probeDirection(0, height - 1, width, height)[1] > 0.9, "and the last row up");
+
+  const buffer = probeDirections(width, height);
+  assert.equal(buffer.length, width * height * 4, "four floats a texel, row major from the bottom");
+  const third = probeDirection(3, 0, width, height);
+  assert.ok(
+    third.every((c, k) => Math.abs(c - buffer[4 * 3 + k]!) < 1e-6),
+    `texel 3 of row 0 is ${[...buffer.subarray(12, 15)]}, want ${third}`,
+  );
+
+  // the runtime's half: nearest centre wins, and no probes means no reflection
+  const probes = [{ position: [0, 0, 0] }, { position: [10, 0, 0] }];
+  assert.equal(nearestProbe([1, 0, 0], probes), 0);
+  assert.equal(nearestProbe([9, 5, 0], probes), 1);
+  assert.equal(nearestProbe([5, 0, 0], probes), 0, "a tie goes to the first, deterministically");
+  assert.equal(nearestProbe([0, 0, 0], []), -1);
+}
+
+// --- a probe lands on the envMap of the metals in its cell, and comes back off on dispose -------------
+{
+  const root = new THREE.Group();
+  const chrome = new THREE.MeshStandardMaterial({ metalness: 1 });
+  const paint = new THREE.MeshStandardMaterial({ metalness: 0 });
+  const near = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chrome);
+  near.name = "near";
+  const far = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chrome);
+  far.name = "far";
+  far.position.set(100, 0, 0);
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), paint);
+  wall.name = "wall";
+  root.add(near, far, wall);
+  root.updateMatrixWorld(true);
+
+  const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  const probes = [new THREE.DataTexture(new Uint8Array(4), 1, 1), new THREE.DataTexture(new Uint8Array(4), 1, 1)];
+  const uv = encodeFloats(new Float32Array(12));
+  const manifest: LightmapManifest = {
+    version: MANIFEST_VERSION,
+    width: 8,
+    height: 8,
+    intensity: 1,
+    texture: "atlas.png",
+    meshes: ["near", "far", "wall"].map((key) => ({ key, vertices: 6, uv })),
+    probes: [
+      { key: "a", position: [0, 0, 0], texture: "a.exr" },
+      { key: "b", position: [100, 0, 0], texture: "b.exr" },
+    ],
+  };
+
+  const lightmap = await applyLightmap(root, { manifest, texture, probes });
+  assert.equal((wall.material as THREE.MeshStandardMaterial).envMap, null, "a dielectric's diffuse is in the atlas");
+  const a = near.material as THREE.MeshStandardMaterial;
+  const b = far.material as THREE.MeshStandardMaterial;
+  assert.notEqual(a, b, "one material, two cells: envMap is a per-material slot, so it has to be cloned");
+  assert.equal(a.envMap, probes[0]);
+  assert.equal(b.envMap, probes[1]);
+  assert.equal(a.envMapIntensity, 1, "metalness scales the gain, so a full metal reflects it all");
+
+  lightmap.environment = 0.25;
+  assert.equal(a.envMapIntensity, 0.25);
+  lightmap.enabled = false;
+  assert.equal(a.envMapIntensity, 0.25, "a metal reflects whether or not the diffuse atlas is showing");
+
+  lightmap.dispose();
+  assert.equal(near.material, chrome, "and the originals are handed back untouched");
+  assert.equal(chrome.envMap, null);
+}
+
+// --- the parallel rasterizer is the same rasterizer -----------------------------------------------------
+{
+  const { meshes, atlas } = quad();
+  const pair: BakeMesh[] = [
+    { ...meshes[0]!, key: "left" },
+    { ...meshes[0]!, key: "right" },
+  ];
+  const shift = (uv: Float32Array, u0: number) => Float32Array.from(uv, (c, i) => (i % 2 ? c : u0 + c / 2));
+  const uvs = [shift(atlas.uv[0]!, 0), shift(atlas.uv[0]!, 0.5)];
+  const one = rasterize(pair, { ...atlas, uv: uvs });
+  const many = await rasterizeParallel(pair, { ...atlas, uv: uvs }, { jobs: 2 });
+
+  assert.deepEqual(Array.from(many.index), Array.from(one.index), "workers cover the same texels");
+  assert.deepEqual(Array.from(many.mesh), Array.from(one.mesh), "and each texel keeps its owner");
+  assert.deepEqual(Array.from(many.position), Array.from(one.position));
+  assert.deepEqual(Array.from(many.normal), Array.from(one.normal));
+  assert.deepEqual(Array.from(many.uv), Array.from(one.uv));
+
+  let seen = 0;
+  await rasterizeParallel(pair, { ...atlas, uv: uvs }, { jobs: 2, onProgress: () => seen++ });
+  assert.equal(seen, 2, "one progress tick per mesh, wherever it was rasterized");
+}
+
+// --- a manifest from another build is refused, not read -------------------------------------------------
+{
+  const root = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  mesh.name = "floor";
+  root.add(mesh);
+  const manifest: LightmapManifest = {
+    version: MANIFEST_VERSION + 1,
+    width: 8,
+    height: 8,
+    intensity: 1,
+    texture: "atlas.png",
+    meshes: [{ key: "floor", vertices: 6, uv: encodeFloats(new Float32Array(12)) }],
+  };
+  await assert.rejects(
+    applyLightmap(root, { manifest, texture: new THREE.DataTexture(new Uint8Array(4), 1, 1) }),
+    /manifest version 2, this build reads 1 — rebake/,
+  );
+}
+
+// --- an EXR keeps the row order the bake produced ------------------------------------------------------
+// The one thing a probe cannot be checked for in memory: three samples an equirect `envMap` with
+// `flipY: false`, so v = 0 — straight down — has to be row 0 of the file too. A flip here turns the
+// floor into the sky and nothing else notices.
+{
+  const dir = await mkdtemp(join(tmpdir(), "tscene-io-"));
+  const row = (marker: number, width: number) => Array.from({ length: width * 4 }, (_, i) => (i % 4 === 3 ? 1 : marker));
+  const image = Float32Array.from([...row(0.25, 2), ...row(0.75, 2)]);
+  const probe = Float32Array.from([...row(1, 4), ...row(2, 4)]);
+  const files = await writeBake(
+    {
+      width: 2,
+      height: 2,
+      image,
+      probes: [{ key: "probe", position: [0, 1, 0], width: 4, height: 2, image: probe }],
+      exposure: 1,
+      utilization: 1,
+      manifest: { version: MANIFEST_VERSION, width: 2, height: 2, intensity: 1, meshes: [] },
+    },
+    dir,
+    "rows",
+    { exr: true },
+  );
+  assert.ok(files.some((f) => f.endsWith("rows.probe0.exr")), "one EXR per probe");
+
+  const back = await readEXR(join(dir, "rows.exr"));
+  assert.deepEqual(Array.from(back.image), Array.from(image), "the atlas EXR round trips row for row");
+
+  const { EXRLoader } = await import("three/addons/loaders/EXRLoader.js");
+  const buffer = await readFile(join(dir, "rows.probe0.exr"));
+  const decoded = new EXRLoader()
+    .setDataType(THREE.FloatType)
+    .parse(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)) as { data: Float32Array };
+  assert.equal(decoded.data[0], 1, "row 0 of the file is v = 0, which equirectUV reads as straight down");
+  assert.equal(decoded.data[4 * 4], 2, "and the row above it is the one above it");
+  await rm(dir, { recursive: true, force: true });
 }
 
 console.log("raster.test.ts ok");

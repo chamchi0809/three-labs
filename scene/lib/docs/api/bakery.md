@@ -12,12 +12,15 @@
 
 ```ts
 type Lightmap = {
+  ao?: THREE.Texture;
   enabled: boolean;
+  environment: number;
   height: number;
   intensity: number;
   lights: ReadonlyMap<THREE.Light, number>;
   manifest: LightmapManifest;
   meshes: number;
+  probes: readonly THREE.Texture[];
   texture: THREE.Texture;
   width: number;
   dispose: void;
@@ -30,12 +33,15 @@ A bake that is on a scene. Handed back by [applyLightmap](#applylightmap); there
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
+| <a id="ao"></a> `ao?` | `readonly` | `THREE.Texture` | the occlusion atlas, when the bake wrote one and it is on the materials' `aoMap` |
 | <a id="enabled"></a> `enabled` | `public` | `boolean` | `false` puts the scene back on its own lights: the atlas goes to zero and every light the bake accounted for gets the intensity it had when this handle was made. |
+| <a id="environment"></a> `environment` | `public` | `number` | Gain on the reflection probes, independent of [Lightmap.enabled](#enabled) — a metal reflects whether or not the diffuse atlas is showing. 1 is "as baked", 0 takes the probes off visually. |
 | <a id="height"></a> `height` | `readonly` | `number` | - |
 | <a id="intensity"></a> `intensity` | `public` | `number` | Gain on the exposure the bake wrote into the manifest, so 1 is "as baked". An 8-bit atlas of a scene whose bright end sits far above what matters wants this above 1. |
 | <a id="lights"></a> `lights` | `readonly` | `ReadonlyMap`\<`THREE.Light`, `number`\> | The lights the bake already contains → the intensity each had when the atlas was applied. A realtime pass scales these instead of snapshotting its own. |
 | <a id="manifest"></a> `manifest` | `readonly` | [`LightmapManifest`](#lightmapmanifest-1) | - |
 | <a id="meshes"></a> `meshes` | `readonly` | `number` | how many meshes the atlas reached |
+| <a id="probes"></a> `probes` | `readonly` | readonly `THREE.Texture`[] | the baked probes, in manifest order — on the `envMap` of every metallic material they reach |
 | <a id="texture"></a> `texture` | `readonly` | `THREE.Texture` | - |
 | <a id="width"></a> `width` | `readonly` | `number` | - |
 
@@ -59,6 +65,7 @@ Drops the atlas off the materials, restores the lights, and disposes a texture t
 
 ```ts
 type LightmapManifest = {
+  ao?: string;
   hdr?: string;
   height: number;
   intensity: number;
@@ -67,8 +74,13 @@ type LightmapManifest = {
      uv: string;
      vertices: number;
   }[];
+  probes?: {
+     key: string;
+     position: [number, number, number];
+     texture: string;
+  }[];
   texture: string;
-  version: 1;
+  version: number;
   width: number;
 };
 ```
@@ -98,13 +110,26 @@ const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", 
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="ao-1"></a> `ao?` | `string` | the ambient-occlusion PNG next to it, when the bake made one. Goes on `aoMap`. |
 | <a id="hdr"></a> `hdr?` | `string` | the float EXR next to it, when one was written — loaded instead of the PNG where support exists |
 | <a id="height-1"></a> `height` | `number` | - |
 | <a id="intensity-1"></a> `intensity` | `number` | `lightMapIntensity` that undoes the exposure baked into an 8-bit texture |
 | <a id="meshes-1"></a> `meshes` | \{ `key`: `string`; `uv`: `string`; `vertices`: `number`; \}[] | - |
+| <a id="probes-1"></a> `probes?` | \{ `key`: `string`; `position`: \[`number`, `number`, `number`\]; `texture`: `string`; \}[] | The reflection probes, in the order the bake walked them: an equirect EXR each, plus the world position it was captured at, which is what picks the one a mesh reflects. |
 | <a id="texture-1"></a> `texture` | `string` | texture file name, relative to the manifest |
-| <a id="version"></a> `version` | `1` | - |
+| <a id="version"></a> `version` | `number` | manifest format. This build writes and reads [MANIFEST\_VERSION](#manifest_version). |
 | <a id="width-1"></a> `width` | `number` | - |
+
+## Variables
+
+### MANIFEST\_VERSION
+
+```ts
+const MANIFEST_VERSION: 1 = 1;
+```
+
+The manifest format this build produces. A stale `*.lightmap.json` on disk is the most likely thing
+a project has lying around, and it used to be read as if it were current.
 
 ## Functions
 
@@ -140,7 +165,7 @@ check that the manifest belongs to this scene.
 | Parameter | Type |
 | ------ | ------ |
 | `root` | `Object3D` |
-| `source` | \| `string` \| \{ `manifest`: [`LightmapManifest`](#lightmapmanifest-1); `texture`: `Texture`; \} |
+| `source` | \| `string` \| \{ `ao?`: `Texture`\<`unknown`, `TextureEventMap`\>; `manifest`: [`LightmapManifest`](#lightmapmanifest-1); `probes?`: `Texture`\<`unknown`, `TextureEventMap`\>[]; `texture`: `Texture`; \} |
 | `opts` | \{ `hdr?`: `boolean`; `manager?`: `LoadingManager`; \} |
 | `opts.hdr?` | `boolean` |
 | `opts.manager?` | `LoadingManager` |
@@ -154,11 +179,12 @@ check that the manifest belongs to this scene.
 ### bakeEnabled()
 
 ```ts
-function bakeEnabled(o): boolean | undefined;
+function bakeEnabled(o): boolean | "occluder" | undefined;
 ```
 
 Whether `o` is in the bake: its own `@bakery { enabled }`, or the nearest ancestor that states one.
-`undefined` means nobody said, and the sheet's `include` decides.
+`undefined` means nobody said, and the sheet's `include` decides. `"occluder"` is in the ray tracing
+but gets no lightmap.
 
 #### Parameters
 
@@ -168,7 +194,7 @@ Whether `o` is in the bake: its own `@bakery { enabled }`, or the nearest ancest
 
 #### Returns
 
-`boolean` \| `undefined`
+`boolean` \| `"occluder"` \| `undefined`
 
 ***
 
@@ -301,7 +327,9 @@ const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", 
 
 ```ts
 function loadLightmap(url, opts?): Promise<{
+  ao?: Texture<unknown, TextureEventMap>;
   manifest: LightmapManifest;
+  probes: Texture<unknown, TextureEventMap>[];
   texture: Texture;
 }>;
 ```
@@ -321,9 +349,37 @@ Browser-side convenience — the baker writes both files with matching names.
 #### Returns
 
 `Promise`\<\{
+  `ao?`: `Texture`\<`unknown`, `TextureEventMap`\>;
   `manifest`: [`LightmapManifest`](#lightmapmanifest-1);
+  `probes`: `Texture`\<`unknown`, `TextureEventMap`\>[];
   `texture`: `Texture`;
 \}\>
+
+***
+
+### nearestProbe()
+
+```ts
+function nearestProbe(position, probes): number;
+```
+
+Which probe `position` reflects: the nearest one, or -1 when there are none.
+
+ponytail: nearest centre, so the probes partition the scene into Voronoi cells with no say from the
+author beyond where they put them. An influence volume per probe (Unity's box, Unreal's sphere) and a
+blend between the two nearest are the upgrade; both need a second field in the manifest, not a
+different shape here.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `position` | readonly `number`[] |
+| `probes` | readonly \{ `position`: readonly `number`[]; \}[] |
+
+#### Returns
+
+`number`
 
 ***
 
@@ -347,6 +403,38 @@ sheet. Two siblings sharing a name are told apart by their index, so a key is al
 #### Returns
 
 `string`
+
+***
+
+### probeDirection()
+
+```ts
+function probeDirection(
+   x, 
+   y, 
+   width, 
+   height): [number, number, number];
+```
+
+The direction texel `(x, y)` of a `width x height` equirect looks along, from its centre.
+
+The inverse of three's `equirectUV` — `u = atan2(z, x) / 2π + 0.5`, `v = asin(y) / π + 0.5` — which is
+what `PMREMGenerator.fromEquirectangular` samples the map with, so this is the mapping the runtime
+undoes. Row 0 looks straight down, and the writer flips the atlas on the way to the file, so the EXR's
+last scanline is the one under the probe.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `x` | `number` |
+| `y` | `number` |
+| `width` | `number` |
+| `height` | `number` |
+
+#### Returns
+
+\[`number`, `number`, `number`\]
 
 ## References
 

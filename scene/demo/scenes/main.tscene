@@ -35,7 +35,8 @@ group #stage {
     rotation: euler(0, 25deg, 0);
     find(mesh, "Body") { castShadow: true; }
     find(mesh, "Head") { castShadow: true; }
-    // Mesh.material is typed as Material, so only Material's own properties pass the checker here
+    // Mesh.material is typed as the abstract Material; the checker widens it to MeshPhysicalMaterial,
+    // so a slot the loaded material really lacks checks here and then quietly does nothing
     find#eye(mesh, "Eye") {
       material.transparent: true;
       material.opacity: 0.75;

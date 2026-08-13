@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "check": "node node_modules/tscene/dist/cli.js check scenes",
     "bake": "node node_modules/tscene/dist/bakery/cli.js scenes/room.tscene",
-    "bake:sponza": "node node_modules/tscene/dist/bakery/cli.js scenes/sponza.tscene"
+    "bake:sponza": "node node_modules/tscene/dist/bakery/cli.js scenes/sponza.tscene",
+    "bake:pica": "node node_modules/tscene/dist/bakery/cli.js scenes/pica.tscene"
   },
   "dependencies": {
     "tscene": "workspace:*"

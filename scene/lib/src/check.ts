@@ -2,7 +2,7 @@
 // Pure (no typescript / no three import) so it runs in the browser too.
 import type { Diagnostic, Member, ObjectValue, Pos, Template, Value } from "./parse.ts";
 import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
-import { ALIASES, BAKERY, BUILTINS, LOADERS, className, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, LOADERS, className, concrete, nodeName, type Knob } from "./names.ts";
 
 /** Levenshtein distance, two rows at a time */
 function distance(a: string, b: string): number {
@@ -349,7 +349,7 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
           reached = false;
           break;
         }
-        owner = into.name;
+        owner = concrete(into.name);
       }
       if (!reached) continue;
       const range = { start: m.start + m.name.length - leaf.length, end: m.start + m.name.length, file: m.file };

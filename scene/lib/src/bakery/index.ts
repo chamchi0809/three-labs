@@ -20,6 +20,7 @@
  * const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", samples: 1024 });
  * ```
  */
-export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, type Lightmap, type LightmapManifest } from "./apply.ts";
+export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, MANIFEST_VERSION, type Lightmap, type LightmapManifest } from "./apply.ts";
+export { nearestProbe, probeDirection } from "./probe.ts";
 export { bakeEnabled, bakeGeometry, bakerySettings, nodeKey } from "./scene.ts";
 export type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";

@@ -40,18 +40,50 @@ export type SceneBakery = {
   texelsPerUnit?: number;
   denoiseRadius?: number;
   dilateRadius?: number;
+  /** ray origin offset along the normal; 0 (the default) picks 1e-4 of the scene diagonal */
+  bias?: number;
+  /** reflectance of a material with no `color` at all */
+  defaultAlbedo?: number;
+  /** also write `<name>.ao.png` and point the materials' `aoMap` at it */
+  ao?: boolean;
+  /** how far an occlusion ray looks for a blocker; 0 (the default) picks 5% of the scene diagonal */
+  aoDistance?: number;
   /** where to write, relative to the sheet */
   out?: string;
   name?: string;
   exr?: boolean;
+  /**
+   * Runtime, not bake: the manifest `loadScene` applies to this sheet once it is built — what
+   * `tscene-bake` wrote with the settings above. The handle lands on `root.userData.lightmap`.
+   *
+   * Resolved against the sheet's url, and against the document for a sheet a bundler inlined (it has a
+   * file path, not a url). The manifest's own siblings — the png and the exr — are never bundled either,
+   * so a built app wants all three in `public/` and a path like `/lightmaps/room.lightmap.json`.
+   */
+  lightmap?: string;
 };
 
-/** A node's own `@bakery { … }`. `enabled` is inherited by the whole subtree unless a child overrides it. */
+/** A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a child overrides them. */
 export type NodeBakery = {
-  /** `false` keeps the node out of the bake — as an occluder *and* a receiver. On a light: stays live at runtime */
-  enabled?: boolean;
+  /**
+   * `false` keeps the node out of the bake entirely — as an occluder *and* a receiver — and on a light
+   * means it stays live at runtime. `occluder` keeps it in the ray tracing but gives it no lightmap of
+   * its own, which is what a proxy or a mesh too big to unwrap wants.
+   */
+  enabled?: boolean | "occluder";
   /** soft shadows: the light becomes a sphere of this world radius (a directional light reads radians) */
   radius?: number;
+  /**
+   * lightmap texels per world unit, relative to the rest of the scene. 2 gives this node twice the
+   * resolution in each direction — so four times the atlas area — and 0.5 a quarter of it.
+   */
+  density?: number;
+  /**
+   * Bake a reflection probe at this node's world position: an equirectangular map of the radiance
+   * leaving every direction, `probe` texels wide and half that tall. A metal has no diffuse lobe for
+   * the atlas to light, so this is what it reflects instead. 256 is plenty for anything but a mirror.
+   */
+  probe?: number;
 };
 
 /** A material's own `@bakery { … }`. */
@@ -79,13 +111,20 @@ export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>
     texelsPerUnit: { type: "number" },
     denoiseRadius: { type: "number" },
     dilateRadius: { type: "number" },
+    bias: { type: "number" },
+    defaultAlbedo: { type: "number" },
+    ao: { type: "boolean" },
+    aoDistance: { type: "number" },
     out: { type: "string" },
     name: { type: "string" },
     exr: { type: "boolean" },
+    lightmap: { type: "string" },
   },
   node: {
-    enabled: { type: "boolean" },
+    enabled: { type: "boolean", values: ["true", "false", "occluder"] },
     radius: { type: "number" },
+    density: { type: "number" },
+    probe: { type: "number" },
   },
   material: {
     albedo: { type: "numbers", length: 3 },
@@ -94,3 +133,14 @@ export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>
 
 export const className = (name: string) => ALIASES[name] ?? name[0]!.toUpperCase() + name.slice(1);
 export const nodeName = (cls: string) => cls[0]!.toLowerCase() + cls.slice(1);
+
+/**
+ * The class to resolve `a.b` against when `a`'s declared type is an abstract base. `Mesh.material` is
+ * declared `Material`, so `material.emissive: …` on a mesh inside a loaded glTF would not type-check
+ * even though every material a loader produces has it.
+ *
+ * ponytail: a table of one, and it widens rather than narrows — `material.emissive` on a mesh whose
+ * material really is a `MeshBasicMaterial` type-checks and then does nothing at runtime. Add entries
+ * as other abstract classes turn up in paths; a per-object check would need the loaded scene.
+ */
+export const concrete = (cls: string) => (cls === "Material" ? "MeshPhysicalMaterial" : cls);

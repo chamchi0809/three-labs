@@ -328,7 +328,9 @@ test("@bakery keys are checked per position", async () => {
   assert.match((await checkText(`@bakery { sise: 512 }`))[0]!, /no scene setting "sise"; did you mean size\?/);
   assert.match((await checkText(`mesh { @bakery { size: 512 }; }`))[0]!, /no node setting "size"/);
   assert.match((await checkText(`@bakery { size: "big" }`))[0]!, /@bakery size expects a number/);
-  assert.match((await checkText(`mesh { @bakery { enabled: 1 }; }`))[0]!, /@bakery enabled expects true or false/);
+  assert.match((await checkText(`mesh { @bakery { enabled: 1 }; }`))[0]!, /@bakery enabled expects true \| false \| occluder/);
+  // `occluder` is a third value of a boolean knob, and `density` the newest number one
+  assert.deepEqual(await checkText(`mesh { @bakery { enabled: occluder; density: 2 }; }`), []);
   assert.match((await checkText(`@bakery { include: some }`))[0]!, /@bakery include expects all \| none/);
   assert.match(
     (await checkText(`mesh { material: meshStandardMaterial { @bakery { albedo: [1, 1] }; }; }`))[0]!,
@@ -363,7 +365,10 @@ test("texture() and gltf() are loader-backed values", async () => {
 
 test("checks dotted paths, method calls and ref()", async () => {
   assert.deepEqual(await checkText(`mesh { material: meshStandardMaterial { }; material.opacity: 0.5; position.x: 1; }`), []);
-  assert.match((await checkText(`mesh { material.opacty: 0.5; }`))[0]!, /Material has no property "opacty"/);
+  assert.match((await checkText(`mesh { material.opacty: 0.5; }`))[0]!, /has no property "opacty"/);
+  // `Mesh.material` is declared as the abstract base, but a loaded mesh's material is a concrete one
+  assert.deepEqual(await checkText(`mesh { material.emissive: color(#fff); material.emissiveIntensity: 2; }`), []);
+  assert.deepEqual(await checkText(`gltf("./m.glb") { find(mesh, "x") { material.emissive: color(#fff); } }`), []);
   assert.match((await checkText(`mesh { visible.x: 1; }`))[0]!, /Mesh\.visible is not an object/);
   assert.deepEqual(await checkText(`mesh { lookAt(0, 1, 0); }`), []);
   assert.match((await checkText(`mesh { lookAt("x"); }`))[0]!, /argument .* expects/);
@@ -658,8 +663,123 @@ test("disposeScene frees what the sheet built and never what the asset cache own
   watch(asset.material, "asset.material");
   watch((asset.material as InstanceType<typeof MeshStandardMaterial>).map!, "asset.map");
 
+  // a scene()'s own sky, and a slot holding a list of textures: neither is reached by `material.map`
+  const sky = new Texture();
+  const layers = [new Texture(), new Texture()];
+  Object.assign(root, { background: sky });
+  Object.assign(own.material, { layers });
+  watch(sky, "sky");
+  layers.forEach((t, i) => watch(t, `layer${i}`));
+
   disposeScene(root);
-  assert.deepEqual(disposed.sort(), ["own.geometry", "own.map", "own.material"]);
+  assert.deepEqual(disposed.sort(), ["layer0", "layer1", "own.geometry", "own.map", "own.material", "sky"]);
+});
+
+/** three's ImageLoader wants a DOM; every texture in these tests is this 1x1 white pixel instead. */
+async function stubImages(load?: (url: string) => { fail?: boolean }): Promise<() => void> {
+  const THREE = await import("three/webgpu");
+  const original = THREE.ImageLoader.prototype.load;
+  THREE.ImageLoader.prototype.load = function (url: string, onLoad?: any, _p?: unknown, onError?: any) {
+    if (load?.(url)?.fail) onError?.(new Error(`cannot load ${url}`));
+    else onLoad?.({ width: 1, height: 1, data: new Uint8Array([255, 255, 255, 255]) });
+    return {} as any;
+  } as typeof THREE.ImageLoader.prototype.load;
+  return () => void (THREE.ImageLoader.prototype.load = original);
+}
+
+test("texture() is sRGB in a colour slot and raw everywhere else", async () => {
+  const restore = await stubImages();
+  try {
+    const root = await load(`mesh { material: meshStandardMaterial {
+      map: texture("./albedo.png");
+      roughnessMap: texture("./rough.png");
+      emissiveMap: texture("./glow.png") { colorSpace: "srgb-linear"; };
+    }; }`);
+    const material = (root.children[0] as any).material;
+    assert.equal(material.map.colorSpace, "srgb", "a colour map three would read washed out gets decoded");
+    assert.equal(material.roughnessMap.colorSpace, "", "data stays linear");
+    assert.equal(material.emissiveMap.colorSpace, "srgb-linear", "and a sheet that states one is left alone");
+  } finally {
+    restore();
+  }
+});
+
+test("a failed texture is not cached forever", async () => {
+  let attempts = 0;
+  const restore = await stubImages(() => ({ fail: ++attempts === 1 }));
+  try {
+    const sheet = `mesh { material: meshBasicMaterial { map: texture("./flaky.png"); }; }`;
+    await assert.rejects(load(sheet), /cannot load/);
+    const root = await load(sheet);
+    assert.equal(attempts, 2, "the second try must reach the loader, not the cached rejection");
+    assert.ok((root.children[0] as any).material.map.image);
+  } finally {
+    restore();
+  }
+});
+
+test("a mount disposed mid-build never puts its root on screen", async () => {
+  const { mountScene, __sceneRegister } = await import("./runtime.ts");
+  const { threeRegistry } = await import("./three.ts");
+  const { Group } = await import("three/webgpu");
+
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let calls = 0;
+  const mod = __sceneRegister({
+    source: `@import "./slow.tscene";\nmesh #box { }`,
+    file: "/p/race.tscene",
+    registry: threeRegistry,
+  });
+  const parent = new Group();
+  const mount = await mountScene(parent, mod, {
+    hmr: false,
+    // the second build is the slow one — a gltf still downloading is the real version of this
+    load: async () => {
+      if (++calls === 2) await gate;
+      return { text: `mesh #dep { }`, file: "/p/slow.tscene" };
+    },
+  });
+  assert.equal(parent.children.length, 1);
+
+  const reloading = mount.reload();
+  mount.dispose();
+  release();
+  await reloading;
+  assert.equal(parent.children.length, 0, "the build that landed after dispose() must not be added");
+  assert.equal(mount.root, undefined);
+});
+
+test("@bakery { lightmap } is applied to the sheet it names", async () => {
+  const { encodeFloats } = await import("./bakery/apply.ts");
+  const manifest = {
+    version: 1,
+    width: 1,
+    height: 1,
+    intensity: 2,
+    texture: "atlas.png",
+    meshes: [{ key: "floor", vertices: 6, uv: encodeFloats(new Float32Array(12)) }],
+  };
+  const upstream = globalThis.fetch;
+  const restore = await stubImages();
+  globalThis.fetch = (async () => new Response(JSON.stringify(manifest))) as typeof fetch;
+  try {
+    // an absolute url, because node has no document for a root-relative one to resolve against
+    const sheet = `@bakery { lightmap: "https://cdn.test/maps/room.lightmap.json" }
+      mesh #floor { geometry: planeGeometry(1, 1); material: meshStandardMaterial { }; }`;
+    const root = await load(sheet);
+    const lightmap = root.userData.lightmap as { texture: unknown } | undefined;
+    const material = (root.getObjectByName("floor") as any).material;
+    assert.ok(lightmap, "the bake the sheet names is applied, and the handle is where a demo can reach it");
+    assert.equal(material.lightMap, lightmap!.texture);
+    assert.equal(material.lightMapIntensity, 2, "the manifest's exposure comes along");
+
+    // the baker loads the same sheet, and applying its own output mid-bake would zero the lights
+    assert.equal((await load(sheet, { lightmap: false })).userData.lightmap, undefined);
+  } finally {
+    globalThis.fetch = upstream;
+    restore();
+  }
 });
 
 let failed = 0;

@@ -88,7 +88,8 @@ disposeScene(root);        // disposes geometries/materials/textures and unparen
 `loadSceneFromURL(url)` fetches the file and uses that URL as the base.
 
 Loader options: `{ manager, draco, ktx2 }` — a shared `LoadingManager`, the draco decoder path, the ktx2
-transcoder path.
+transcoder path. A sheet that names a baked lightmap in `@bakery { lightmap }` gets it applied on load,
+with the handle on `root.userData.lightmap`; `{ lightmap: false }` skips that.
 
 Runtime errors carry their location: `main.tscene:12:5: ...`.
 

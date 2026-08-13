@@ -1,0 +1,58 @@
+// PICA PICA Mini Diorama 01 — the glb rc-25d/demo already ships, baked instead of voxelised.
+// Scene by SEED.EA (https://github.com/SEED-EA/pica-pica-assets), CC BY-NC 4.0.
+//
+// It is here for what the Cornell box cannot show: 170 meshes and 28 materials, so the unwrap has to
+// pack a real scene rather than nine quads, and the light is the diorama's own — the three emissive
+// surfaces rc-25d lights it with, plus a raking sun and the sky over the open corner. `Glass_Dark_01`
+// is transparent *and* transmissive, so its shadow is the see-through kind.
+//
+// The path reaches out of this package: the asset lives with the demo that brought it in, and the
+// vite plugin hashes it into this bundle from there. Nothing is copied.
+//
+// Three of its 28 materials are metals, which no lightmap can light — three's diffuse colour is
+// `albedo * (1 - metalness)` — so the bake also captures a reflection probe in the middle of the
+// diorama for them to reflect. That is the specular half of the same trace, and it is why the screws
+// and the gauge front show the diorama's own red and cyan glow instead of rendering black.
+
+@bakery {
+  out: "../public/lightmaps";
+  // 170 charts want the room: at 1024 the small props get a handful of texels each
+  size: 2048;
+  samples: 512;
+  ao: true;
+}
+
+gltf #diorama("../../../rc-25d/demo/public/assets/pica_pica/mini_diorama_01.glb") {
+  scale: vec3(10, 10, 10);
+
+  // rc-25d's own emissive presets. Each material is shared by every mesh that uses it, so one find()
+  // per material lights all of them — and to the baker each is an area light sampled by triangle area.
+  find(mesh, "Led_01_Glass_Dark_01_0") {
+    material.emissive: color(#63d8ff);
+    material.emissiveIntensity: 22;
+  }
+  find(mesh, "Floor_Junk_Cluster_01_Pin1_Plastic_Red_Transparent_0") {
+    material.emissive: color(#ff294d);
+    material.emissiveIntensity: 8;
+  }
+  find(mesh, "Wax_Pastel_03_Wax_Pastel_Yellow_01_0") {
+    material.emissive: color(#ffa31a);
+    material.emissiveIntensity: 5;
+  }
+}
+
+// What the metals reflect: one probe, in the open middle of the diorama — 1.1 above the floor, and
+// clear of the two walls. A single cell is enough for a scene this size; a room per probe is the rule.
+object3D #probe {
+  position: vec3(-0.6, 1.1, -0.9);
+  @bakery { probe: 256 };
+}
+
+// the diorama is a corner: two walls, an open front, and nothing above it
+hemisphereLight #sky(#cfe4ff, #4a4038, 0.8)
+
+// `radius` is angular here, in radians — a 1.7 degree sun raking in over the open side
+directionalLight #sun(#fff3e0, 2.2) {
+  position: vec3(7, 9, 6);
+  @bakery { radius: 0.03 };
+}
