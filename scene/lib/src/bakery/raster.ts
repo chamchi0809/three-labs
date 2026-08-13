@@ -12,6 +12,10 @@ export type Texels = {
   position: Float32Array;
   /** width*height*4 — world normal xyz, material id in w */
   normal: Float32Array;
+  /** width*height*2 — the surface's own uv0, for sampling its albedo map. 0 where the mesh has none. */
+  uv: Float32Array;
+  /** width*height — index into the mesh list, -1 where nothing covers the texel */
+  mesh: Int32Array;
   /** the covered texel indices, ascending — what the compute shader is dispatched over */
   index: Uint32Array;
 };
@@ -25,6 +29,8 @@ export function rasterize(meshes: BakeMesh[], atlas: Atlas): Texels {
   const mask = new Uint8Array(width * height);
   const position = new Float32Array(width * height * 4);
   const normal = new Float32Array(width * height * 4);
+  const uv0 = new Float32Array(width * height * 2);
+  const owner = new Int32Array(width * height).fill(-1);
 
   for (let mi = 0; mi < meshes.length; mi++) {
     const mesh = meshes[mi];
@@ -58,7 +64,7 @@ export function rasterize(meshes: BakeMesh[], atlas: Atlas): Texels {
           const w2 = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) * inv;
           const w0 = 1 - w1 - w2;
           if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-          write(mesh, t, w0, w1, w2, y * width + x, mask, position, normal);
+          write(mesh, mi, t, w0, w1, w2, y * width + x, mask, position, normal, uv0, owner);
           hit = true;
         }
       }
@@ -68,7 +74,7 @@ export function rasterize(meshes: BakeMesh[], atlas: Atlas): Texels {
         const x = Math.min(width - 1, Math.max(0, Math.floor((ax + bx + cx) / 3)));
         const y = Math.min(height - 1, Math.max(0, Math.floor((ay + by + cy) / 3)));
         const at = y * width + x;
-        if (!mask[at]) write(mesh, t, 1 / 3, 1 / 3, 1 / 3, at, mask, position, normal);
+        if (!mask[at]) write(mesh, mi, t, 1 / 3, 1 / 3, 1 / 3, at, mask, position, normal, uv0, owner);
       }
     }
   }
@@ -78,11 +84,12 @@ export function rasterize(meshes: BakeMesh[], atlas: Atlas): Texels {
   const index = new Uint32Array(covered);
   for (let i = 0, n = 0; i < mask.length; i++) if (mask[i]) index[n++] = i;
 
-  return { width, height, mask, position, normal, index };
+  return { width, height, mask, position, normal, uv: uv0, mesh: owner, index };
 }
 
 function write(
   mesh: BakeMesh,
+  meshIndex: number,
   tri: number,
   w0: number,
   w1: number,
@@ -91,6 +98,8 @@ function write(
   mask: Uint8Array,
   position: Float32Array,
   normal: Float32Array,
+  uv0: Float32Array,
+  owner: Int32Array,
 ): void {
   const o = tri * 9;
   const d = at * 4;
@@ -103,5 +112,12 @@ function write(
   normal[d + 1] /= len;
   normal[d + 2] /= len;
   normal[d + 3] = mesh.faceMaterial[tri];
+  if (mesh.uv) {
+    const u = tri * 6;
+    for (let k = 0; k < 2; k++) {
+      uv0[at * 2 + k] = mesh.uv[u + k]! * w0 + mesh.uv[u + 2 + k]! * w1 + mesh.uv[u + 4 + k]! * w2;
+    }
+  }
+  owner[at] = meshIndex;
   mask[at] = 1;
 }

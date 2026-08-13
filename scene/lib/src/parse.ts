@@ -68,14 +68,19 @@ export class SceneSyntaxError extends Error {
 
 // ---------------------------------------------------------------- lexer
 
-type TokType = "ident" | "number" | "string" | "hash" | "at" | "var" | "punc" | "eof";
-type Tok = Pos & { type: TokType; value: string; unit?: string };
+export type TokType = "ident" | "number" | "string" | "hash" | "at" | "var" | "punc" | "eof";
+export type Tok = Pos & { type: TokType; value: string; unit?: string };
 
 const isIdStart = (c: string) => /[A-Za-z_]/.test(c);
 const isId = (c: string) => /[A-Za-z0-9_-]/.test(c);
 const isDigit = (c: string) => c >= "0" && c <= "9";
 
-function tokenize(text: string, file?: string): { toks: Tok[]; comments: Comment[]; errors: Diagnostic[] } {
+/**
+ * The lexer, standing on its own — highlighting and folding need the tokens of a document that does
+ * not parse yet.
+ * @internal
+ */
+export function tokenize(text: string, file?: string): { toks: Tok[]; comments: Comment[]; errors: Diagnostic[] } {
   const toks: Tok[] = [];
   const comments: Comment[] = [];
   const errors: Diagnostic[] = [];

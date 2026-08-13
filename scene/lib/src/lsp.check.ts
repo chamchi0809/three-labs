@@ -78,12 +78,19 @@ const request = (method: string, params: object) =>
     send({ id, method, params });
   });
 
+// a package that ships sheets, so bare `@import "kit/…"` has something to resolve to
+const pkg = path.join(dir, "node_modules", "kit");
+fs.mkdirSync(pkg, { recursive: true });
+fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "kit", version: "1.0.0", main: "theme.tscene" }));
+fs.writeFileSync(path.join(pkg, "theme.tscene"), `--tint: 0.25;\n`);
+
 const uri = pathToFileURL(main).href;
-const at = (needle: string, delta = 0) => {
-  const offset = text.indexOf(needle) + delta;
-  const head = text.slice(0, offset);
+const posIn = (src: string, needle: string, delta = 0) => {
+  const offset = src.indexOf(needle) + delta;
+  const head = src.slice(0, offset);
   return { line: head.split("\n").length - 1, character: offset - (head.lastIndexOf("\n") + 1) };
 };
+const at = (needle: string, delta = 0) => posIn(text, needle, delta);
 const position = (needle: string, delta = 0) => ({ textDocument: { uri }, position: at(needle, delta) });
 const labels = (items: any[]) => items.map((i: any) => i.label);
 // results come out in graph order, so compare as sets
@@ -106,7 +113,7 @@ send({ method: "initialized", params: {} });
 send({ method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "scene", version: 1, text } } });
 
 await check("advertises the full language surface", async () => {
-  for (const capability of ["completionProvider", "hoverProvider", "signatureHelpProvider", "definitionProvider", "referencesProvider", "renameProvider", "documentSymbolProvider", "documentFormattingProvider", "codeActionProvider", "documentLinkProvider"]) {
+  for (const capability of ["completionProvider", "hoverProvider", "signatureHelpProvider", "definitionProvider", "referencesProvider", "renameProvider", "documentSymbolProvider", "documentFormattingProvider", "codeActionProvider", "documentLinkProvider", "colorProvider", "foldingRangeProvider", "semanticTokensProvider"]) {
     assert.ok(capabilities[capability], `missing ${capability}`);
   }
 });
@@ -333,6 +340,100 @@ await check("@bakery completes its own keys, never three's names", async () => {
 
   send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 12 }, contentChanges: [{ text }] } });
   await new Promise((r) => setTimeout(r, 200));
+});
+
+await check("@ completes at-rules, never three's names", async () => {
+  const doc = `@\n\nmesh #box {\n  @\n  userData: {\n    \n  };\n}\n`;
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 13 }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const sheet = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: 1 } });
+  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@import", "@template"]);
+  assert.equal(sheet[0].textEdit.newText, sheet[0].label); // the typed `@` is replaced, not doubled
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery"]);
+  // a record literal takes any key, so it takes neither three's names nor an at-rule
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 5, character: 4 } })), []);
+
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 14 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
+let version = 20;
+/** swap the open document for `doc` and give the server a moment to settle */
+const edit = async (doc: string, wait = 200) => {
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: version++ }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, wait));
+};
+
+await check("a bare @import resolves, contributes and completes out of node_modules", async () => {
+  const doc = `@import "kit/theme.tscene";\n\nmesh #box {\n  scale: vec3(var(--), 1, 1);\n}\n`;
+  await edit(doc);
+  const vars = await request("textDocument/completion", { textDocument: { uri }, position: posIn(doc, "var(--)", "var(--".length) });
+  assert.deepEqual(labels(vars), ["--tint"], "the package's top-level variables are in scope");
+
+  const spec = `@import "k`;
+  await edit(`${spec}\n`);
+  const packages = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: spec.length } });
+  assert.deepEqual(labels(packages), ["kit"]);
+  assert.equal(packages[0].textEdit.newText, "kit"); // the whole specifier is replaced, scope included
+
+  await edit(`@import "kit/\n`);
+  const inside = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: `@import "kit/`.length } });
+  assert.deepEqual(labels(inside), ["theme.tscene"]); // package.json is not a sheet
+  await edit(text);
+});
+
+await check("semantic tokens classify a document the parser cannot finish", async () => {
+  // deliberately unterminated: highlighting is needed most while the sheet is being typed
+  const doc = `// hi\nmesh.glow #box {\n  castShadow: true;\n  material: meshStandardMaterial { color: color(#ff8000); };\n  scale: vec3(var(--tint), 1, 1);\n`;
+  await edit(doc);
+  const legend = capabilities.semanticTokensProvider.legend.tokenTypes;
+  const { data } = await request("textDocument/semanticTokens/full", { textDocument: { uri } });
+  const decoded: { line: number; character: number; length: number; type: string }[] = [];
+  let line = 0;
+  let character = 0;
+  for (let i = 0; i < data.length; i += 5) {
+    line += data[i];
+    character = data[i] ? data[i + 1] : character + data[i + 1];
+    decoded.push({ line, character, length: data[i + 2], type: legend[data[i + 3]] });
+  }
+  const typeAt = (needle: string, delta = 0) => {
+    const p = posIn(doc, needle, delta);
+    return decoded.find((d) => d.line === p.line && d.character === p.character)?.type;
+  };
+  assert.equal(typeAt("// hi"), "comment");
+  assert.equal(typeAt("mesh.glow"), "class");
+  assert.equal(typeAt("glow"), "decorator");     // a template name, not a property path
+  assert.equal(typeAt("#box"), "decorator");     // an id, even though `box` is not hex
+  assert.equal(typeAt("castShadow"), "property");
+  assert.equal(typeAt("color(#ff8000)"), "class");
+  assert.equal(typeAt("#ff8000"), "number");     // …and here the hash is a literal
+  assert.equal(typeAt("vec3"), "class");         // the alias resolves to Vector3
+  assert.equal(typeAt("--tint"), "variable");
+  assert.equal(typeAt("DoubleSide"), undefined, "the edited document has no DoubleSide left");
+});
+
+await check("folding ranges cover blocks and block comments", async () => {
+  const doc = `/* two\n   lines */\nmesh #beef {\n  material: meshStandardMaterial {\n    color: color(#fff);\n  };\n}\n`;
+  await edit(doc);
+  const ranges = await request("textDocument/foldingRange", { textDocument: { uri } });
+  assert.deepEqual(ranges.sort((a: any, b: any) => a.startLine - b.startLine), [
+    { startLine: 0, endLine: 1, kind: "comment" },
+    { startLine: 2, endLine: 5 }, // the closing brace's own line stays visible
+    { startLine: 3, endLine: 4 },
+  ]);
+
+  const colors = await request("textDocument/documentColor", { textDocument: { uri } });
+  assert.equal(colors.length, 1, "#beef is an id, not a colour");
+  assert.deepEqual(colors[0].range, { start: posIn(doc, "#fff"), end: posIn(doc, "#fff", 4) });
+  assert.deepEqual(colors[0].color, { red: 1, green: 1, blue: 1, alpha: 1 });
+
+  const presented = await request("textDocument/colorPresentation", {
+    textDocument: { uri }, color: { red: 1, green: 0.5, blue: 0, alpha: 1 }, range: colors[0].range,
+  });
+  assert.equal(presented[0].label, "#ff8000");
+  assert.deepEqual(presented[0].textEdit.range, colors[0].range);
+  await edit(text);
 });
 
 await check("formatting normalises the whole document", async () => {

@@ -19,9 +19,9 @@
 // measure without occluding. Then one real bake at the end, to catch the wiring between the stages.
 import assert from "node:assert/strict";
 import * as THREE from "three/webgpu";
-import { bake } from "./bake.ts";
+import { albedoAtlas, bake, reuseAtlas, subset } from "./bake.ts";
 import { createHeadlessRenderer, hasWebGPU } from "./headless.ts";
-import type { Texels } from "./raster.ts";
+import { rasterize, type Texels } from "./raster.ts";
 import { collectScene } from "./scene.ts";
 import { trace } from "./tracer.ts";
 
@@ -34,7 +34,11 @@ function squareViewFactor(a: number, h: number): number {
 
 type Probe = { p: [number, number, number]; n: [number, number, number] };
 
-function probes(list: Probe[]): Texels {
+/**
+ * Probes as a `Texels`: only `index`, `position` and `normal` are read. `atlas` overrides the width
+ * and height, which the shader uses for nothing but indexing an albedo atlas.
+ */
+function probes(list: Probe[], atlas?: { width: number; height: number }): Texels {
   const position = new Float32Array(list.length * 4);
   const normal = new Float32Array(list.length * 4);
   list.forEach((probe, i) => {
@@ -42,11 +46,13 @@ function probes(list: Probe[]): Texels {
     normal.set(probe.n, i * 4);
   });
   return {
-    width: list.length,
-    height: 1,
+    width: atlas?.width ?? list.length,
+    height: atlas?.height ?? 1,
     mask: new Uint8Array(list.length).fill(1),
     position,
     normal,
+    uv: new Float32Array(list.length * 2),
+    mesh: new Int32Array(list.length).fill(-1),
     index: Uint32Array.from(list, (_, i) => i),
   };
 }
@@ -215,6 +221,94 @@ const close = (got: number, want: number, tol: number, what: string) =>
     "the manifest keys the runtime by node path and pins the de-indexed vertex count",
   );
   assert.equal(result.manifest.intensity, result.exposure);
+}
+
+// --- the bounce reads the albedo map under the point it hit, not the whole texture's mean ----------
+{
+  // 2x2, red column then green column: only u decides the colour, so world x does
+  const map = new THREE.DataTexture(
+    new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255]),
+    2,
+    2,
+  );
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.needsUpdate = true;
+
+  const root = new THREE.Group();
+  root.add(plane(0, 4, true, new THREE.MeshStandardMaterial({ map, metalness: 0 })));
+  root.add(new THREE.AmbientLight(0xffffff, Math.PI)); // a sky of radiance 1
+
+  const scene = collectScene(root);
+  // the atlas is the plane itself: uv = (x + 2) / 4, (z + 2) / 4
+  const uv = new Float32Array(12);
+  const p = scene.meshes[0]!.positions;
+  for (let i = 0; i < 6; i++) {
+    uv[i * 2] = (p[i * 3]! + 2) / 4;
+    uv[i * 2 + 1] = (p[i * 3 + 2]! + 2) / 4;
+  }
+  const atlas = { width: 64, height: 64, uv: [uv], utilization: 1 };
+  const albedo = albedoAtlas(scene, rasterize(scene.meshes, atlas));
+  assert.ok(albedo, "a material with a decodable map has to produce an albedo atlas");
+
+  const list: Probe[] = [
+    { p: [-1.5, 0.35, 0], n: [0, -1, 0] }, // over the red half
+    { p: [1.5, 0.35, 0], n: [0, -1, 0] }, // over the green half
+  ];
+  const run = async (perTexel: boolean) => {
+    const raw = await trace(renderer, scene, probes(list, atlas), {
+      samples: 1 << 14,
+      bounces: 1,
+      batch: 256,
+      lightmapUV: atlas.uv,
+      albedo: perTexel ? albedo : undefined,
+    });
+    return list.map((_, i) => [0, 1, 2].map((k) => raw[i * 4 + k]! / raw[i * 4 + 3]!) as [number, number, number]);
+  };
+
+  const [left, right] = await run(true);
+  assert.ok(left![0]! > left![1]! * 1.5, `over the red half the bounce must be red, got ${left}`);
+  assert.ok(right![1]! > right![0]! * 1.5, `over the green half it must be green, got ${right}`);
+  close(left![0]!, right![1]!, right![1]! * 0.1, "the two halves are mirror images of each other");
+  close(left![2]!, right![2]!, 1e-3, "neither half has any blue to give back");
+
+  // without the atlas every bounce takes the map's mean instead, and the two probes agree
+  const [meanLeft, meanRight] = await run(false);
+  close(meanLeft![0]!, meanLeft![1]!, meanLeft![0]! * 0.05, "the mean of a red/green map is grey");
+  close(meanLeft![0]!, meanRight![0]!, meanLeft![0]! * 0.05, "and it is the same everywhere");
+  assert.ok(left![0]! > meanLeft![0]! * 1.3, "which is exactly what the per-texel lookup is an improvement on");
+}
+
+// --- a partial rebake keeps every texel it was not asked to touch ------------------------------------
+{
+  const root = new THREE.Group();
+  const floor = plane(0, 4, true, new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0 }));
+  floor.name = "floor";
+  root.add(floor);
+  const lampMaterial = new THREE.MeshStandardMaterial({ emissive: 0xffffff, emissiveIntensity: 2 });
+  const lamp = plane(4, 2, false, lampMaterial);
+  lamp.name = "lamp";
+  root.add(lamp);
+
+  // the filters would smear the patch into its neighbours, and this is about which texels are written
+  const opts = { renderer, size: 48, samples: 32, bounces: 1, batch: 32, denoiseRadius: 0, dilateRadius: 0 };
+  const first = await bake(root, opts);
+
+  lampMaterial.emissiveIntensity = 4;
+  const second = await bake(root, { ...opts, previous: { manifest: { ...first.manifest, texture: "" }, image: first.image }, only: ["floor"] });
+
+  assert.equal(second.width, first.width, "a rebake reuses the layout instead of unwrapping again");
+  const scene = collectScene(root);
+  const texels = rasterize(scene.meshes, reuseAtlas({ ...first.manifest, texture: "" }, scene));
+  const mean = (at: Uint32Array, image: Float32Array) =>
+    [...at].reduce((sum, i) => sum + image[i * 4]!, 0) / Math.max(1, at.length);
+
+  const lampTexels = subset(texels, scene, ["lamp"]);
+  for (const i of lampTexels) {
+    assert.equal(second.image[i * 4], first.image[i * 4], `texel ${i} was not asked to change`);
+  }
+  const before = mean(subset(texels, scene, ["floor"]), first.image);
+  const after = mean(subset(texels, scene, ["floor"]), second.image);
+  close(after, before * 2, before * 0.3, "twice the lamp is twice the irradiance on the retraced floor");
 }
 
 console.log("bake.check.ts ok");

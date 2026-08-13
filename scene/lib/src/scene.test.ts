@@ -421,12 +421,13 @@ test("the vite plugin emits one module per sheet, with its imports and assets", 
   plugin.configResolved({ command: "serve" });
   // a vite id is absolute and forward-slash on every platform — on win32 that means a drive letter
   const dir = path.resolve("/p/scenes").split(path.sep).join("/");
-  const src = `@import "./lib/mats.tscene";\nmesh { material: meshStandardMaterial { map: texture("./t.png"); }; }\ngltf #hero("./m.glb") { }\ngltf("https://cdn/m.glb")\n`;
+  const src = `@import "./lib/mats.tscene";\nmesh { material: meshStandardMaterial { map: texture("./t.png"); }; }\ngltf #hero("./m.glb") { }\ngltf("https://cdn/m.glb")\nmesh { material: meshBasicMaterial { map: texture(var(--wall)); }; }\n--wall: "./w.png";\n`;
   const { code } = await plugin.transform(src, `${dir}/main.tscene`);
   assert.match(code, /import "\.\/lib\/mats\.tscene";/);            // the dep registers itself and vite watches it
   assert.match(code, /import __asset0 from "\.\/t\.png\?url";/);     // the bundler resolves the asset, not the runtime
   assert.match(code, /import __asset1 from "\.\/m\.glb\?url";/);     // a loader used as a node carries a selector
-  assert.doesNotMatch(code, /import __asset2/);                      // …but remote urls are left to the runtime
+  assert.match(code, /import __asset2 from "\.\/w\.png\?url";/);     // a url behind a var is bundled too, declared after its use
+  assert.doesNotMatch(code, /import __asset\d+ from "[^"]*cdn/);     // …but remote urls are left to the runtime
   // the registry is keyed by id, so the dep must be spelled the way vite will spell it
   assert.deepEqual(JSON.parse(/imports: (\{.*?\}),/.exec(code)![1]!), { "./lib/mats.tscene": `${dir}/lib/mats.tscene` });
   assert.match(code, /import\.meta\.hot\.accept/);
@@ -634,6 +635,31 @@ test("mount.update advances the clips play() started", async () => {
   assert.equal(deltas.length, 3);
   assert.equal(deltas[0], 0.5);
   assert.ok(deltas[2]! >= 0 && deltas[2]! < 1, `an untimed frame is a real delta, got ${deltas[2]}`);
+});
+
+test("disposeScene frees what the sheet built and never what the asset cache owns", async () => {
+  const { disposeScene, shareAssets } = await import("./runtime.ts");
+  const { Group, Mesh, BoxGeometry, MeshStandardMaterial, Texture } = await import("three/webgpu");
+
+  // a gltf() node is a clone(), so its geometry and material are the cached scene's own objects
+  const asset = new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: new Texture() }));
+  shareAssets(new Group().add(asset));
+
+  const root = new Group();
+  const own = new Mesh(new BoxGeometry(), new MeshStandardMaterial({ map: new Texture() }));
+  root.add(own, asset.clone());
+
+  const disposed: string[] = [];
+  const watch = (r: any, name: string) => r.addEventListener("dispose", () => disposed.push(name));
+  watch(own.geometry, "own.geometry");
+  watch(own.material, "own.material");
+  watch(own.material.map!, "own.map");
+  watch(asset.geometry, "asset.geometry");
+  watch(asset.material, "asset.material");
+  watch((asset.material as InstanceType<typeof MeshStandardMaterial>).map!, "asset.map");
+
+  disposeScene(root);
+  assert.deepEqual(disposed.sort(), ["own.geometry", "own.map", "own.material"]);
 });
 
 let failed = 0;

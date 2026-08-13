@@ -9,6 +9,7 @@ export {
   areaLights,
   bvhProxy,
   collectScene,
+  type BakeEmitter,
   type BakeLight,
   type BakeMaterial,
   type BakeMesh,

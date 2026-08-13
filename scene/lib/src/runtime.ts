@@ -148,14 +148,38 @@ export function updateScene(root: Object3D, delta: number): void {
 }
 
 /**
+ * Everything the module-level asset cache owns. A `gltf()` node is a `clone()` of the cached scene
+ * and shares its geometries, materials and textures with it, so disposing one used to take the cache
+ * down with it: the next reload rebuilt from freed buffers.
+ * @internal
+ */
+const cached = new WeakSet<object>();
+
+/**
+ * Marks a freshly loaded asset's resources as the cache's, so {@link disposeScene} walks past them.
+ * @internal
+ */
+export function shareAssets(root: Object3D): void {
+  root.traverse((o: any) => {
+    if (o.geometry) cached.add(o.geometry);
+    for (const material of [o.material].flat().filter(Boolean)) {
+      cached.add(material as object);
+      for (const v of Object.values(material as object)) if ((v as any)?.isTexture) cached.add(v as object);
+    }
+  });
+}
+
+/**
  * Frees the GPU resources of a scene built by loadScene — call it before dropping a root,
- * otherwise every hot reload leaks its geometries, materials and textures.
+ * otherwise every hot reload leaks its geometries, materials and textures. What came out of the
+ * asset cache is left alone: it is shared with every other use of the same url.
  */
 export function disposeScene(root: Object3D): void {
   root.traverse((o: any) => {
-    o.geometry?.dispose?.();
+    if (!cached.has(o.geometry)) o.geometry?.dispose?.();
     for (const material of [o.material].flat().filter(Boolean)) {
-      for (const v of Object.values(material as object)) if ((v as any)?.isTexture) (v as any).dispose();
+      if (cached.has(material as object)) continue;
+      for (const v of Object.values(material as object)) if ((v as any)?.isTexture && !cached.has(v as object)) (v as any).dispose();
       (material as any).dispose?.();
     }
   });
@@ -340,12 +364,17 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
 
   let target: any;
   if (o.name === "texture") {
+    // a texture clone owns its own GPU upload and shares only the decoded image, so it stays disposable
     const source = await asset(url(), () => new TextureLoader(ctx.opts.manager).loadAsync(url()));
     target = source.clone(); // shares the decoded image, but each use gets its own wrap/repeat state
     target.needsUpdate = true;
   } else if (o.name === "gltf") {
     // ponytail: a cached gltf is cloned per use; skinned meshes need SkeletonUtils.clone if that ever comes up
-    const gltf = await asset(url(), () => gltfLoader(ctx).then((l) => l.loadAsync(url())));
+    const gltf = await asset(url(), async () => {
+      const loaded = await gltfLoader(ctx).then((l) => l.loadAsync(url()));
+      shareAssets(loaded.scene);
+      return loaded;
+    });
     target = gltf.scene.clone(true);
     if (gltf.animations?.length) clipsOf.set(target, gltf.animations);
   } else {

@@ -566,6 +566,34 @@ type Template = Extract<Statement, {
 
 ***
 
+### Tok
+
+```ts
+type Tok = Pos & {
+  type: TokType;
+  unit?: string;
+  value: string;
+};
+```
+
+#### Type Declaration
+
+| Name | Type |
+| ------ | ------ |
+| `type` | [`TokType`](#toktype) |
+| `unit?` | `string` |
+| `value` | `string` |
+
+***
+
+### TokType
+
+```ts
+type TokType = "ident" | "number" | "string" | "hash" | "at" | "var" | "punc" | "eof";
+```
+
+***
+
 ### Value
 
 ```ts
@@ -717,7 +745,8 @@ function disposeScene(root): void;
 ```
 
 Frees the GPU resources of a scene built by loadScene — call it before dropping a root,
-otherwise every hot reload leaks its geometries, materials and textures.
+otherwise every hot reload leaks its geometries, materials and textures. What came out of the
+asset cache is left alone: it is shared with every other use of the same url.
 
 #### Parameters
 

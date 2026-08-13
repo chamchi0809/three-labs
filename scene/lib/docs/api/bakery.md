@@ -59,6 +59,7 @@ Drops the atlas off the materials, restores the lights, and disposes a texture t
 
 ```ts
 type LightmapManifest = {
+  hdr?: string;
   height: number;
   intensity: number;
   meshes: {
@@ -97,6 +98,7 @@ const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", 
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="hdr"></a> `hdr?` | `string` | the float EXR next to it, when one was written — loaded instead of the PNG where support exists |
 | <a id="height-1"></a> `height` | `number` | - |
 | <a id="intensity-1"></a> `intensity` | `number` | `lightMapIntensity` that undoes the exposure baked into an 8-bit texture |
 | <a id="meshes-1"></a> `meshes` | \{ `key`: `string`; `uv`: `string`; `vertices`: `number`; \}[] | - |
@@ -139,7 +141,8 @@ check that the manifest belongs to this scene.
 | ------ | ------ |
 | `root` | `Object3D` |
 | `source` | \| `string` \| \{ `manifest`: [`LightmapManifest`](#lightmapmanifest-1); `texture`: `Texture`; \} |
-| `opts` | \{ `manager?`: `LoadingManager`; \} |
+| `opts` | \{ `hdr?`: `boolean`; `manager?`: `LoadingManager`; \} |
+| `opts.hdr?` | `boolean` |
 | `opts.manager?` | `LoadingManager` |
 
 #### Returns
@@ -297,7 +300,7 @@ const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", 
 ### loadLightmap()
 
 ```ts
-function loadLightmap(url, manager?): Promise<{
+function loadLightmap(url, opts?): Promise<{
   manifest: LightmapManifest;
   texture: Texture;
 }>;
@@ -311,7 +314,9 @@ Browser-side convenience — the baker writes both files with matching names.
 | Parameter | Type |
 | ------ | ------ |
 | `url` | `string` |
-| `manager?` | `LoadingManager` |
+| `opts` | \{ `hdr?`: `boolean`; `manager?`: `LoadingManager`; \} |
+| `opts.hdr?` | `boolean` |
+| `opts.manager?` | `LoadingManager` |
 
 #### Returns
 
@@ -328,7 +333,9 @@ Browser-side convenience — the baker writes both files with matching names.
 function nodeKey(root, o): string;
 ```
 
-Path from `root` to `o`, using node names where there are any. Stable across reloads of the same sheet.
+Path from `root` to `o`, using node names where there are any. Stable across reloads of the same
+sheet. Two siblings sharing a name are told apart by their index, so a key is always unique —
+`find()` and a loaded glTF both hand out repeated names.
 
 #### Parameters
 

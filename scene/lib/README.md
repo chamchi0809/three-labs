@@ -140,7 +140,7 @@ Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 | Feature | Details |
 | --- | --- |
 | diagnostics | refreshed while typing, no save needed, following `@import`s |
-| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths inside `@import "`, and the settings of the position inside `@bakery {` (its keys, then that key's values) |
+| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths and the node_modules packages that ship sheets inside `@import "`, the at-rules legal at the cursor after `@`, and the settings of the position inside `@bakery {` (its keys, then that key's values) |
 | hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys |
 | signature help | highlights the current argument inside `boxGeometry(` |
 | go to definition | templates (`.glow`), variables (`var(--x)`), `#id` (`ref(#a)`), `@import` paths (also ctrl-clickable as document links) |
@@ -148,6 +148,9 @@ Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 | symbol outline | the scene graph as-is |
 | formatting | reprints the whole document (casing included) |
 | quick fixes | casing typos |
+| colour swatches | hex literals (`color(#ff8000)`), edited back as `#rrggbb[aa]` — an `#id` is left alone |
+| semantic tokens | classified from the token stream, so a half-typed sheet still highlights |
+| folding | every `{ }` block and every `/* */` comment |
 
 VS Code picks this server up through the `scene/vscode/` extension (which adds highlighting, snippets and
 workspace check/fix commands).
@@ -165,7 +168,7 @@ export default defineConfig({ plugins: [threeScene()] });
 ```
 
 One sheet is one module (`SceneModule`). An `@import` becomes an import of that module, and the relative
-paths in `texture()`/`gltf()` become `?url` imports, so the bundler handles hashing and copying. Every
+paths a `texture()`/`gltf()` can be handed — a literal or a `var(--x)` this sheet declares — become `?url` imports, so the bundler handles hashing and copying. Every
 build and hot update runs the checker; failures show up in the overlay. Options:
 `{ entry, modules, declare, check, hmr }`.
 
@@ -209,4 +212,4 @@ from the `NPM_PAT` repository secret (an npm automation token with publish right
 ## Not included
 
 - Selector-based overrides (post-hoc rules like `.enemy { ... }`) — the nesting tree covers enough.
-- Loaders other than GLTF, colour previews.
+- Loaders other than GLTF; colour swatches on anything but a hex literal.

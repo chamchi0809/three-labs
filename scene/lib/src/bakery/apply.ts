@@ -11,6 +11,8 @@ export type LightmapManifest = {
   intensity: number;
   /** texture file name, relative to the manifest */
   texture: string;
+  /** the float EXR next to it, when one was written — loaded instead of the PNG where support exists */
+  hdr?: string;
   meshes: {
     /** `nodeKey()` path from the bake root */
     key: string;
@@ -70,13 +72,13 @@ export type Lightmap = {
 export async function applyLightmap(
   root: THREE.Object3D,
   source: string | { manifest: LightmapManifest; texture: THREE.Texture },
-  opts: { manager?: THREE.LoadingManager } = {},
+  opts: { manager?: THREE.LoadingManager; hdr?: boolean } = {},
 ): Promise<Lightmap> {
   // a texture we loaded ourselves is ours to dispose; one handed in may be shared with another root
   const owned = typeof source === "string";
-  const { manifest, texture } = owned ? await loadLightmap(source, opts.manager) : source;
+  const { manifest, texture } = owned ? await loadLightmap(source, opts) : source;
 
-  const { meshes, materials } = attach(root, manifest, texture);
+  const { meshes, materials, restore } = attach(root, manifest, texture);
 
   const lights = new Map<THREE.Light, number>();
   root.traverse((o) => {
@@ -128,6 +130,7 @@ export async function applyLightmap(
         m.lightMap = null;
         m.needsUpdate = true;
       }
+      restore();
       if (owned) texture.dispose();
     },
   };
@@ -141,24 +144,26 @@ function attach(
   root: THREE.Object3D,
   manifest: LightmapManifest,
   texture: THREE.Texture,
-): { meshes: number; materials: Set<THREE.MeshStandardMaterial> } {
+): { meshes: number; materials: Set<THREE.MeshStandardMaterial>; restore: () => void } {
   const byKey = new Map(manifest.meshes.map((m) => [m.key, m]));
   // three reads the lightmap from the uv1 attribute only when the texture says so. `flipY` is left
   // alone on purpose: the atlas is stored bottom up, which is the default for both a loaded image
   // (flipY true) and a DataTexture (flipY false).
   texture.channel = 1;
 
-  let applied = 0;
-  const materials = new Set<THREE.MeshStandardMaterial>();
   const all: THREE.Mesh[] = [];
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) all.push(o as THREE.Mesh);
   });
-
+  const users = new Map<THREE.Material, THREE.Mesh[]>();
   for (const mesh of all) {
-    const entry = byKey.get(nodeKey(root, mesh));
-    if (!entry) continue;
+    for (const m of ([] as THREE.Material[]).concat(mesh.material)) users.set(m, [...(users.get(m) ?? []), mesh]);
+  }
 
+  // everything is checked before anything is touched: a half-applied atlas is worse than none
+  const targets = all.flatMap((mesh) => {
+    const entry = byKey.get(nodeKey(root, mesh));
+    if (!entry) return [];
     const geometry = bakeGeometry(mesh);
     const count = geometry.getAttribute("position").count;
     if (count !== entry.vertices) {
@@ -166,19 +171,57 @@ function attach(
         `tscene/bakery: "${entry.key}" has ${count} vertices but the lightmap was baked from ${entry.vertices} — rebake`,
       );
     }
+    return [{ mesh, entry, geometry }];
+  });
+  const baked = new Set(targets.map((t) => t.mesh));
 
+  const materials = new Set<THREE.MeshStandardMaterial>();
+  const undo: (() => void)[] = [];
+  const clones = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+
+  /**
+   * A material some *unbaked* mesh also uses cannot take the atlas — that mesh has no uv1 and would
+   * read a stranger's texels — so the baked meshes get a copy of it. Only meshes under this root are
+   * counted; one shared with a second scene is beyond what a traversal can see.
+   */
+  const litMaterial = (material: THREE.Material): THREE.MeshStandardMaterial => {
+    if ((users.get(material) ?? []).every((m) => baked.has(m))) return material as THREE.MeshStandardMaterial;
+    let clone = clones.get(material);
+    if (!clone) {
+      clone = material.clone() as THREE.MeshStandardMaterial;
+      clones.set(material, clone);
+      undo.push(() => clone!.dispose());
+    }
+    return clone;
+  };
+
+  for (const { mesh, entry, geometry } of targets) {
+    if (geometry !== mesh.geometry) {
+      // toNonIndexed() made a new geometry; the mesh's own is left intact and put back on dispose()
+      const original = mesh.geometry;
+      undo.push(() => {
+        mesh.geometry = original;
+        geometry.dispose();
+      });
+    }
     geometry.setAttribute("uv1", new THREE.BufferAttribute(decodeFloats(entry.uv), 2));
     mesh.geometry = geometry;
-    for (const material of ([] as THREE.Material[]).concat(mesh.material)) {
-      const m = material as THREE.MeshStandardMaterial;
+
+    const list = ([] as THREE.Material[]).concat(mesh.material);
+    const lit = list.map(litMaterial);
+    if (lit.some((m, i) => m !== list[i])) {
+      const original = mesh.material;
+      undo.push(() => (mesh.material = original));
+      mesh.material = Array.isArray(mesh.material) ? lit : lit[0]!;
+    }
+    for (const m of lit) {
       m.lightMap = texture;
       m.needsUpdate = true;
       materials.add(m);
     }
-    applied++;
   }
   // the intensity is left to the handle's `write()`, which owns it from here on
-  return { meshes: applied, materials };
+  return { meshes: targets.length, materials, restore: () => undo.forEach((f) => f()) };
 }
 
 /**
@@ -187,20 +230,28 @@ function attach(
  */
 export async function loadLightmap(
   url: string,
-  manager?: THREE.LoadingManager,
+  opts: { manager?: THREE.LoadingManager; hdr?: boolean } = {},
 ): Promise<{ manifest: LightmapManifest; texture: THREE.Texture }> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`tscene/bakery: ${response.status} loading ${url}`);
   const manifest = (await response.json()) as LightmapManifest;
   const base = new URL(url, globalThis.location?.href);
-  const texture = await new THREE.TextureLoader(manager).loadAsync(new URL(manifest.texture, base).href);
-  // the atlas holds exposure-scaled irradiance encoded as sRGB, and must not bleed across charts
-  texture.colorSpace = THREE.SRGBColorSpace;
+
+  // the EXR is the irradiance as baked, so it needs no exposure undone — and no clipping either.
+  // The loader is imported on demand: a bake without `--exr` must not pull it into the bundle.
+  const hdr = (opts.hdr ?? true) && manifest.hdr;
+  const texture = hdr
+    ? await new (await import("three/addons/loaders/EXRLoader.js")).EXRLoader(opts.manager).loadAsync(
+        new URL(manifest.hdr!, base).href,
+      )
+    : await new THREE.TextureLoader(opts.manager).loadAsync(new URL(manifest.texture, base).href);
+  // the PNG holds exposure-scaled irradiance encoded as sRGB, and neither must bleed across charts
+  if (!hdr) texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
-  return { manifest, texture };
+  return { manifest: hdr ? { ...manifest, intensity: 1 } : manifest, texture };
 }
 
 export function encodeFloats(data: Float32Array): string {

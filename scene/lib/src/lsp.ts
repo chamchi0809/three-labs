@@ -11,7 +11,7 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
 import { ALIASES, BAKERY, BUILTINS, className, nodeName, type Knob } from "./names.ts";
-import { expand, parse, type Loader, type Member, type ObjectValue, type Pos, type Sheet } from "./parse.ts";
+import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
 
 const connection = createConnection(ProposedFeatures.all);
@@ -41,7 +41,7 @@ connection.onInitialize((params) => {
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
-      completionProvider: { triggerCharacters: [" ", ":", "{", "."] },
+      completionProvider: { triggerCharacters: [" ", ":", "{", ".", "@"] },
       hoverProvider: true,
       signatureHelpProvider: { triggerCharacters: ["(", ","] },
       definitionProvider: true,
@@ -51,6 +51,9 @@ connection.onInitialize((params) => {
       documentFormattingProvider: true,
       documentLinkProvider: { resolveProvider: false },
       codeActionProvider: true,
+      colorProvider: true,
+      foldingRangeProvider: true,
+      semanticTokensProvider: { legend: { tokenTypes: TOKEN_TYPES, tokenModifiers: [] }, full: true },
     },
   };
 });
@@ -177,6 +180,7 @@ function enclosingBlock(text: string, offset: number): { name: string | undefine
       if (template) return { name: template[1] ?? "object3D", brace: i };
       const at = /@([a-zA-Z_]\w*)\s*$/.exec(header);
       if (at) return { name: `@${at[1]}`, brace: i };
+      if (/:\s*$/.test(header)) return { name: ":record", brace: i }; // `userData: { … }` — the keys are the user's own
       return { name: /([a-zA-Z_]\w*)\s*$/.exec(header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, ""))?.[1], brace: i };
     }
   }
@@ -209,6 +213,10 @@ connection.onCompletion((params) => {
   const typed = /var\(\s*([\w-]*)$/.exec(head);
   if (typed) return variableCompletions(doc, offset, typed[1]!.length);
 
+  // `@` opens an at-rule — three's namespace has nothing to offer there
+  const at = /@[\w-]*$/.exec(head);
+  if (at) return atCompletions(doc, at.index, offset, enclosingBlock(text, offset)?.name);
+
   // `.` after a node name completes templates declared for that node type, including imported ones
   const dotted = /([A-Za-z_]\w*)\.[\w-]*$/.exec(head);
   if (dotted) {
@@ -226,6 +234,7 @@ connection.onCompletion((params) => {
   const block = enclosingBlock(text, offset);
   // `@bakery { … }` is not three's namespace: its keys are a fixed table, and no three name belongs in it
   if (block?.name === "@bakery") return bakeryCompletions(bakeryPosition(text, block.brace), head);
+  if (block?.name === ":record") return []; // nothing to offer inside a record literal — any key goes
 
   const owner = block?.name;
   const cls = owner ? schema.classes[className(owner)] : undefined;
@@ -242,20 +251,88 @@ connection.onCompletion((params) => {
   return [...(cls ? propCompletions(cls) : []), ...objectCompletions()];
 });
 
-/** ponytail: relative paths only — completing a bare specifier would mean scanning every package */
-function importCompletions(doc: TextDocument, offset: number, typed: string) {
-  const base = path.dirname(pathOf(doc));
-  const dir = path.resolve(base, typed.endsWith("/") ? typed : path.dirname(typed));
-  const prefix = typed.endsWith("/") ? "" : path.basename(typed);
-  let entries: fs.Dirent[];
+/** the at-rules legal here: a sheet takes all three, a body only takes `@bakery` */
+function atCompletions(doc: TextDocument, start: number, offset: number, block: string | undefined) {
+  if (block === "@bakery" || block === ":record") return []; // no at-rule nests inside a block of values
+  const rules: [string, string][] = block
+    ? [["@bakery", "lightmap baker settings for this node or material"]]
+    : [
+        ["@import", "splice in another sheet"],
+        ["@template", "a body applied by .name"],
+        ["@bakery", "lightmap baker settings for the sheet"],
+      ];
+  // `@` is not a word character, so the typed sigil has to be replaced explicitly
+  return rules.map(([label, detail]) => ({
+    label,
+    kind: CompletionItemKind.Keyword,
+    detail,
+    textEdit: TextEdit.replace({ start: doc.positionAt(start), end: doc.positionAt(offset) }, label),
+  }));
+}
+
+const dirents = (dir: string): fs.Dirent[] => {
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    return fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
+};
+
+/** does this package ship sheets? a top-level .tscene, or a package.json that names one */
+function shipsSheets(dir: string): boolean {
+  if (dirents(dir).some((e) => e.isFile() && e.name.endsWith(".tscene"))) return true;
+  try {
+    return fs.readFileSync(path.join(dir, "package.json"), "utf8").includes(".tscene");
+  } catch {
+    return false;
+  }
+}
+
+/** package name → its directory, for every node_modules above `from` that ships sheets */
+function sheetPackages(from: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let at = path.dirname(from); ; at = path.dirname(at)) {
+    const root = path.join(at, "node_modules");
+    for (const e of dirents(root)) {
+      if (!e.isDirectory() && !e.isSymbolicLink()) continue;
+      const inner = e.name.startsWith("@") ? dirents(path.join(root, e.name)).map((s) => `${e.name}/${s.name}`) : [e.name];
+      // a nearer node_modules shadows the one above it, exactly as resolution does
+      for (const name of inner) if (!out.has(name) && shipsSheets(path.join(root, name))) out.set(name, path.join(root, name));
+    }
+    if (at === path.dirname(at)) return out;
+  }
+}
+
+function importCompletions(doc: TextDocument, offset: number, typed: string) {
+  const from = pathOf(doc);
+  const prefix = typed.endsWith("/") ? "" : path.basename(typed);
   const edit = (text: string) =>
     TextEdit.replace({ start: doc.positionAt(offset - prefix.length), end: doc.positionAt(offset) }, text);
-  return entries
+
+  // a bare specifier: package names until the name is complete, then the files inside it
+  let dir: string;
+  if (typed.startsWith(".") || path.isAbsolute(typed)) {
+    dir = path.resolve(path.dirname(from), typed.endsWith("/") ? typed : path.dirname(typed));
+  } else {
+    const packages = sheetPackages(from);
+    const segments = typed.split("/");
+    const depth = typed.startsWith("@") ? 2 : 1; // a scope is half a package name, not a directory
+    const root = packages.get(segments.slice(0, depth).join("/"));
+    if (!root || segments.length <= depth) {
+      return [...packages.keys()]
+        .filter((name) => name.startsWith(typed))
+        // the whole specifier is replaced: a scope and the typed prefix are one label
+        .map((name) => ({
+          label: name,
+          kind: CompletionItemKind.Module,
+          textEdit: TextEdit.replace({ start: doc.positionAt(offset - typed.length), end: doc.positionAt(offset) }, name),
+        }));
+    }
+    const sub = segments.slice(depth).join("/");
+    dir = path.join(root, sub.endsWith("/") ? sub : path.dirname(sub));
+  }
+
+  return dirents(dir)
     .filter((e) => (e.isDirectory() ? e.name !== "node_modules" : e.name.endsWith(".tscene")) && path.resolve(dir, e.name) !== pathOf(doc))
     .map((e) => ({
       label: e.isDirectory() ? `${e.name}/` : e.name,
@@ -296,9 +373,9 @@ function variablesAt(file: string, text: string, offset: number, seen = new Set<
     else if (m[1]) stack.at(-1)!.push({ file, name: m[1], value: m[2]!.trim(), start: m.index });
     else {
       // an imported sheet contributes only its top level — reading it whole leaves exactly that on the stack
-      const target = path.resolve(path.dirname(file), m[3]!);
+      const target = importTarget(m[3]!, file);
       try {
-        stack[0]!.push(...variablesAt(target, read(target), Infinity, seen));
+        if (target) stack[0]!.push(...variablesAt(target, read(target), Infinity, seen));
       } catch {}
     }
   }
@@ -589,9 +666,9 @@ function* sheetsFrom(file: string, text: string, seen = new Set<string>()): Gene
   yield { file, sheet };
   for (const s of sheet.statements) {
     if (s.kind !== "import") continue;
-    const target = path.resolve(path.dirname(file), s.path);
+    const target = importTarget(s.path, file);
     try {
-      yield* sheetsFrom(target, read(target), seen);
+      if (target) yield* sheetsFrom(target, read(target), seen);
     } catch {}
   }
 }
@@ -630,12 +707,32 @@ function allFiles(): string[] {
 
 const posKey = (p: Pos) => `${p.file}:${p.start}:${p.end}`;
 
+/** what makes a sheet's contents different: the open buffer's version, or the file's mtime */
+function stamp(file: string): string {
+  const open = openDoc(file);
+  if (open) return `${file}@${open.version}`;
+  try {
+    return `${file}@${fs.statSync(file).mtimeMs}`;
+  } catch {
+    return `${file}@-`;
+  }
+}
+
+let graph: { key: string; value: ReturnType<typeof buildGraph> } | undefined;
+
 /**
  * Every use↔declaration edge that expand() itself resolved, over every sheet in the workspace —
  * so shadowing, @import and template parameters all fall out of the real scoping rules.
- * ponytail: rebuilt per request; memoise on document version if a big workspace ever feels it.
+ * Cached on the set of sheets and their versions: rename asks for the same graph once per file it edits.
  */
-async function bindingGraph() {
+function bindingGraph(): ReturnType<typeof buildGraph> {
+  const files = allFiles();
+  const key = files.map(stamp).join("|");
+  if (graph?.key !== key) graph = { key, value: buildGraph(files) };
+  return graph.value;
+}
+
+async function buildGraph(files: string[]) {
   const edges = new Map<string, Set<string>>();
   const positions = new Map<string, Pos>();
   /** use → the declaration expand() actually resolved it to */
@@ -647,7 +744,7 @@ async function bindingGraph() {
     (edges.get(ka) ?? edges.set(ka, new Set()).get(ka)!).add(kb);
     (edges.get(kb) ?? edges.set(kb, new Set()).get(kb)!).add(ka);
   };
-  for (const file of allFiles()) {
+  for (const file of files) {
     try {
       const { bindings } = await expand(parse(read(file), file), loader);
       for (const b of bindings) {
@@ -757,6 +854,116 @@ connection.onDocumentSymbol((params) => {
     }
     return [];
   });
+});
+
+// ---------------------------------------------------------------- highlighting, folding, colours
+//
+// All three read the token stream, not the AST: a document being typed into is the one that most
+// needs highlighting, and it is exactly the one that does not parse.
+
+/** the legend the client is handed at initialize; a token's type is its index here */
+const TOKEN_TYPES = ["comment", "string", "number", "keyword", "variable", "property", "class", "function", "enumMember", "decorator"];
+
+/** what a token means, decided from its neighbours — the parser's rules, one token of lookahead */
+function tokenType(toks: Tok[], i: number): string | undefined {
+  const t = toks[i]!;
+  const prev = toks[i - 1];
+  const next = toks[i + 1];
+  switch (t.type) {
+    case "string": return "string";
+    case "number": return "number";
+    case "at": return "keyword";
+    case "var": return "variable";
+    // `#ff8000` is a colour, `#box` an id — a literal only ever sits in a value position
+    case "hash": return hexColor(t.value) && prev?.type === "punc" && "(,:".includes(prev.value) ? "number" : "decorator";
+    case "ident": break;
+    default: return undefined;
+  }
+  if (next?.type === "punc" && next.value === ":") return "property";
+  if (prev?.type === "punc" && prev.value === ".") return "decorator"; // .template
+  if (BUILTINS[t.value]) return "function";
+  if (schema.classes[className(t.value)]) return "class";
+  if (schema.constants[t.value]) return "enumMember";
+  return "variable";
+}
+
+connection.languages.semanticTokens.on((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return { data: [] };
+  const text = doc.getText();
+  const { toks, comments } = tokenize(text, pathOf(doc));
+  const spans = [
+    ...comments.map((c) => ({ start: c.start, end: c.end, type: "comment" })),
+    ...toks.flatMap((t, i) => { const type = tokenType(toks, i); return type ? [{ start: t.start, end: t.end, type }] : []; }),
+  ].sort((a, b) => a.start - b.start);
+
+  const data: number[] = [];
+  let line = 0;
+  let char = 0;
+  for (const span of spans) {
+    // a token may not cross a line, and a /* */ comment does — one piece per line
+    for (let at = span.start; at < span.end; ) {
+      const nl = text.indexOf("\n", at);
+      const stop = nl < 0 || nl >= span.end ? span.end : nl;
+      const pos = doc.positionAt(at);
+      data.push(pos.line - line, pos.line === line ? pos.character - char : pos.character, stop - at, TOKEN_TYPES.indexOf(span.type), 0);
+      [line, char] = [pos.line, pos.character];
+      at = stop + 1;
+    }
+  }
+  return { data };
+});
+
+connection.onFoldingRanges((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const { toks, comments } = tokenize(doc.getText(), pathOf(doc));
+  const out: { startLine: number; endLine: number; kind?: string }[] = [];
+  const line = (offset: number) => doc.positionAt(offset).line;
+  const fold = (startLine: number, endLine: number, kind?: string) => {
+    if (endLine > startLine) out.push({ startLine, endLine, ...(kind ? { kind } : {}) });
+  };
+  const stack: number[] = [];
+  for (const t of toks) {
+    if (t.type !== "punc") continue;
+    if (t.value === "{") stack.push(t.start);
+    // the closing brace stays visible, so a block written on one line folds to nothing and is dropped
+    else if (t.value === "}" && stack.length) fold(line(stack.pop()!), line(t.start) - 1);
+  }
+  for (const c of comments) if (c.text.startsWith("/*")) fold(line(c.start), line(c.end), "comment");
+  return out;
+});
+
+/** `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` as the client's 0..1 channels */
+function hexColor(digits: string): { red: number; green: number; blue: number; alpha: number } | undefined {
+  if (![3, 4, 6, 8].includes(digits.length) || !/^[0-9a-fA-F]+$/.test(digits)) return undefined;
+  const short = digits.length <= 4;
+  const channel = (n: number) => {
+    const d = digits.slice(n * (short ? 1 : 2), (n + 1) * (short ? 1 : 2));
+    return parseInt(short ? d + d : d, 16) / 255;
+  };
+  return { red: channel(0), green: channel(1), blue: channel(2), alpha: digits.length % 4 === 0 ? channel(3) : 1 };
+}
+
+/**
+ * A swatch on every hex literal, so `color(#ff8000)` is picked, not guessed.
+ * ponytail: hex only — `color("red")` and `color(1, .5, 0)` would each need their own writer back.
+ */
+connection.onDocumentColor((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const { toks } = tokenize(doc.getText(), pathOf(doc));
+  return toks.flatMap((t, i) => {
+    const color = t.type === "hash" && tokenType(toks, i) === "number" ? hexColor(t.value) : undefined;
+    return color ? [{ range: range(doc, t), color }] : [];
+  });
+});
+
+connection.onColorPresentation((params) => {
+  const { red, green, blue, alpha } = params.color;
+  const byte = (v: number) => Math.round(v * 255).toString(16).padStart(2, "0");
+  const label = `#${byte(red)}${byte(green)}${byte(blue)}${alpha < 1 ? byte(alpha) : ""}`;
+  return [{ label, textEdit: TextEdit.replace(params.range, label) }];
 });
 
 // ---------------------------------------------------------------- formatting & quick fixes

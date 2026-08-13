@@ -2,15 +2,24 @@
 // The atlas arithmetic: nothing here touches a GPU, and every mistake in it is silent.
 import assert from "node:assert/strict";
 import * as THREE from "three/webgpu";
-import type { Atlas } from "./atlas.ts";
+import { unwrap, type Atlas } from "./atlas.ts";
+import { albedoAtlas, reuseAtlas, subset } from "./bake.ts";
 import { rasterize } from "./raster.ts";
-import { areaLights, bakeGeometry, collectScene, nodeKey, type BakeMesh } from "./scene.ts";
+import {
+  areaLights,
+  bakeGeometry,
+  collectScene,
+  nodeKey,
+  validateBakery,
+  type BakeMesh,
+  type BakeScene,
+} from "./scene.ts";
 import { dilate } from "./filter.ts";
 import { applyLightmap, decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
-import type { NodeBakery, SceneBakery } from "../names.ts";
+import type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";
 
 /** what `@bakery { … }` leaves behind, written by hand — three's own types know nothing about it */
-const bakery = <T extends object>(o: T, settings: NodeBakery | SceneBakery): T =>
+const bakery = <T extends object>(o: T, settings: NodeBakery | SceneBakery | MaterialBakery): T =>
   Object.assign(o, { bakery: settings });
 
 /** A 2x2 quad on the XZ plane at y = 0, facing +Y, filling the whole atlas. */
@@ -21,15 +30,15 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   ]);
   const normals = new Float32Array(18);
   for (let i = 0; i < 6; i++) normals[i * 3 + 1] = 1;
-  const meshes: BakeMesh[] = [
-    { key: "quad", mesh: new THREE.Mesh(), positions, normals, faceMaterial: new Uint32Array([0, 0]) },
-  ];
   // uv = position.xz / 2, so a texel's world position is a linear function of its atlas coordinate
   const uv = new Float32Array(12);
   for (let i = 0; i < 6; i++) {
     uv[i * 2] = positions[i * 3] / 2;
     uv[i * 2 + 1] = positions[i * 3 + 2] / 2;
   }
+  const meshes: BakeMesh[] = [
+    { key: "quad", mesh: new THREE.Mesh(), positions, normals, uv, faceMaterial: new Uint32Array([0, 0]) },
+  ];
   return { meshes, atlas: { width: 8, height: 8, uv: [uv], utilization: 1 } };
 }
 
@@ -48,8 +57,13 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
       assert.ok(Math.abs(texels.position[at + 2] - (y + 0.5) / 4) < 1e-5, `z at ${x},${y}`);
       assert.ok(Math.abs(texels.normal[at + 1] - 1) < 1e-6, "normals point +Y");
       assert.equal(texels.normal[at + 3], 0, "material id rides in normal.w");
+      // uv0 comes along for the albedo atlas, and every texel remembers whose it is
+      assert.ok(Math.abs(texels.uv[(y * 8 + x) * 2] - (x + 0.5) / 8) < 1e-5, `u at ${x},${y}`);
+      assert.ok(Math.abs(texels.uv[(y * 8 + x) * 2 + 1] - (y + 0.5) / 8) < 1e-5, `v at ${x},${y}`);
+      assert.equal(texels.mesh[y * 8 + x], 0, `owner at ${x},${y}`);
     }
   }
+  assert.equal(rasterize([{ ...meshes[0]!, uv: undefined }], atlas).uv[0], 0, "no uv0 leaves the uv at zero");
 }
 
 // --- a triangle smaller than a texel still gets one sample ---------------------------------------
@@ -63,6 +77,7 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   const texels = rasterize(meshes, { width: 8, height: 8, uv: [uv], utilization: 1 });
   assert.equal(texels.index.length, 1, "a sub-texel triangle must not bake black");
   assert.equal(texels.normal[texels.index[0] * 4 + 3], 3, "and it keeps its material");
+  assert.equal(texels.mesh[0], -1, "an uncovered texel belongs to nobody");
 }
 
 // --- dilation grows the lit region without touching what was already lit -------------------------
@@ -252,6 +267,241 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   bakery(c.root, { include: "none" } satisfies SceneBakery);
   assert.deepEqual(keys(c.root), [], "a sheet's include: none is picked up off the root");
   assert.deepEqual(keys(c.root, { include: "all" }), ["plain", "group/child", "group/override"], "the caller wins");
+}
+
+// --- visibility prunes the subtree, not just the node -----------------------------------------------
+{
+  const root = new THREE.Group();
+  const group = new THREE.Group();
+  group.name = "group";
+  group.visible = false;
+  const child = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  child.name = "child";
+  group.add(child);
+  const seen = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  seen.name = "seen";
+  root.add(group, seen);
+
+  assert.deepEqual(
+    collectScene(root).meshes.map((m) => m.key),
+    ["seen"],
+    "an invisible group hides what is under it, not only itself",
+  );
+}
+
+// --- nodeKey tells same-named siblings apart ---------------------------------------------------------
+{
+  const root = new THREE.Group();
+  const make = (name: string) => Object.assign(new THREE.Mesh(new THREE.PlaneGeometry(1, 1)), { name });
+  const a = make("wall");
+  const b = make("wall");
+  const alone = make("door");
+  root.add(a, b, alone);
+
+  assert.equal(nodeKey(root, alone), "door");
+  assert.equal(nodeKey(root, a), "wall@0");
+  assert.equal(nodeKey(root, b), "wall@1", "a repeated name is not a key — glTF hands them out freely");
+  assert.notEqual(nodeKey(root, a), nodeKey(root, b));
+}
+
+// --- a RectAreaLight bakes as the quad it is ---------------------------------------------------------
+{
+  const root = new THREE.Group();
+  const light = new THREE.RectAreaLight(0xffffff, 2, 2, 1);
+  light.name = "panel";
+  light.position.set(0, 3, 0);
+  light.rotation.x = -Math.PI / 2; // local -Z now points down
+  root.add(light);
+
+  const scene = collectScene(root);
+  assert.equal(scene.meshes.length, 0, "an emitter quad is lit from, never lit onto — it takes no texels");
+  assert.equal(scene.lights.length, 0, "and it is not a delta light either");
+  assert.equal(scene.emitters.length, 1);
+
+  const material = scene.materials[scene.emitters[0]!.faceMaterial[0]!]!;
+  assert.deepEqual(material.emissive, [2, 2, 2], "three's RectAreaLight intensity is already a radiance");
+  assert.deepEqual(material.albedo, [0, 0, 0]);
+  assert.equal(material.oneSided, true, "it emits along local -Z only");
+
+  const area = areaLights(scene);
+  assert.equal(area.count, 2, "two triangles");
+  assert.ok(Math.abs(area.totalArea - 2) < 1e-5, "2 x 1 is an area of 2");
+  // the winding has to put the geometric normal on the emitting side, or the shader lights the ceiling
+  const p = scene.emitters[0]!.positions;
+  const edge = (i: number, j: number) => new THREE.Vector3(p[j]! - p[i]!, p[j + 1]! - p[i + 1]!, p[j + 2]! - p[i + 2]!);
+  const geometric = edge(0, 3).cross(edge(0, 6)).normalize();
+  assert.ok(geometric.y < -0.99, `the quad must face down, got ${geometric.toArray().join(",")}`);
+  assert.ok(Math.abs(scene.emitters[0]!.normals[1]! + 1) < 1e-5, "and the shading normal agrees with it");
+
+  // it is still a light: only an explicit `enabled: false` takes it out of the bake
+  const off = new THREE.Group();
+  off.add(bakery(new THREE.RectAreaLight(0xffffff, 2, 2, 1), { enabled: false }));
+  assert.equal(collectScene(off).emitters.length, 0);
+}
+
+// --- more charts than fit in one atlas: the sheets stack, so the uvs stay in [0,1] --------------------
+{
+  const meshes: BakeMesh[] = [0, 10].map((x, i) => {
+    const positions = new Float32Array([x, 0, 0, x + 2, 0, 0, x, 0, 2, x + 2, 0, 0, x + 2, 0, 2, x, 0, 2]);
+    const normals = new Float32Array(18);
+    for (let k = 0; k < 6; k++) normals[k * 3 + 1] = 1;
+    return { key: `q${i}`, mesh: new THREE.Mesh(), positions, normals, faceMaterial: new Uint32Array([0, 0]) };
+  });
+  // 32px of atlas cannot hold two 2x2 quads at 16 texels per unit, so xatlas packs a second sheet
+  const atlas = await unwrap(meshes, { size: 32, texelsPerUnit: 16, padding: 1 });
+  assert.ok(atlas.height > atlas.width, `expected stacked sheets, got ${atlas.width}x${atlas.height}`);
+  assert.equal(atlas.height % atlas.width, 0, "sheets stack whole");
+
+  const range = (uv: Float32Array) => [Math.min(...uv.filter((_, i) => i % 2)), Math.max(...uv.filter((_, i) => i % 2))];
+  for (const uv of atlas.uv) {
+    assert.ok(
+      uv.every((c) => c >= 0 && c <= 1),
+      "a second sheet must be folded into the one tall texture, not left outside it",
+    );
+  }
+  const [aLow, aHigh] = range(atlas.uv[0]!);
+  const [bLow, bHigh] = range(atlas.uv[1]!);
+  assert.ok(aLow! > bHigh! || bLow! > aHigh!, "the two sheets must not overlap in v");
+  assert.ok(atlas.utilization > 0 && atlas.utilization <= 1, `utilization ${atlas.utilization}`);
+}
+
+/** A BakeScene around hand-made meshes — everything the CPU stages read, and nothing else. */
+function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeScene {
+  return {
+    meshes,
+    emitters: [],
+    materials,
+    lights: [],
+    sky: { up: [0, 0, 0], down: [0, 0, 0], axis: [0, 1, 0] },
+    bounds: new THREE.Box3(),
+  };
+}
+
+// --- the albedo atlas: one texel of the map per texel of the lightmap --------------------------------
+{
+  const { meshes, atlas } = quad();
+  const texels = rasterize(meshes, atlas);
+
+  // 2x2, red on the left column and green on the right, so only u decides the colour
+  const pixels = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255]);
+  const map = new THREE.DataTexture(pixels, 2, 2);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const scene = sceneOf(meshes, [{ albedo: [0.5, 0.25, 0], emissive: [0, 0, 0], map, mapScale: [1, 0.5, 1] }]);
+  const packed = albedoAtlas(scene, texels);
+  assert.ok(packed, "a material with a decodable map gets an atlas");
+  const rgba = (at: number) => [0, 8, 16, 24].map((s) => (packed![at]! >>> s) & 255);
+
+  assert.deepEqual(rgba(0), [255, 0, 0, 255], "the left half reads the red texel, alpha marks it sampled");
+  assert.deepEqual(rgba(7), [0, 128, 0, 255], "the right half reads green, scaled by the material's colour");
+  assert.deepEqual(rgba(8 * 7), [255, 0, 0, 255], "and v does not change the answer for a column-only map");
+
+  assert.equal(
+    albedoAtlas(sceneOf(meshes, [{ albedo: [1, 1, 1], emissive: [0, 0, 0] }]), texels),
+    undefined,
+    "no map anywhere: the tracer stays on the per-material mean and the buffer is never built",
+  );
+}
+
+// --- partial rebake: the uv layout is reused and only the named meshes are dispatched ------------------
+{
+  const { meshes, atlas } = quad();
+  const shift = (uv: Float32Array, u0: number) => Float32Array.from(uv, (c, i) => (i % 2 ? c : u0 + c / 2));
+  const pair: BakeMesh[] = [
+    { ...meshes[0]!, key: "left" },
+    { ...meshes[0]!, key: "right" },
+  ];
+  const uvs = [shift(atlas.uv[0]!, 0), shift(atlas.uv[0]!, 0.5)];
+  const texels = rasterize(pair, { ...atlas, uv: uvs });
+  const scene = sceneOf(pair, [{ albedo: [1, 1, 1], emissive: [0, 0, 0] }]);
+
+  const only = subset(texels, scene, ["right"]);
+  assert.equal(only.length, 32, "half the atlas");
+  assert.ok(
+    [...only].every((at) => texels.mesh[at] === 1 && at % 8 >= 4),
+    "a partial rebake dispatches over the named mesh's texels and nothing else",
+  );
+  assert.throws(() => subset(texels, scene, ["nope"]), /no mesh named/);
+
+  const manifest: LightmapManifest = {
+    version: 1,
+    width: 8,
+    height: 8,
+    intensity: 1,
+    texture: "atlas.png",
+    meshes: pair.map((m, i) => ({ key: m.key, vertices: 6, uv: encodeFloats(uvs[i]!) })),
+  };
+  const reused = reuseAtlas(manifest, scene);
+  assert.equal(reused.width, 8);
+  assert.deepEqual(Array.from(reused.uv[1]!), Array.from(uvs[1]!), "a rebake lands on the texels already written");
+  assert.throws(
+    () => reuseAtlas({ ...manifest, meshes: [manifest.meshes[0]!] }, scene),
+    /is not in the lightmap/,
+    "a mesh the atlas has never seen cannot be patched into it",
+  );
+  assert.throws(
+    () => reuseAtlas({ ...manifest, meshes: manifest.meshes.map((m) => ({ ...m, vertices: 9 })) }, scene),
+    /changed shape/,
+  );
+}
+
+// --- a material shared with an unbaked mesh is copied, and put back on dispose ------------------------
+{
+  const root = new THREE.Group();
+  const material = new THREE.MeshStandardMaterial();
+  const baked = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+  baked.name = "baked";
+  const shared = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+  shared.name = "shared";
+  root.add(baked, shared);
+  const geometry = baked.geometry;
+
+  const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  const manifest: LightmapManifest = {
+    version: 1,
+    width: 8,
+    height: 8,
+    intensity: 1,
+    texture: "atlas.png",
+    meshes: [{ key: "baked", vertices: 6, uv: encodeFloats(new Float32Array(12)) }],
+  };
+
+  const lightmap = await applyLightmap(root, { manifest, texture });
+  assert.notEqual(baked.material, material, "the unbaked mesh has no uv1, so it must not inherit the atlas");
+  assert.equal((baked.material as THREE.MeshStandardMaterial).lightMap, texture);
+  assert.equal(shared.material, material);
+  assert.equal(material.lightMap, null, "the shared original is left exactly as it was");
+  assert.ok(baked.geometry.getAttribute("uv1"), "the baked mesh carries the atlas uvs");
+
+  lightmap.dispose();
+  assert.equal(baked.material, material, "dispose puts the scene back");
+  assert.equal(baked.geometry, geometry);
+
+  // and nothing is touched at all when any mesh in the manifest does not check out
+  await assert.rejects(
+    applyLightmap(root, {
+      manifest: { ...manifest, meshes: [manifest.meshes[0]!, { key: "shared", vertices: 3, uv: "" }] },
+      texture,
+    }),
+    /vertices/,
+  );
+  assert.equal(baked.material, material, "a half-applied atlas is worse than none");
+  assert.equal(baked.geometry, geometry);
+}
+
+// --- @bakery typos are settings for a tool, so nothing else would ever catch them ---------------------
+{
+  const root = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  mesh.name = "floor";
+  root.add(mesh);
+  bakery(root, { include: "none" } satisfies SceneBakery);
+  bakery(mesh, { enabled: true, radius: 0.5 } satisfies NodeBakery);
+  bakery(mesh.material as THREE.Material, { albedo: [1, 1, 1] } satisfies MaterialBakery);
+  validateBakery(root, "room.tscene");
+
+  bakery(mesh, { enabld: true } as unknown as NodeBakery);
+  assert.throws(() => validateBakery(root, "room.tscene"), /floor: @bakery has no node setting "enabld"/);
 }
 
 console.log("raster.test.ts ok");

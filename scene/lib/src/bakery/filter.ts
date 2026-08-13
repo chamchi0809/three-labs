@@ -109,7 +109,10 @@ export function dilate(image: Float32Array, mask: Uint8Array, width: number, hei
 function texelSize(texels: Texels): number {
   const { width, height, mask, position } = texels;
   const steps: number[] = [];
-  for (let y = 0; y < height; y++) {
+  // ponytail: a sampled median. Every row would sort a million entries for a number that only sets a
+  // blur cutoff; raise the row count if a scene ever shows the sampling.
+  const stride = Math.max(1, Math.floor(height / 128));
+  for (let y = 0; y < height; y += stride) {
     for (let x = 0; x + 1 < width; x++) {
       const a = y * width + x;
       const b = a + 1;

@@ -1,12 +1,9 @@
 // Scene -> flat bake input: world-space triangle soup, materials, lights, sky.
 import * as THREE from "three/webgpu";
-import type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";
+import { BAKERY, type MaterialBakery, type NodeBakery, type SceneBakery } from "../names.ts";
 
-/** One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and its own lightmap uv). */
-export type BakeMesh = {
-  /** stable path from the bake root — the key both the manifest and applyLightmap() use */
-  key: string;
-  mesh: THREE.Mesh;
+/** Triangle soup in world space. What the BVH and the area-light list need, and nothing else. */
+export type BakeEmitter = {
   /** world-space, 3 floats per vertex, vertexCount = triCount * 3 */
   positions: Float32Array;
   normals: Float32Array;
@@ -14,11 +11,26 @@ export type BakeMesh = {
   faceMaterial: Uint32Array;
 };
 
+/** One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and its own lightmap uv). */
+export type BakeMesh = BakeEmitter & {
+  /** stable path from the bake root — the key both the manifest and applyLightmap() use */
+  key: string;
+  mesh: THREE.Mesh;
+  /** the mesh's own uv0, 2 floats per vertex — what an albedo map is sampled with. Absent: no uv0. */
+  uv?: Float32Array;
+};
+
 export type BakeMaterial = {
   /** linear diffuse reflectance, what bounced light is multiplied by */
   albedo: [number, number, number];
   /** linear radiance emitted by this surface (W/sr/m²) — becomes an area light */
   emissive: [number, number, number];
+  /** emits from the +normal side only (a RectAreaLight quad). A mesh material emits both ways. */
+  oneSided?: boolean;
+  /** the albedo map, sampled per texel when the bake builds an albedo atlas */
+  map?: THREE.Texture;
+  /** what one texel of {@link map} is multiplied by — colour × (1 - metalness). `albedo` is its mean. */
+  mapScale?: [number, number, number];
 };
 
 /** 0 = directional, 1 = point, 2 = spot. Matches the `kind` the shader switches on. */
@@ -48,6 +60,8 @@ export type BakeSky = {
 
 export type BakeScene = {
   meshes: BakeMesh[];
+  /** geometry that lights the bake without receiving any — a RectAreaLight, turned into a quad */
+  emitters: BakeEmitter[];
   materials: BakeMaterial[];
   lights: BakeLight[];
   sky: BakeSky;
@@ -63,11 +77,18 @@ export function bakeGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
   return mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
 }
 
-/** Path from `root` to `o`, using node names where there are any. Stable across reloads of the same sheet. */
+/**
+ * Path from `root` to `o`, using node names where there are any. Stable across reloads of the same
+ * sheet. Two siblings sharing a name are told apart by their index, so a key is always unique —
+ * `find()` and a loaded glTF both hand out repeated names.
+ */
 export function nodeKey(root: THREE.Object3D, o: THREE.Object3D): string {
   const parts: string[] = [];
   for (let n: THREE.Object3D | null = o; n && n !== root; n = n.parent) {
-    parts.unshift(n.name || `@${n.parent ? n.parent.children.indexOf(n) : 0}`);
+    const siblings = n.parent?.children;
+    const at = siblings ? siblings.indexOf(n) : 0;
+    const twin = !!n.name && !!siblings?.some((c, i) => i !== at && c.name === n!.name);
+    parts.unshift(n.name && !twin ? n.name : `${n.name}@${at}`);
   }
   return parts.join("/");
 }
@@ -88,6 +109,29 @@ export function bakeEnabled(o: THREE.Object3D): boolean | undefined {
   return undefined;
 }
 
+/**
+ * `@bakery { … }` is settings for a tool, so three drops nothing and a typo bakes silently wrong.
+ * The checker catches it in an editor; this is for a bake that loaded the sheet itself. `where` only
+ * names the source in the message.
+ */
+export function validateBakery(root: THREE.Object3D, where: string): void {
+  const wrong: string[] = [];
+  const known = (position: keyof typeof BAKERY, o: object | undefined, at: string) => {
+    for (const key of Object.keys(bakerySettings(o) ?? {})) {
+      if (!BAKERY[position][key]) wrong.push(`${at}: @bakery has no ${position} setting "${key}"`);
+    }
+  };
+
+  known("scene", root, where);
+  root.traverse((o) => {
+    if (o !== root) known("node", o, nodeKey(root, o));
+    for (const m of ([] as unknown[]).concat((o as THREE.Mesh).material ?? [])) {
+      known("material", m as object, `${nodeKey(root, o)}'s material`);
+    }
+  });
+  if (wrong.length) throw new Error(`tscene/bakery: ${wrong.join("\n  ")}`);
+}
+
 export type CollectOptions = {
   /** default albedo for materials without a `color` (linear grey) */
   defaultAlbedo?: number;
@@ -103,6 +147,7 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   root.updateMatrixWorld(true);
 
   const meshes: BakeMesh[] = [];
+  const emitters: BakeEmitter[] = [];
   const materials: BakeMaterial[] = [];
   const lights: BakeLight[] = [];
   const bounds = new THREE.Box3();
@@ -115,12 +160,19 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
 
   const byDefault = (opts.include ?? bakerySettings<SceneBakery>(root)?.include ?? "all") === "all";
 
-  root.traverse((o) => {
-    if (!o.visible) return;
+  // traverseVisible, not traverse: `traverse` ignores what the callback returns, so an invisible
+  // group used to hide only itself and bake its children anyway
+  root.traverseVisible((o) => {
     const enabled = bakeEnabled(o);
     // a light is an input, not a receiver: `include: none` picks the meshes to bake, and only an
     // explicit `@bakery { enabled: false }` takes a light out (it stays live at runtime instead)
-    if ((o as THREE.Light).isLight) return enabled === false ? undefined : collectLight(o as THREE.Light, lights, sky);
+    if ((o as THREE.Light).isLight) {
+      if (enabled === false) return;
+      const rect = o as THREE.RectAreaLight;
+      if (rect.isRectAreaLight) emitters.push(rectAreaEmitter(rect, materials, bounds));
+      else collectLight(o as THREE.Light, lights, sky);
+      return;
+    }
     if (!(enabled ?? byDefault)) return;
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || (mesh as unknown as { isSkinnedMesh?: boolean }).isSkinnedMesh) return;
@@ -148,11 +200,22 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
     }
     if (!normal) faceNormals(positions, normals);
 
+    const uv0 = geometry.getAttribute("uv");
+    let uv: Float32Array | undefined;
+    if (uv0 && uv0.count === count) {
+      uv = new Float32Array(count * 2);
+      for (let i = 0; i < count; i++) {
+        uv[i * 2] = uv0.getX(i);
+        uv[i * 2 + 1] = uv0.getY(i);
+      }
+    }
+
     meshes.push({
       key: nodeKey(root, mesh),
       mesh,
       positions,
       normals,
+      uv,
       faceMaterial: faceMaterials(mesh, geometry, count / 3, materials, matIds, opts.defaultAlbedo ?? 0.8),
     });
   });
@@ -162,7 +225,41 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   lightDir.set(sky.axis[0], sky.axis[1], sky.axis[2]);
   if (lightDir.lengthSq() < 1e-12) sky.axis = [0, 1, 0];
 
-  return { meshes, materials, lights, sky, bounds };
+  return { meshes, emitters, materials, lights, sky, bounds };
+}
+
+/**
+ * three's RectAreaLight is a one-sided emitting quad whose intensity is already a radiance (nits), so
+ * it drops straight into the area-light path as two emissive triangles. It shines along local -Z,
+ * and the winding here puts the geometric normal on that side.
+ */
+function rectAreaEmitter(light: THREE.RectAreaLight, materials: BakeMaterial[], bounds: THREE.Box3): BakeEmitter {
+  light.updateMatrixWorld(true);
+  const w = light.width / 2;
+  const h = light.height / 2;
+  const corners = [
+    new THREE.Vector3(-w, -h, 0),
+    new THREE.Vector3(-w, h, 0),
+    new THREE.Vector3(w, h, 0),
+    new THREE.Vector3(w, -h, 0),
+  ].map((c) => c.applyMatrix4(light.matrixWorld));
+  for (const c of corners) bounds.expandByPoint(c);
+
+  const id = materials.length;
+  materials.push({
+    albedo: [0, 0, 0],
+    emissive: [light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity],
+    oneSided: true,
+  });
+
+  const normal = new THREE.Vector3(0, 0, -1).transformDirection(light.matrixWorld);
+  const positions = new Float32Array(18);
+  const normals = new Float32Array(18);
+  [0, 1, 2, 0, 2, 3].forEach((c, i) => {
+    corners[c]!.toArray(positions, i * 3);
+    normal.toArray(normals, i * 3);
+  });
+  return { positions, normals, faceMaterial: Uint32Array.from([id, id]) };
 }
 
 /**
@@ -170,9 +267,11 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
  * transform in the TLAS is the identity. The per-triangle material id rides along in `normal.w`,
  * which saves a parallel buffer — BVHComputeData interpolates and uploads normals anyway.
  */
-export function bvhProxy(scene: BakeScene): THREE.Group {
+export function bvhProxy(scene: BakeScene, lightmapUV?: Float32Array[]): THREE.Group {
   const group = new THREE.Group();
-  for (const m of scene.meshes) {
+  const parts: BakeEmitter[] = [...scene.meshes, ...scene.emitters];
+  for (let p = 0; p < parts.length; p++) {
+    const m = parts[p]!;
     const count = m.positions.length / 3;
     const normal = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
@@ -185,6 +284,19 @@ export function bvhProxy(scene: BakeScene): THREE.Group {
     // position stays itemSize 3 (what MeshBVH expects); the packer pads it to vec4f itself
     geometry.setAttribute("position", new THREE.BufferAttribute(m.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(normal, 4));
+    if (lightmapUV) {
+      // where a bounce landed in the atlas, so the tracer can read that texel's own albedo.
+      // negative = not in the atlas (an emitter quad): fall back to the material's mean.
+      const uv = new Float32Array(count * 4).fill(-1);
+      const source = lightmapUV[p];
+      if (source) {
+        for (let i = 0; i < count; i++) {
+          uv[i * 4] = source[i * 2]!;
+          uv[i * 4 + 1] = source[i * 2 + 1]!;
+        }
+      }
+      geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 4));
+    }
     group.add(new THREE.Mesh(geometry));
   }
   group.updateMatrixWorld(true);
@@ -207,7 +319,7 @@ export function areaLights(scene: BakeScene): AreaLights {
   let totalArea = 0;
   let count = 0;
 
-  for (const m of scene.meshes) {
+  for (const m of [...scene.meshes, ...scene.emitters]) {
     for (let t = 0; t < m.faceMaterial.length; t++) {
       const emissive = scene.materials[m.faceMaterial[t]]?.emissive;
       if (!emissive || emissive[0] + emissive[1] + emissive[2] <= 0) continue;
@@ -292,6 +404,9 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
     : m.color
       ? [m.color.r, m.color.g, m.color.b]
       : [defaultAlbedo, defaultAlbedo, defaultAlbedo];
+  // what one texel of the map is multiplied by, kept aside so an albedo atlas can use the real texel
+  // where `albedo` (the map's mean) is only the fallback
+  const base: [number, number, number] = [...albedo];
   if (!override && m.map) {
     const mean = meanColor(m.map);
     if (mean) albedo = [albedo[0] * mean[0], albedo[1] * mean[1], albedo[2] * mean[2]];
@@ -309,7 +424,31 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
   const emissive: [number, number, number] = m.emissive
     ? [m.emissive.r * intensity, m.emissive.g * intensity, m.emissive.b * intensity]
     : [0, 0, 0];
-  return { albedo: albedo.map((c) => Math.min(1, Math.max(0, c))) as [number, number, number], emissive };
+  return {
+    albedo: albedo.map((c) => Math.min(1, Math.max(0, c))) as [number, number, number],
+    emissive,
+    ...(override || !m.map ? {} : { map: m.map, mapScale: base.map((c) => c * diffuse) as [number, number, number] }),
+  };
+}
+
+/**
+ * One texel of a texture, linear, nearest neighbour, wrapping. The albedo atlas is built on the CPU
+ * from whatever the loader put in `image.data` — a browser `ImageBitmap` has none, so there it stays
+ * on the per-material mean.
+ * ponytail: nearest and no uv transform. Both matter far less than the fact that it is per texel now.
+ */
+export function sampleTexture(texture: THREE.Texture, u: number, v: number): [number, number, number] | undefined {
+  const image = texture.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;
+  const data = image?.data;
+  const width = image?.width ?? 0;
+  const height = image?.height ?? 0;
+  if (!data || !width || !height || data.length < width * height * 4) return undefined;
+  const wrap = (x: number, n: number) => ((Math.floor(x * n) % n) + n) % n;
+  const o = (wrap(1 - v, height) * width + wrap(u, width)) * 4;
+  if (data instanceof Float32Array) return [data[o]!, data[o + 1]!, data[o + 2]!];
+  const srgb = texture.colorSpace === THREE.SRGBColorSpace;
+  const channel = (k: number) => (srgb ? SRGB_TO_LINEAR[data[o + k]! & 255]! : data[o + k]! / 255);
+  return [channel(0), channel(1), channel(2)];
 }
 
 const SRGB_TO_LINEAR = Float32Array.from({ length: 256 }, (_, i) => {
@@ -318,9 +457,8 @@ const SRGB_TO_LINEAR = Float32Array.from({ length: 256 }, (_, i) => {
 });
 
 /**
- * Mean linear reflectance of an albedo map.
- * ponytail: one colour per texture, not per-texel — colour bleeding gets the map's hue but not its
- * pattern. Sampling the real texture means an albedo atlas on the GPU; set `@bakery { albedo }` until then.
+ * Mean linear reflectance of an albedo map — the fallback for a texel the albedo atlas could not
+ * cover (no uv0, no decoded image), and what metalness is read out of.
  */
 function meanColor(texture: THREE.Texture): [number, number, number] | undefined {
   const image = texture.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;

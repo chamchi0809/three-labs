@@ -1,12 +1,13 @@
 // collect -> unwrap -> rasterize -> trace -> filter -> pack. Browser or Node; the only requirement is
 // a WebGPURenderer, and `createHeadlessRenderer()` supplies one in Node.
 import * as THREE from "three/webgpu";
-import { unwrap, type UnwrapOptions } from "./atlas.ts";
+import { unwrap, type Atlas, type UnwrapOptions } from "./atlas.ts";
 import { denoise, dilate } from "./filter.ts";
+import type { Texels } from "./raster.ts";
 import { rasterize } from "./raster.ts";
-import { collectScene, type CollectOptions } from "./scene.ts";
+import { collectScene, sampleTexture, type BakeScene, type CollectOptions } from "./scene.ts";
 import { trace, type TraceOptions } from "./tracer.ts";
-import { encodeFloats, type LightmapManifest } from "./apply.ts";
+import { decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
 
 export type BakeStage = "unwrap" | "rasterize" | "trace" | "filter";
 
@@ -19,6 +20,13 @@ export type BakeOptions = UnwrapOptions &
     denoiseRadius?: number;
     /** texels of lit-region growth past the chart edges. Keep >= the atlas padding. */
     dilateRadius?: number;
+    /**
+     * A finished bake to rebake on top of: its uv layout is reused (no unwrap), and every texel
+     * outside {@link only} keeps the irradiance it already had.
+     */
+    previous?: { manifest: LightmapManifest; image: Float32Array };
+    /** with {@link previous}, the `nodeKey()`s to re-trace. Everything else is copied over. */
+    only?: string[];
     onProgress?: (stage: BakeStage, fraction: number) => void;
   };
 
@@ -40,24 +48,38 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
   if (!scene.meshes.length) throw new Error("tscene/bakery: nothing to bake — no visible meshes under the root");
 
   opts.onProgress?.("unwrap", 0);
-  const atlas = await unwrap(scene.meshes, opts);
+  const atlas = opts.previous ? reuseAtlas(opts.previous.manifest, scene) : await unwrap(scene.meshes, opts);
   opts.onProgress?.("unwrap", 1);
 
   opts.onProgress?.("rasterize", 0);
   const texels = rasterize(scene.meshes, atlas);
   if (!texels.index.length) throw new Error("tscene/bakery: the unwrap produced no usable texels");
+  const index = opts.only?.length ? subset(texels, scene, opts.only) : texels.index;
   opts.onProgress?.("rasterize", 1);
 
-  const traced = await trace(opts.renderer, scene, texels, {
-    ...opts,
-    onProgress: (fraction) => opts.onProgress?.("trace", fraction),
-  });
+  const traced = await trace(
+    opts.renderer,
+    scene,
+    { ...texels, index },
+    {
+      ...opts,
+      lightmapUV: atlas.uv,
+      albedo: albedoAtlas(scene, texels),
+      onProgress: (fraction) => opts.onProgress?.("trace", fraction),
+    },
+  );
 
   opts.onProgress?.("filter", 0);
-  const image = new Float32Array(atlas.width * atlas.height * 4);
-  for (let i = 0; i < texels.index.length; i++) {
+  // a partial rebake starts from the atlas it is patching, so untouched charts keep their light
+  // ponytail: the filters then run over the whole image again, so an old texel is blurred twice.
+  // Harmless on converged, already-smooth values; mask the filters per chart if it ever shows.
+  const image = opts.previous ? Float32Array.from(opts.previous.image) : new Float32Array(atlas.width * atlas.height * 4);
+  if (image.length !== atlas.width * atlas.height * 4) {
+    throw new Error("tscene/bakery: the previous image does not match its manifest — rebake the whole scene");
+  }
+  for (let i = 0; i < index.length; i++) {
     const samples = traced[i * 4 + 3] || 1;
-    const d = texels.index[i] * 4;
+    const d = index[i] * 4;
     for (let k = 0; k < 3; k++) image[d + k] = traced[i * 4 + k] / samples;
     image[d + 3] = 1;
   }
@@ -73,7 +95,7 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     height: atlas.height,
     image,
     exposure,
-    utilization: atlas.utilization,
+    utilization: opts.previous ? texels.index.length / (atlas.width * atlas.height) : atlas.utilization,
     manifest: {
       version: 1,
       width: atlas.width,
@@ -86,6 +108,74 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
       })),
     },
   };
+}
+
+/**
+ * The uv layout of a finished bake, so a rebake lands on the same texels instead of unwrapping again.
+ * @internal exported for the checks
+ */
+export function reuseAtlas(manifest: LightmapManifest, scene: BakeScene): Atlas {
+  const byKey = new Map(manifest.meshes.map((m) => [m.key, m]));
+  const uv = scene.meshes.map((m) => {
+    const entry = byKey.get(m.key);
+    if (!entry) {
+      throw new Error(`tscene/bakery: "${m.key}" is not in the lightmap being rebaked — bake the whole scene first`);
+    }
+    if (entry.vertices !== m.positions.length / 3) {
+      throw new Error(`tscene/bakery: "${m.key}" changed shape since the bake — bake the whole scene again`);
+    }
+    return decodeFloats(entry.uv);
+  });
+  return { width: manifest.width, height: manifest.height, uv, utilization: 0 };
+}
+
+/**
+ * The texels belonging to `keys` — what a partial rebake dispatches over.
+ * @internal exported for the checks
+ */
+export function subset(texels: Texels, scene: BakeScene, keys: string[]): Uint32Array {
+  const wanted = new Set(keys);
+  const missing = keys.filter((k) => !scene.meshes.some((m) => m.key === k));
+  if (missing.length) throw new Error(`tscene/bakery: no mesh named ${missing.map((k) => `"${k}"`).join(", ")}`);
+  const picked = [...texels.index].filter((at) => wanted.has(scene.meshes[texels.mesh[at]!]?.key ?? ""));
+  if (!picked.length) throw new Error(`tscene/bakery: ${keys.join(", ")} covers no texel of the atlas`);
+  return Uint32Array.from(picked);
+}
+
+/**
+ * The albedo of every covered texel, packed RGBA8 (alpha = "this texel really was sampled"), so a
+ * bounce reads the colour under the point it hit instead of the whole texture's mean. Skipped
+ * entirely when no material has a decodable map — the tracer then stays on the per-material value.
+ * @internal exported for the checks
+ */
+export function albedoAtlas(scene: BakeScene, texels: Texels): Uint32Array | undefined {
+  if (!scene.materials.some((m) => m.map && m.mapScale)) return undefined;
+  const { width, height } = texels;
+  const image = new Float32Array(width * height * 4);
+  const sampled = new Uint8Array(width * height);
+  let any = false;
+
+  for (const at of texels.index) {
+    const material = scene.materials[texels.normal[at * 4 + 3]! | 0];
+    if (!material?.map || !material.mapScale) continue;
+    const sample = sampleTexture(material.map, texels.uv[at * 2]!, texels.uv[at * 2 + 1]!);
+    if (!sample) continue;
+    for (let k = 0; k < 3; k++) image[at * 4 + k] = Math.min(1, Math.max(0, sample[k]! * material.mapScale[k]!));
+    image[at * 4 + 3] = 1;
+    sampled[at] = 1;
+    any = true;
+  }
+  if (!any) return undefined;
+
+  // a hit just off a chart edge still has to read a colour, and the atlas padding bounds the bleed
+  dilate(image, sampled, width, height, 2);
+
+  const packed = new Uint32Array(width * height);
+  for (let i = 0; i < packed.length; i++) {
+    const byte = (k: number) => Math.round(Math.min(1, Math.max(0, image[i * 4 + k]!)) * 255);
+    packed[i] = byte(0) | (byte(1) << 8) | (byte(2) << 16) | (byte(3) << 24);
+  }
+  return packed;
 }
 
 /**

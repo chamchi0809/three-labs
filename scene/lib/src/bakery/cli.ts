@@ -1,9 +1,9 @@
 #!/usr/bin/env -S node --experimental-strip-types --disable-warning=ExperimentalWarning
-// tlightmap <scene.tscene> [--out dir] [--size 1024] [--samples 512] ...
+// tscene-bake <scene.tscene> [--out dir] [--size 1024] [--samples 512] ...
 import { parseArgs } from "node:util";
 import { bakeSceneFile } from "./file.ts";
 
-const USAGE = `tlightmap <scene.tscene> [options]
+const USAGE = `tscene-bake <scene.tscene> [options]
 
 Every option below can also live in the scene's own \`@bakery { … }\` block; a flag wins over it.
 
@@ -19,6 +19,8 @@ Every option below can also live in the scene's own \`@bakery { … }\` block; a
   --denoise <radius>   edge-aware blur, 0 to disable (default 1)
   --dilate <texels>    lit-region growth past chart edges (default 4)
   --exr                also write 32-bit float irradiance
+  --only <keys>        re-trace only these meshes (comma separated), keeping the rest of the
+                       atlas that is already there. Needs a previous bake made with --exr.
 `;
 
 const { values, positionals } = parseArgs({
@@ -36,6 +38,7 @@ const { values, positionals } = parseArgs({
     denoise: { type: "string" },
     dilate: { type: "string" },
     exr: { type: "boolean" },
+    only: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -50,7 +53,7 @@ const num = (name: string, v: string | undefined) => {
   if (v === undefined) return undefined;
   const n = Number(v);
   if (!Number.isFinite(n)) {
-    process.stderr.write(`tlightmap: --${name} expects a number, got ${JSON.stringify(v)}\n`);
+    process.stderr.write(`tscene-bake: --${name} expects a number, got ${JSON.stringify(v)}\n`);
     process.exit(1);
   }
   return n;
@@ -84,6 +87,7 @@ const result = await bakeSceneFile(positionals[0]!, {
   out: values.out,
   name: values.name,
   exr: values.exr,
+  only: values.only?.split(",").map((k) => k.trim()).filter(Boolean),
   size: num("size", values.size),
   samples: num("samples", values.samples),
   bounces: num("bounces", values.bounces),

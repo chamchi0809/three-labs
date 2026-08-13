@@ -30,6 +30,10 @@ export type TraceOptions = {
    * interior. Direct light and the sky seen straight from a texel are untouched.
    */
   indirect?: number;
+  /** per bake mesh, the atlas uv the unwrap produced — what a bounce is looked up in `albedo` with */
+  lightmapUV?: Float32Array[];
+  /** albedo per atlas texel, packed RGBA8, alpha = covered. Without it every bounce uses the material's mean. */
+  albedo?: Uint32Array;
   onProgress?: (fraction: number) => void;
 };
 
@@ -51,39 +55,50 @@ export async function trace(
   const diagonal = scene.bounds.getSize(new THREE.Vector3()).length() || 1;
   const bias = opts.bias ?? diagonal * 1e-4;
 
-  const bvh = new BVHComputeData(bvhProxy(scene), {
-    attributes: { position: "vec4f", normal: "vec4f" },
+  // the albedo atlas is read with the lightmap uv of the hit point, so the uv has to ride in the BVH
+  const perTexelAlbedo = opts.albedo && opts.lightmapUV ? opts.albedo : undefined;
+  const bvh = new BVHComputeData(bvhProxy(scene, perTexelAlbedo && opts.lightmapUV), {
+    attributes: perTexelAlbedo ? { position: "vec4f", normal: "vec4f", uv: "vec4f" } : { position: "vec4f", normal: "vec4f" },
   });
   bvh.update();
 
   const area = areaLights(scene);
   const padded = Math.ceil(count / WORKGROUP) * WORKGROUP;
 
-  // compacted texel inputs; the accumulator is padded so the tail workgroup's writes land in slack
-  const positions = new Float32Array(count * 4);
-  const normals = new Float32Array(count * 4);
+  // compacted texel inputs, position and normal interleaved; the accumulator is padded so the tail
+  // workgroup's writes land in slack
+  const surfaces = new Float32Array(count * 8);
   for (let i = 0; i < count; i++) {
     for (let k = 0; k < 4; k++) {
-      positions[i * 4 + k] = texels.position[texels.index[i] * 4 + k];
-      normals[i * 4 + k] = texels.normal[texels.index[i] * 4 + k];
+      surfaces[i * 8 + k] = texels.position[texels.index[i] * 4 + k];
+      surfaces[i * 8 + 4 + k] = texels.normal[texels.index[i] * 4 + k];
     }
   }
 
+  // one buffer for every fixed record of the bake. A compute stage is only guaranteed 8 storage
+  // buffers and the BVH already claims four, so materials/lights/emitters share one and index it
+  // from a base offset — three separate bindings blew the limit the moment an albedo atlas appeared.
+  const materials = materialBuffer(scene);
+  const lights = lightBuffer(scene);
+  const bases = { material: 0, light: materials.length / 4, emissive: (materials.length + lights.length) / 4 };
+  const records = new Float32Array(materials.length + lights.length + area.data.length);
+  records.set(materials);
+  records.set(lights, materials.length);
+  records.set(area.data, materials.length + lights.length);
+
   const accumAttribute = new THREE.StorageBufferAttribute(new Float32Array(padded * 4), 4);
-  const texelPos = vec4Storage(positions);
-  const texelNrm = vec4Storage(normals);
-  const materials = vec4Storage(materialBuffer(scene));
-  const lights = vec4Storage(lightBuffer(scene));
-  const emissive = vec4Storage(area.data);
+  const albedo = perTexelAlbedo
+    ? storage(new THREE.StorageBufferAttribute(perTexelAlbedo, 1), "uint", perTexelAlbedo.length).toReadOnly()
+    : undefined;
   const accum = storage(accumAttribute, "vec4", padded);
 
   const kernelFn = traceFn({
     bvh,
-    texelPos,
-    texelNrm,
-    materials,
-    lights,
-    emissive,
+    surface: vec4Storage(surfaces),
+    records: vec4Storage(records),
+    bases,
+    albedo,
+    atlas: { width: texels.width, height: texels.height },
     count,
     samples,
     batch,
@@ -127,6 +142,8 @@ function materialBuffer(scene: BakeScene): Float32Array {
   scene.materials.forEach((m, i) => {
     out.set(m.albedo, i * 8);
     out.set(m.emissive, i * 8 + 4);
+    // the spare w of the emissive slot: 1 = emits out of the front face only
+    out[i * 8 + 7] = m.oneSided ? 1 : 0;
   });
   return out;
 }
@@ -238,11 +255,14 @@ const coneSample = wgslTagFn/* wgsl */ `
 
 type TraceFnArgs = {
   bvh: BVHComputeData;
-  texelPos: unknown;
-  texelNrm: unknown;
-  materials: unknown;
-  lights: unknown;
-  emissive: unknown;
+  /** per texel, two vec4: (position.xyz, _) (normal.xyz, materialId) */
+  surface: unknown;
+  /** materials, then lights, then emissive triangles — see {@link TraceFnArgs.bases} */
+  records: unknown;
+  /** where each record kind starts in `records`, in vec4s */
+  bases: { material: number; light: number; emissive: number };
+  albedo: unknown;
+  atlas: { width: number; height: number };
   count: number;
   samples: number;
   batch: number;
@@ -261,8 +281,45 @@ type TraceFnArgs = {
  * the only shader input that changes between dispatches is the sample offset.
  */
 function traceFn(args: TraceFnArgs) {
-  const { bvh, texelPos, texelNrm, materials, lights, emissive } = args;
+  const { bvh, surface, records, bases, albedo } = args;
   const raycast = bvh.fns.raycastFirstHit;
+  const attributes = bvh.storage.attributes;
+  /** `records` index of material `expr`'s first (albedo) or second (emissive) vec4 */
+  const material = (expr: string, slot: 0 | 1) => `${bases.material}u + ( ${expr} ) * 2u + ${slot}u`;
+
+  // The reflectance a bounce picks up. With an albedo atlas that is the texel the hit lands in —
+  // interpolate the lightmap uv the BVH carries and look it up — and the material's own mean wherever
+  // the atlas has nothing (no uv0, no decodable image, an emitter quad, a hit outside every chart).
+  // Both versions have the same signature, so the call site is one line either way.
+  const reflectance = albedo
+    ? wgslTagFn/* wgsl */ `
+			fn lm_albedo( indices: vec4u, bary: vec3f, id: u32 ) -> vec3f {
+
+				let mean = ${records}[ ${material("id", 0)} ].xyz;
+				let uv =
+					${attributes}[ indices.x ].uv.xy * bary.x +
+					${attributes}[ indices.y ].uv.xy * bary.y +
+					${attributes}[ indices.z ].uv.xy * bary.z;
+				if ( uv.x < 0.0 ) {
+
+					return mean;
+
+				}
+
+				let x = min( u32( clamp( uv.x, 0.0, 1.0 ) * ${f(args.atlas.width)} ), ${args.atlas.width - 1}u );
+				let y = min( u32( clamp( uv.y, 0.0, 1.0 ) * ${f(args.atlas.height)} ), ${args.atlas.height - 1}u );
+				let texel = unpack4x8unorm( ${albedo}[ y * ${args.atlas.width}u + x ] );
+				return select( mean, texel.xyz, texel.w > 0.5 );
+
+			}
+		`
+    : wgslTagFn/* wgsl */ `
+			fn lm_albedo( indices: vec4u, bary: vec3f, id: u32 ) -> vec3f {
+
+				return ${records}[ ${material("id", 0)} ].xyz;
+
+			}
+		`;
 
   const occluded = wgslTagFn/* wgsl */ `
 		fn lm_occluded( origin: vec3f, dir: vec3f, dist: f32 ) -> bool {
@@ -307,10 +364,10 @@ function traceFn(args: TraceFnArgs) {
 
 			for ( var i = 0u; i < ${args.lightCount}u; i = i + 1u ) {
 
-				let c0 = ${lights}[ i * 4u ];
-				let c1 = ${lights}[ i * 4u + 1u ];
-				let c2 = ${lights}[ i * 4u + 2u ];
-				let c3 = ${lights}[ i * 4u + 3u ];
+				let c0 = ${records}[ ${bases.light}u + i * 4u ];
+				let c1 = ${records}[ ${bases.light}u + i * 4u + 1u ];
+				let c2 = ${records}[ ${bases.light}u + i * 4u + 2u ];
+				let c3 = ${records}[ ${bases.light}u + i * 4u + 3u ];
 				let kind = u32( c0.w + 0.5 );
 				let radius = c1.w;
 
@@ -401,8 +458,8 @@ function traceFn(args: TraceFnArgs) {
 
 			}
 
-			let origin = ${texelPos}[ index ].xyz;
-			let surfaceNormal = ${texelNrm}[ index ].xyz;
+			let origin = ${surface}[ index * 2u ].xyz;
+			let surfaceNormal = ${surface}[ index * 2u + 1u ].xyz;
 
 			var state = ${hash}( index * 9781u + 1u );
 			// Cranley-Patterson rotation: each texel walks the same stratified set from its own offset
@@ -442,8 +499,8 @@ function traceFn(args: TraceFnArgs) {
 					// bounce radiance is albedo/PI * E, and the PI from the estimator cancels the 1/PI.
 					// the indirect gain rides in on the first bounce, so it scales everything gathered
 					// past this point and nothing before it.
-					let material = u32( ${bvh.storage.attributes}[ hit.indices.x ].normal.w + 0.5 );
-					throughput *= ${materials}[ material * 2u ].xyz * select( 1.0, ${f(args.indirect)}, b == 0u );
+					let material = u32( ${attributes}[ hit.indices.x ].normal.w + 0.5 );
+					throughput *= ${reflectance}( hit.indices, hit.barycoord, material ) * select( 1.0, ${f(args.indirect)}, b == 0u );
 					if ( max( throughput.x, max( throughput.y, throughput.z ) ) < 1e-3 ) {
 
 						break;
@@ -466,7 +523,11 @@ function traceFn(args: TraceFnArgs) {
 
 /** One emissive-triangle sample per shading point, picked with probability proportional to area. */
 function emissiveNEE(args: TraceFnArgs, occluded: unknown) {
-  const { emissive, materials } = args;
+  const { records, bases } = args;
+  const emitter = (slot: number) => `${bases.emissive}u + pick * 3u + ${slot}u`;
+  // the emissive vec4 of the material the picked triangle carries in its third corner's w. Only the
+  // subscript: a `${records}` outside a top-level tag argument is stringified before it is a function.
+  const emission = `${bases.material}u + u32( e2.w + 0.5 ) * 2u + 1u`;
   return wgslTagFn/* wgsl */ `
 		fn lm_area( origin: vec3f, nrm: vec3f, state: ptr<function, u32> ) -> vec3f {
 
@@ -476,7 +537,7 @@ function emissiveNEE(args: TraceFnArgs, occluded: unknown) {
 			var pick = max( ${args.emissiveCount}u, 1u ) - 1u;
 			for ( var i = 0u; i < ${args.emissiveCount}u; i = i + 1u ) {
 
-				if ( ${emissive}[ i * 3u ].w >= pickTarget ) {
+				if ( ${records}[ ${bases.emissive}u + i * 3u ].w >= pickTarget ) {
 
 					pick = i;
 					break;
@@ -485,9 +546,9 @@ function emissiveNEE(args: TraceFnArgs, occluded: unknown) {
 
 			}
 
-			let e0 = ${emissive}[ pick * 3u ];
-			let e1 = ${emissive}[ pick * 3u + 1u ];
-			let e2 = ${emissive}[ pick * 3u + 2u ];
+			let e0 = ${records}[ ${emitter(0)} ];
+			let e1 = ${records}[ ${emitter(1)} ];
+			let e2 = ${records}[ ${emitter(2)} ];
 
 			var s = ${rand}( state );
 			var t = ${rand}( state );
@@ -512,8 +573,11 @@ function emissiveNEE(args: TraceFnArgs, occluded: unknown) {
 
 			let toLight = delta / dist;
 			let cosSurface = dot( nrm, toLight );
-			// emission is two sided, like an unculled MeshStandardMaterial
-			let cosLight = abs( dot( normalize( cross( edge0, edge1 ) ), toLight ) );
+			// an emissive mesh material emits both ways, like an unculled MeshStandardMaterial; a
+			// RectAreaLight's quad only shines out of its front face, and says so in emissive.w
+			let facing = -dot( normalize( cross( edge0, edge1 ) ), toLight );
+			let oneSided = ${records}[ ${emission} ].w > 0.5;
+			let cosLight = select( abs( facing ), max( facing, 0.0 ), oneSided );
 			if ( cosSurface <= 0.0 || cosLight <= 0.0 || ${occluded}( origin, toLight, dist ) ) {
 
 				return vec3f( 0.0 );
@@ -527,7 +591,7 @@ function emissiveNEE(args: TraceFnArgs, occluded: unknown) {
 			// ponytail: clamping darkens the first centimetre around an emitter. Sampling the triangle by
 			// solid angle instead (Arvo) removes the singularity outright; do that if it ever shows.
 			let solidAngle = min( cosLight / distSq * ${f(args.totalArea)}, 2.0 * ${TAU} );
-			let radiance = ${materials}[ u32( e2.w + 0.5 ) * 2u + 1u ].xyz;
+			let radiance = ${records}[ ${emission} ].xyz;
 			return radiance * ( cosSurface * solidAngle );
 
 		}

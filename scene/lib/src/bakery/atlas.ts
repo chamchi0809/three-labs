@@ -4,6 +4,7 @@ import type { BakeMesh } from "./scene.ts";
 
 export type Atlas = {
   width: number;
+  /** a multiple of the packed size: xatlas' sub-atlases are stacked into one tall texture */
   height: number;
   /** per bake mesh, 2 floats per vertex in [0,1] — the `uv1` attribute the runtime needs */
   uv: Float32Array[];
@@ -52,11 +53,10 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
       },
     );
 
-    if (atlas.atlasCount > 1) {
-      throw new Error(
-        `tscene/bakery: the charts need ${atlas.atlasCount} atlases at ${size}px — raise --size or lower --texels-per-unit`,
-      );
-    }
+    // xatlas splits into several equally sized sub-atlases when the charts do not fit one. Stacking
+    // them into a single tall texture keeps everything downstream — one image, one manifest, one
+    // material slot — unchanged, at the cost of a texture taller than `size`.
+    const sheets = Math.max(1, atlas.atlasCount);
 
     const uv: Float32Array[] = [];
     for (let i = 0; i < meshes.length; i++) {
@@ -65,12 +65,15 @@ export async function unwrap(meshes: BakeMesh[], opts: UnwrapOptions = {}): Prom
       for (const v of out.vertices) {
         // input is non-indexed, so every input vertex belongs to exactly one face and one chart
         target[v.xref * 2] = v.uv[0] / atlas.width;
-        target[v.xref * 2 + 1] = v.uv[1] / atlas.height;
+        target[v.xref * 2 + 1] = (v.uv[1] / atlas.height + Math.max(0, v.atlasIndex)) / sheets;
       }
       uv.push(target);
     }
 
-    return { width: atlas.width, height: atlas.height, uv, utilization: atlas.getUtilization(0) };
+    let utilization = 0;
+    for (let i = 0; i < sheets; i++) utilization += atlas.getUtilization(i) / sheets;
+
+    return { width: atlas.width, height: atlas.height * sheets, uv, utilization };
   } finally {
     atlas.destroy();
   }

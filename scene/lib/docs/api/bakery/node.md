@@ -45,10 +45,32 @@ type Atlas = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="height"></a> `height` | `number` | - |
+| <a id="height"></a> `height` | `number` | a multiple of the packed size: xatlas' sub-atlases are stacked into one tall texture |
 | <a id="utilization"></a> `utilization` | `number` | fraction of the atlas actually covered by charts |
 | <a id="uv"></a> `uv` | `Float32Array`[] | per bake mesh, 2 floats per vertex in [0,1] — the `uv1` attribute the runtime needs |
 | <a id="width"></a> `width` | `number` | - |
+
+***
+
+### BakeEmitter
+
+```ts
+type BakeEmitter = {
+  faceMaterial: Uint32Array;
+  normals: Float32Array;
+  positions: Float32Array;
+};
+```
+
+Triangle soup in world space. What the BVH and the area-light list need, and nothing else.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="facematerial"></a> `faceMaterial` | `Uint32Array` | per-triangle material index into BakeScene.materials |
+| <a id="normals"></a> `normals` | `Float32Array` | - |
+| <a id="positions"></a> `positions` | `Float32Array` | world-space, 3 floats per vertex, vertexCount = triCount * 3 |
 
 ***
 
@@ -128,6 +150,9 @@ type BakeLight = {
 type BakeMaterial = {
   albedo: [number, number, number];
   emissive: [number, number, number];
+  map?: THREE.Texture;
+  mapScale?: [number, number, number];
+  oneSided?: boolean;
 };
 ```
 
@@ -137,32 +162,31 @@ type BakeMaterial = {
 | ------ | ------ | ------ |
 | <a id="albedo"></a> `albedo` | \[`number`, `number`, `number`\] | linear diffuse reflectance, what bounced light is multiplied by |
 | <a id="emissive"></a> `emissive` | \[`number`, `number`, `number`\] | linear radiance emitted by this surface (W/sr/m²) — becomes an area light |
+| <a id="map"></a> `map?` | `THREE.Texture` | the albedo map, sampled per texel when the bake builds an albedo atlas |
+| <a id="mapscale"></a> `mapScale?` | \[`number`, `number`, `number`\] | what one texel of [map](#map) is multiplied by — colour × (1 - metalness). `albedo` is its mean. |
+| <a id="onesided"></a> `oneSided?` | `boolean` | emits from the +normal side only (a RectAreaLight quad). A mesh material emits both ways. |
 
 ***
 
 ### BakeMesh
 
 ```ts
-type BakeMesh = {
-  faceMaterial: Uint32Array;
+type BakeMesh = BakeEmitter & {
   key: string;
   mesh: THREE.Mesh;
-  normals: Float32Array;
-  positions: Float32Array;
+  uv?: Float32Array;
 };
 ```
 
 One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and its own lightmap uv).
 
-#### Properties
+#### Type Declaration
 
-| Property | Type | Description |
+| Name | Type | Description |
 | ------ | ------ | ------ |
-| <a id="facematerial"></a> `faceMaterial` | `Uint32Array` | per-triangle material index into BakeScene.materials |
-| <a id="key"></a> `key` | `string` | stable path from the bake root — the key both the manifest and applyLightmap() use |
-| <a id="mesh"></a> `mesh` | `THREE.Mesh` | - |
-| <a id="normals"></a> `normals` | `Float32Array` | - |
-| <a id="positions"></a> `positions` | `Float32Array` | world-space, 3 floats per vertex, vertexCount = triCount * 3 |
+| `key` | `string` | stable path from the bake root — the key both the manifest and applyLightmap() use |
+| `mesh` | `THREE.Mesh` | - |
+| `uv?` | `Float32Array` | the mesh's own uv0, 2 floats per vertex — what an albedo map is sampled with. Absent: no uv0. |
 
 ***
 
@@ -172,7 +196,12 @@ One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and 
 type BakeOptions = UnwrapOptions & Omit<TraceOptions, "onProgress"> & CollectOptions & {
   denoiseRadius?: number;
   dilateRadius?: number;
+  only?: string[];
   onProgress?: (stage, fraction) => void;
+  previous?: {
+     image: Float32Array;
+     manifest: LightmapManifest;
+  };
   renderer: THREE.WebGPURenderer;
 };
 ```
@@ -185,7 +214,11 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 | ------ | ------ | ------ |
 | `denoiseRadius?` | `number` | 0 disables the edge-aware blur; 1 is a 3x3 kernel |
 | `dilateRadius?` | `number` | texels of lit-region growth past the chart edges. Keep >= the atlas padding. |
+| `only?` | `string`[] | with [previous](#bakeoptions), the `nodeKey()`s to re-trace. Everything else is copied over. |
 | `onProgress()?` | (`stage`, `fraction`) => `void` | - |
+| `previous?` | \{ `image`: `Float32Array`; `manifest`: [`LightmapManifest`](../bakery.md#lightmapmanifest-1); \} | A finished bake to rebake on top of: its uv layout is reused (no unwrap), and every texel outside [only](#bakeoptions) keeps the irradiance it already had. |
+| `previous.image` | `Float32Array` | - |
+| `previous.manifest` | [`LightmapManifest`](../bakery.md#lightmapmanifest-1) | - |
 | `renderer` | `THREE.WebGPURenderer` | an initialized WebGPURenderer. Required — `createHeadlessRenderer()` makes one in Node. |
 
 ***
@@ -223,6 +256,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 ```ts
 type BakeScene = {
   bounds: THREE.Box3;
+  emitters: BakeEmitter[];
   lights: BakeLight[];
   materials: BakeMaterial[];
   meshes: BakeMesh[];
@@ -235,6 +269,7 @@ type BakeScene = {
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="bounds"></a> `bounds` | `THREE.Box3` | world-space bounds of everything collected, for picking a default ray bias |
+| <a id="emitters"></a> `emitters` | [`BakeEmitter`](#bakeemitter)[] | geometry that lights the bake without receiving any — a RectAreaLight, turned into a quad |
 | <a id="lights"></a> `lights` | [`BakeLight`](#bakelight)[] | - |
 | <a id="materials"></a> `materials` | [`BakeMaterial`](#bakematerial)[] | - |
 | <a id="meshes"></a> `meshes` | [`BakeMesh`](#bakemesh)[] | - |
@@ -299,8 +334,10 @@ type Texels = {
   height: number;
   index: Uint32Array;
   mask: Uint8Array;
+  mesh: Int32Array;
   normal: Float32Array;
   position: Float32Array;
+  uv: Float32Array;
   width: number;
 };
 ```
@@ -312,8 +349,10 @@ type Texels = {
 | <a id="height-2"></a> `height` | `number` | - |
 | <a id="index"></a> `index` | `Uint32Array` | the covered texel indices, ascending — what the compute shader is dispatched over |
 | <a id="mask"></a> `mask` | `Uint8Array` | width*height, 1 where a chart covers the texel |
+| <a id="mesh"></a> `mesh` | `Int32Array` | width*height — index into the mesh list, -1 where nothing covers the texel |
 | <a id="normal"></a> `normal` | `Float32Array` | width*height*4 — world normal xyz, material id in w |
 | <a id="position-1"></a> `position` | `Float32Array` | width*height*4 — world position xyz, w unused |
+| <a id="uv-1"></a> `uv` | `Float32Array` | width*height*2 — the surface's own uv0, for sampling its albedo map. 0 where the mesh has none. |
 | <a id="width-2"></a> `width` | `number` | - |
 
 ***
@@ -322,10 +361,12 @@ type Texels = {
 
 ```ts
 type TraceOptions = {
+  albedo?: Uint32Array;
   batch?: number;
   bias?: number;
   bounces?: number;
   indirect?: number;
+  lightmapUV?: Float32Array[];
   onProgress?: (fraction) => void;
   samples?: number;
 };
@@ -335,10 +376,12 @@ type TraceOptions = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="albedo-1"></a> `albedo?` | `Uint32Array` | albedo per atlas texel, packed RGBA8, alpha = covered. Without it every bounce uses the material's mean. |
 | <a id="batch"></a> `batch?` | `number` | paths per dispatch. Lower it if the driver kills long compute passes. |
 | <a id="bias"></a> `bias?` | `number` | ray origin offset along the normal. Defaults to 1e-4 of the scene diagonal. |
 | <a id="bounces"></a> `bounces?` | `number` | diffuse bounces after the first hit — 4 is plenty indoors, 2 outdoors |
 | <a id="indirect"></a> `indirect?` | `number` | gain on everything past the first bounce — 1 is physical, >1 the usual cheat for a flat-looking interior. Direct light and the sky seen straight from a texel are untouched. |
+| <a id="lightmapuv"></a> `lightmapUV?` | `Float32Array`[] | per bake mesh, the atlas uv the unwrap produced — what a bounce is looked up in `albedo` with |
 | <a id="onprogress"></a> `onProgress?` | (`fraction`) => `void` | - |
 | <a id="samples"></a> `samples?` | `number` | total paths per texel. This is the only real quality knob. |
 
@@ -455,7 +498,7 @@ themselves when the scene is not a sheet on disk, or when one renderer bakes sev
 ### bvhProxy()
 
 ```ts
-function bvhProxy(scene): Group;
+function bvhProxy(scene, lightmapUV?): Group;
 ```
 
 The scene as three-mesh-bvh wants it: one Mesh per bake mesh, already in world space so every
@@ -467,6 +510,7 @@ which saves a parallel buffer — BVHComputeData interpolates and uploads normal
 | Parameter | Type |
 | ------ | ------ |
 | `scene` | [`BakeScene`](#bakescene) |
+| `lightmapUV?` | `Float32Array`\<`ArrayBufferLike`\>[] |
 
 #### Returns
 

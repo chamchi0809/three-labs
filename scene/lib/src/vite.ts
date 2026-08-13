@@ -1,7 +1,7 @@
 // Vite plugin: `import scene from './main.tscene'` gives a SceneModule, checked at build time.
 import path from "node:path";
 import { parse, type Member, type ObjectValue, type Statement, type Value } from "./parse.ts";
-import { BUILTINS, className } from "./names.ts";
+import { BUILTINS, className, LOADERS } from "./names.ts";
 import { checkSource, formatDiagnostic, loadSchema, resolveSheet } from "./tools.ts";
 import type { Schema, SchemaOptions } from "./schema.ts";
 
@@ -66,8 +66,51 @@ function threeExports(): Promise<Set<string>> {
 }
 
 const ABSOLUTE = /^(\w+:|\/|data:)/;
-// a loader is also usable as a node, so the call may carry a selector: gltf.hero#robot("./r.glb")
-const ASSET_CALL = /\b(?:texture|gltf)(?:\s*[.#][A-Za-z_][\w-]*)*\s*\(\s*("[^"]*"|'[^']*')/g;
+
+/**
+ * Every url a `texture()` or `gltf()` in this sheet could be handed, so vite can resolve and hash the
+ * file instead of the runtime guessing a url at load time. Variables are followed: `--wall: "./w.png"`
+ * with `texture(var(--wall))` has to bundle `w.png` too, and a var declared in several scopes
+ * contributes all of its values — a spare import costs a hash, a missing one costs the texture.
+ * ponytail: this sheet's own variables only. A var an `@import`ed sheet declares stays runtime-resolved,
+ * which works when the asset is already a url; expand() the imports here if that stops being enough.
+ */
+function assetUrls(statements: Statement[]): string[] {
+  const vars = new Map<string, string[]>();
+  const urls: string[] = [];
+
+  const value = (v: Value, visit: (o: ObjectValue) => void): void => {
+    switch (v.kind) {
+      case "object": visit(v); v.args.forEach((a) => value(a, visit)); return v.body.forEach((m) => member(m, visit));
+      case "array": return v.items.forEach((i) => value(i, visit));
+      case "record": return v.entries.forEach((e) => value(e.value, visit));
+      case "calc": value(v.left, visit); return value(v.right, visit);
+      case "var": return void (v.fallback && value(v.fallback, visit));
+    }
+  };
+  const member = (m: Member, visit: (o: ObjectValue) => void): void => {
+    if (m.kind === "node") return value(m.object, visit);
+    if (m.kind === "var" && m.value.kind === "string") vars.set(m.name, [...(vars.get(m.name) ?? []), m.value.value]);
+    value(m.value, visit);
+  };
+  const sheet = (visit: (o: ObjectValue) => void) => {
+    for (const s of statements) {
+      if (s.kind === "import") continue;
+      if (s.kind === "template") s.body.forEach((m) => member(m, visit));
+      else member(s, visit);
+    }
+  };
+
+  sheet(() => {}); // the declaration may come after the use, so the variables are collected first
+  sheet((o) => {
+    if (!LOADERS[o.name]) return;
+    for (const a of o.args) {
+      if (a.kind === "string") urls.push(a.value);
+      else if (a.kind === "var") urls.push(...(vars.get(a.name) ?? []));
+    }
+  });
+  return urls;
+}
 
 export default function threeScene(options: PluginOptions = {}) {
   let schema: Schema | undefined;
@@ -111,8 +154,7 @@ export default function threeScene(options: PluginOptions = {}) {
 
       // let vite resolve/hash the assets instead of guessing urls at runtime
       const assets = new Map<string, string>();
-      for (const [, quoted] of code.matchAll(ASSET_CALL)) {
-        const url = quoted!.slice(1, -1);
+      for (const url of assetUrls(sheet.statements)) {
         if (ABSOLUTE.test(url) || assets.has(url)) continue;
         const name = `__asset${assets.size}`;
         lines.push(`import ${name} from ${JSON.stringify(`${url.startsWith(".") ? url : `./${url}`}?url`)};`);
