@@ -5,6 +5,7 @@ A monorepo of three.js/WebGPU rendering experiments. One project = one top-level
 - Do not preserve backward compatibility.
 - Choose the simplest implementation that fully meets the current requirements.
 - Prefer established, well-maintained libraries over custom implementations.
+- New syntax means updating every consumer of it (parser, checker, runtime, LSP completion/hover, tmLanguage, docs): skipping is only ever allowed for a feature nobody asked for, never for behaviour the change breaks.
 
 ## Adding a library
 

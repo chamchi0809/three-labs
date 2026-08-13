@@ -5,6 +5,8 @@ import { bakeSceneFile } from "./file.ts";
 
 const USAGE = `tlightmap <scene.tscene> [options]
 
+Every option below can also live in the scene's own \`@bakery { … }\` block; a flag wins over it.
+
   --out <dir>          where to write (default: next to the scene)
   --name <name>        output base name (default: the scene's file name)
   --size <px>          atlas resolution (default 1024)
@@ -43,7 +45,16 @@ if (values.help || positionals.length !== 1) {
   process.exit(values.help ? 0 : 1);
 }
 
-const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
+// an absent flag stays `undefined` so the sheet's `@bakery` — and then the stage default — can fill it in
+const num = (name: string, v: string | undefined) => {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n)) {
+    process.stderr.write(`tlightmap: --${name} expects a number, got ${JSON.stringify(v)}\n`);
+    process.exit(1);
+  }
+  return n;
+};
 
 const clock = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -73,15 +84,15 @@ const result = await bakeSceneFile(positionals[0]!, {
   out: values.out,
   name: values.name,
   exr: values.exr,
-  size: num(values.size, 1024),
-  samples: num(values.samples, 512),
-  bounces: num(values.bounces, 4),
-  indirect: num(values.indirect, 1),
-  batch: num(values.batch, 32),
-  padding: num(values.padding, 2),
-  texelsPerUnit: num(values["texels-per-unit"], 0),
-  denoiseRadius: num(values.denoise, 1),
-  dilateRadius: num(values.dilate, 4),
+  size: num("size", values.size),
+  samples: num("samples", values.samples),
+  bounces: num("bounces", values.bounces),
+  indirect: num("indirect", values.indirect),
+  batch: num("batch", values.batch),
+  padding: num("padding", values.padding),
+  texelsPerUnit: num("texels-per-unit", values["texels-per-unit"]),
+  denoiseRadius: num("denoise", values.denoise),
+  dilateRadius: num("dilate", values.dilate),
   onProgress: (next, done) => {
     if (next !== stage) {
       stage = next;

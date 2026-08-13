@@ -8,6 +8,13 @@
 --w: 4;
 --h: 3;
 
+// the bake settings live with the scene, so `pnpm bake` is just the sheet's path
+@bakery {
+  out: "../public/lightmaps";
+  size: 512;
+  samples: 1024;
+}
+
 @template mesh.wall {
   material: meshStandardMaterial {
     color: color(var(--tint, #d6d2c8));
@@ -69,8 +76,8 @@ mesh.wall #short {
   rotation: euler(0, -16deg, 0);
 }
 
-// bakeRadius turns the delta light into a sphere light, which is the only way to bake a soft shadow
+// `radius` turns the delta light into a sphere light, which is the only way to bake a soft shadow
 pointLight #lamp(#fff2d8, 6, 0) {
   position: vec3(0, calc(var(--h) - 0.8), 0);
-  userData: { bakeRadius: 0.35 };
+  @bakery { radius: 0.35 };
 }

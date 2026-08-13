@@ -27,7 +27,8 @@ export type Value =
   /** `ref(#id)` — the instance built for that node. `node` is the node name expand() resolved it to. */
   | (Pos & { kind: "ref"; name: string; namePos: Pos; node?: string })
   | (Pos & { kind: "array"; items: Value[] })
-  | (Pos & { kind: "record"; entries: { name: string; value: Value }[] })
+  /** `namePos` is the key's own range — what a "no such setting" fix rewrites inside an `@bakery` block */
+  | (Pos & { kind: "record"; entries: { name: string; namePos: Pos; value: Value }[] })
   | (Pos & { kind: "calc"; op: "+" | "-" | "*" | "/"; left: Value; right: Value })
   | ObjectValue;
 
@@ -35,7 +36,11 @@ export type Member =
   /** `name` may be a dotted path: `position.x`, `material.color` */
   | (Pos & { kind: "prop"; name: string; value: Value })
   | (Pos & { kind: "node"; object: ObjectValue })
-  | (Pos & { kind: "var"; name: string; value: Value; namePos: Pos });
+  | (Pos & { kind: "var"; name: string; value: Value; namePos: Pos })
+  /** `@bakery { size: 512 }` — settings for a tool, not for three. Valid at the top level and in any node */
+  | (Pos & { kind: "at"; name: string; value: RecordValue });
+
+export type RecordValue = Extract<Value, { kind: "record" }>;
 
 export type Statement =
   | Member
@@ -209,30 +214,36 @@ export function parse(text: string, file?: string): Sheet {
     return out;
   }
 
+  // `@bakery` is a member, so it also works inside a node — the other two are top level only
   function parseStatement(): Statement {
-    if (at("at")) {
+    if (at("at") && (peek().value === "import" || peek().value === "template")) {
       const t = next();
       if (t.value === "import") {
         const s = expect("string");
         const end = at("punc", ";") ? next().end : s.end;
         return { kind: "import", path: s.value, start: t.start, end, file };
       }
-      if (t.value === "template") {
-        // `@template mesh.glow { }` — the node type it applies to, `@template .glow { }` for any Object3D
-        const node = at("ident") ? next().value : undefined;
-        const dot = expect("punc", ".");
-        const name = expect("ident");
-        const body = parseBlock();
-        const namePos = { start: dot.start, end: name.end, file };
-        return { kind: "template", node, name: name.value, body: body.members, namePos, start: t.start, end: body.end, file };
-      }
-      return fail(`unknown at-rule @${t.value}`, t);
+      // `@template mesh.glow { }` — the node type it applies to, `@template .glow { }` for any Object3D
+      const node = at("ident") ? next().value : undefined;
+      const dot = expect("punc", ".");
+      const name = expect("ident");
+      const body = parseBlock();
+      const namePos = { start: dot.start, end: name.end, file };
+      return { kind: "template", node, name: name.value, body: body.members, namePos, start: t.start, end: body.end, file };
     }
     return parseMember();
   }
 
   function parseMember(): Member {
     const t = peek();
+    if (t.type === "at") {
+      next();
+      if (t.value !== "bakery") return fail(`unknown at-rule @${t.value}`, t);
+      if (!at("punc", "{")) return fail(`@${t.value} takes a block: @${t.value} { size: 512 }`);
+      const value = parseValue() as RecordValue;
+      const end = at("punc", ";") ? next().end : value.end;
+      return { kind: "at", name: t.value, value, start: t.start, end, file };
+    }
     if (t.type === "var") {
       next();
       expect("punc", ":");
@@ -339,12 +350,12 @@ export function parse(text: string, file?: string): Sheet {
     }
     if (t.type === "punc" && t.value === "{") {
       next();
-      const entries: { name: string; value: Value }[] = [];
+      const entries: RecordValue["entries"] = [];
       eatSemis();
       while (!at("punc", "}")) {
         const name = at("string") ? next() : expect("ident");
         expect("punc", ":");
-        entries.push({ name: name.value, value: parseValue() });
+        entries.push({ name: name.value, namePos: { start: name.start, end: name.end, file }, value: parseValue() });
         if (at("punc", ",")) next();
         eatSemis();
       }
@@ -496,6 +507,7 @@ export function print(sheet: Sheet): string {
       flush(m.start, indent, push);
       if (m.kind === "prop") push(indent + `${m.name}: ${value(m.value, indent)};`);
       else if (m.kind === "var") push(indent + `--${m.name}: ${value(m.value, indent)};`);
+      else if (m.kind === "at") push(indent + `@${m.name} ${value(m.value, indent)};`);
       else push(indent + object(m.object, indent));
     }
     flush(end, indent, push);
@@ -631,7 +643,8 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
     for (const m of body) {
       if (m.kind === "node") continue;
       const key = `${m.kind}:${m.name}`;
-      if (seen.has(key)) warn(`${m.kind === "var" ? `--${m.name}` : m.name} is set twice in this block`, m);
+      const shown = m.kind === "var" ? `--${m.name}` : m.kind === "at" ? `@${m.name}` : m.name;
+      if (seen.has(key)) warn(`${shown} is set twice in this block`, m);
       seen.add(key);
     }
   }
@@ -700,6 +713,7 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
   function member(m: Member, sc: Scope): Member {
     if (m.kind === "prop") return { ...m, value: subst(m.value, sc) };
     if (m.kind === "node") return { ...m, object: object(m.object, sc) };
+    if (m.kind === "at") return { ...m, value: subst(m.value, sc) as RecordValue };
     return m;
   }
 

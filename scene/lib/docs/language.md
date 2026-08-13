@@ -178,6 +178,23 @@ pointLight.glow #lamp { }
 The imported sheet's top-level variables and `@template`s become visible. Its nodes are not added (an
 imported sheet is treated as a library). Import cycles are ignored.
 
+## `@bakery`
+
+Settings for a tool rather than for three, so they never touch a three property. Valid at the top level
+(the sheet's own settings), in a node, and in a material; a block is merged into whatever a `@template`
+already put there, key by key.
+
+```css
+@bakery { size: 512; samples: 1024; out: "../public/lightmaps" };
+
+pointLight #lamp(#fff2d8, 6) {
+  @bakery { radius: 0.35 };
+}
+```
+
+The keys are fixed and checked per position — `@bakery { sise: 512 }` is an error with a fix, the way a
+misspelled property is. [`bakery.md`](./bakery.md) documents what each one does.
+
 ## Builtins
 
 Names that are handled by the language itself rather than looked up in three.

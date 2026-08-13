@@ -1,9 +1,11 @@
 // Sheet on disk -> lightmap on disk, in one call. Node only.
-import { basename, dirname, extname } from "node:path";
+import { basename, dirname, extname, resolve } from "node:path";
 import type * as THREE from "three/webgpu";
+import type { SceneBakery } from "../names.ts";
 import { bake, type BakeOptions, type BakeResult } from "./bake.ts";
 import { createHeadlessRenderer } from "./headless.ts";
 import { writeBake, type WriteOptions } from "./io.ts";
+import { bakerySettings } from "./scene.ts";
 import { loadSceneFile } from "./tscene.ts";
 
 export type BakeFileOptions = Omit<BakeOptions, "renderer"> &
@@ -32,18 +34,25 @@ export type BakeFileResult = BakeResult & {
  * });
  * ```
  *
- * Every knob of {@link bake} and {@link writeBake} passes straight through. Reach for the pieces
+ * Every knob of {@link bake} and {@link writeBake} passes straight through, and every one of them can
+ * also live in the sheet's own `@bakery { … }` block — what is passed here wins. Reach for the pieces
  * themselves when the scene is not a sheet on disk, or when one renderer bakes several scenes.
  */
 export async function bakeSceneFile(file: string, opts: BakeFileOptions = {}): Promise<BakeFileResult> {
-  const { out, name, renderer: given, ...rest } = opts;
   const root = await loadSceneFile(file);
-  const renderer = given ?? (await createHeadlessRenderer());
+  const sheet = bakerySettings<SceneBakery>(root) ?? {};
+  // an unset option must not shadow the sheet, so `undefined` entries are dropped before the merge
+  const given = Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined)) as BakeFileOptions;
+  const { out, name, renderer, ...rest } = { ...sheet, ...given };
+  // the sheet's `out` reads like its `@import`s — relative to the sheet. A caller's is relative to cwd.
+  const dir = given.out !== undefined ? given.out : sheet.out !== undefined ? resolve(dirname(file), sheet.out) : dirname(file);
+
+  const gpu = renderer ?? (await createHeadlessRenderer());
   try {
-    const result = await bake(root, { ...rest, renderer });
-    const files = await writeBake(result, out ?? dirname(file), name ?? basename(file, extname(file)), opts);
+    const result = await bake(root, { ...rest, renderer: gpu });
+    const files = await writeBake(result, dir, name ?? basename(file, extname(file)), rest);
     return { ...result, files };
   } finally {
-    if (!given) renderer.dispose();
+    if (!renderer) gpu.dispose();
   }
 }

@@ -30,6 +30,7 @@ const source = `// a comment
   castShadow: true;
 }
 --height: 2deg;
+@bakery { size: 512 };
 mesh.glow #box {
   geometry: boxGeometry(1, 1, 1);
   position: vec3(0, var(--height), 0);
@@ -85,8 +86,9 @@ has(".glow", "entity.name.type.template", 2); // the declaration
 has("mesh", "entity.name.tag", 2); // ...and the node type it applies to
 has("--height", "variable.other.custom-property");
 has("2deg", "constant.numeric");
-has("mesh", "entity.name.tag", 6);
-has(".glow", "entity.other.attribute-name.class", 6); // the use site
+has("@bakery", "keyword.control.bakery");
+has("mesh", "entity.name.tag", 7);
+has(".glow", "entity.other.attribute-name.class", 7); // the use site
 has("#box", "entity.other.attribute-name.id");
 has("geometry", "support.type.property-name");
 has("boxGeometry", "entity.name.function");
@@ -100,9 +102,9 @@ has("*", "keyword.operator.arithmetic");
 has("[", "punctuation.section.brackets");
 has("material.opacity", "support.type.property-name"); // dotted paths are one property
 has("ref", "support.function.ref");
-has("#box", "entity.other.attribute-name.id", 12); // the ref target, not a hex colour
+has("#box", "entity.other.attribute-name.id", 13); // the ref target, not a hex colour
 for (const builtin of ["repeat", "find", "play"]) has(builtin, "support.function.builtin");
-has("#head", "entity.other.attribute-name.id", 17); // the alias find() binds
+has("#head", "entity.other.attribute-name.id", 18); // the alias find() binds
 
 // every path the manifest contributes must exist, and extension.js must at least parse
 const manifest = require("./package.json");

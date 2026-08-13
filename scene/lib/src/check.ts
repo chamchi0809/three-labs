@@ -2,7 +2,7 @@
 // Pure (no typescript / no three import) so it runs in the browser too.
 import type { Diagnostic, Member, ObjectValue, Pos, Template, Value } from "./parse.ts";
 import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
-import { ALIASES, BUILTINS, LOADERS, className, nodeName } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, LOADERS, className, nodeName, type Knob } from "./names.ts";
 
 /** Levenshtein distance, two rows at a time */
 function distance(a: string, b: string): number {
@@ -247,9 +247,55 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     if (info("AnimationAction")) checkBody("AnimationAction", o.body);
   }
 
+  /**
+   * `@bakery { … }` — settings for the baker, not for three, so the reflected schema has nothing to say
+   * about them. They are typed by the table in names.ts instead, per position.
+   */
+  function checkBakery(m: Member & { kind: "at" }, position: "scene" | "node" | "material" | undefined) {
+    if (!position) return err(`@${m.name} belongs on the sheet, a node or a material`, m);
+    const table = BAKERY[position];
+    for (const e of m.value.entries) {
+      const knob = table[e.name];
+      if (!knob) {
+        const alt = suggest(e.name, Object.keys(table));
+        err(
+          `@${m.name} has no ${position} setting ${JSON.stringify(e.name)}` + (alt ? `; did you mean ${alt}?` : ""),
+          e.namePos,
+          alt ? { start: e.namePos.start, end: e.namePos.end, text: alt } : undefined,
+        );
+        continue;
+      }
+      checkKnob(e.value, knob, `@${m.name} ${e.name}`);
+    }
+  }
+
+  function checkKnob(v: Value, knob: Knob, what: string) {
+    // a raw template body is checked before expansion, so var() and calc() are still unresolved here
+    if (v.kind === "var" || v.kind === "calc") return;
+    const wrong = (expected: string) => err(`${what} expects ${expected}`, v);
+    if (knob.values) {
+      if (v.kind !== "ident" || !knob.values.includes(v.name)) {
+        const alt = v.kind === "ident" ? suggest(v.name, knob.values) : undefined;
+        err(`${what} expects ${knob.values.join(" | ")}`, v, alt ? { start: v.start, end: v.end, text: alt } : undefined);
+      }
+      return;
+    }
+    if (knob.type === "number" && v.kind !== "number" && v.kind !== "hex") wrong("a number");
+    if (knob.type === "string" && v.kind !== "string") wrong("a string");
+    if (knob.type === "boolean" && !(v.kind === "ident" && (v.name === "true" || v.name === "false"))) wrong("true or false");
+    if (knob.type === "numbers") {
+      if (v.kind !== "array" || v.items.some((i) => i.kind !== "number")) wrong("an array of numbers");
+      else if (knob.length !== undefined && v.items.length !== knob.length) wrong(`${knob.length} numbers`);
+    }
+  }
+
   function checkBody(cls: string, body: Member[]) {
     for (const m of body) {
       if (m.kind === "var") continue;
+      if (m.kind === "at") {
+        checkBakery(m, isA(cls, "Object3D") ? "node" : isA(cls, "Material") ? "material" : undefined);
+        continue;
+      }
       if (m.kind === "node") {
         const childCls = className(m.object.name);
         if (m.object.name === "find") { checkFind(m.object); continue; }
@@ -366,6 +412,8 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       checkObject(m.object);
     } else if (m.kind === "prop") {
       err(`property ${JSON.stringify(m.name)} must be inside a node`, m);
+    } else if (m.kind === "at") {
+      checkBakery(m, "scene");
     }
   }
 

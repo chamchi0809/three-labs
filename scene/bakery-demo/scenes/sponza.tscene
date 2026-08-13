@@ -12,10 +12,16 @@
 
 --sun: #fff1d0;
 
+@bakery {
+  out: "../public/lightmaps";
+  size: 2048;
+  samples: 1024;
+}
+
 directionalLight #sun(var(--sun), 4) {
   position: vec3(-8, 20, 4);
   // to the baker this is the sun's angular radius in radians — 0.02 rad is a slightly soft disc
-  userData: { bakeRadius: 0.02 };
+  @bakery { radius: 0.02 };
 }
 
 gltf #sponza("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Sponza/glTF/Sponza.gltf") {}

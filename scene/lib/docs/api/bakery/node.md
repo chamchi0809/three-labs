@@ -279,6 +279,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 ```ts
 type CollectOptions = {
   defaultAlbedo?: number;
+  include?: "all" | "none";
 };
 ```
 
@@ -287,6 +288,7 @@ type CollectOptions = {
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="defaultalbedo"></a> `defaultAlbedo?` | `number` | default albedo for materials without a `color` (linear grey) |
+| <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` (the default) bakes every visible mesh except the ones that turn themselves off; `none` bakes only the ones that opt in. Defaults to the root's own `@bakery { include }`. |
 
 ***
 
@@ -433,7 +435,8 @@ const { files, width, exposure } = await bakeSceneFile("scenes/room.tscene", {
 });
 ```
 
-Every knob of [bake](#bake) and [writeBake](#writebake) passes straight through. Reach for the pieces
+Every knob of [bake](#bake) and [writeBake](#writebake) passes straight through, and every one of them can
+also live in the sheet's own `@bakery { … }` block — what is passed here wins. Reach for the pieces
 themselves when the scene is not a sheet on disk, or when one renderer bakes several scenes.
 
 #### Parameters
@@ -716,9 +719,21 @@ Re-exports [applyLightmap](../bakery.md#applylightmap)
 
 ***
 
+### bakeEnabled
+
+Re-exports [bakeEnabled](../bakery.md#bakeenabled)
+
+***
+
 ### bakeGeometry
 
 Re-exports [bakeGeometry](../bakery.md#bakegeometry)
+
+***
+
+### bakerySettings
+
+Re-exports [bakerySettings](../bakery.md#bakerysettings)
 
 ***
 
@@ -752,6 +767,24 @@ Re-exports [loadLightmap](../bakery.md#loadlightmap)
 
 ***
 
+### MaterialBakery
+
+Re-exports [MaterialBakery](../index.md#materialbakery)
+
+***
+
+### NodeBakery
+
+Re-exports [NodeBakery](../index.md#nodebakery)
+
+***
+
 ### nodeKey
 
 Re-exports [nodeKey](../bakery.md#nodekey)
+
+***
+
+### SceneBakery
+
+Re-exports [SceneBakery](../index.md#scenebakery)

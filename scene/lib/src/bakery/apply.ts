@@ -1,7 +1,7 @@
 // The runtime half: what a bake writes out, and how a loaded scene picks it up. Browser safe — no
 // node imports in this file.
 import * as THREE from "three/webgpu";
-import { bakeGeometry, nodeKey } from "./scene.ts";
+import { bakeEnabled, bakeGeometry, nodeKey } from "./scene.ts";
 
 export type LightmapManifest = {
   version: 1;
@@ -81,8 +81,9 @@ export async function applyLightmap(
   const lights = new Map<THREE.Light, number>();
   root.traverse((o) => {
     const light = o as THREE.Light;
-    // `bake: false` means "stays live at runtime", so it is not one of the lights the atlas contains
-    if (light.isLight && o.userData?.bake !== false) lights.set(light, light.intensity);
+    // `@bakery { enabled: false }` means "stays live at runtime", so it is not one of the lights the atlas
+    // contains. Same rule as collectScene's, or the two disagree about which lights the bake already holds.
+    if (light.isLight && bakeEnabled(o) !== false) lights.set(light, light.intensity);
   });
 
   let gain = 1;

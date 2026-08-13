@@ -45,6 +45,7 @@ group #stage {
 | node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) |
 | values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ hp: 3 }` |
 | language functions | `var(--x, fallback)` `calc(...)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
+| `@bakery { ... }` | settings for a tool rather than for three — the [lightmap baker](./docs/bakery.md)'s, on the sheet, a node or a material |
 
 ## Runtime
 
@@ -139,8 +140,8 @@ Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 | Feature | Details |
 | --- | --- |
 | diagnostics | refreshed while typing, no save needed, following `@import`s |
-| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths inside `@import "` |
-| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants |
+| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths inside `@import "`, and the settings of the position inside `@bakery {` (its keys, then that key's values) |
+| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys |
 | signature help | highlights the current argument inside `boxGeometry(` |
 | go to definition | templates (`.glow`), variables (`var(--x)`), `#id` (`ref(#a)`), `@import` paths (also ctrl-clickable as document links) |
 | find references / rename | `--var`, `#id`, `.template` — across every `.tscene` in the workspace, multi-root included. Rename validates the cursor position and the new name first (prepareRename). It follows the declaration↔use pairs `expand()` actually resolved, so a shadowed variable of the same name is left alone and a `var()` passed in as a template parameter is renamed along with it |

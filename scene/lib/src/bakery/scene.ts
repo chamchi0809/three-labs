@@ -1,5 +1,6 @@
 // Scene -> flat bake input: world-space triangle soup, materials, lights, sky.
 import * as THREE from "three/webgpu";
+import type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";
 
 /** One bakeable mesh, de-indexed so every triangle corner owns its own vertex (and its own lightmap uv). */
 export type BakeMesh = {
@@ -71,12 +72,30 @@ export function nodeKey(root: THREE.Object3D, o: THREE.Object3D): string {
   return parts.join("/");
 }
 
-/** Set `userData.bake = false` on a node to keep it out of the lightmap entirely (occluder and receiver). */
-const skipped = (o: THREE.Object3D) => o.userData?.bake === false;
+/** What a sheet's `@bakery { … }` block left on the object it was written in. */
+export const bakerySettings = <T extends NodeBakery | MaterialBakery | SceneBakery>(o: object | undefined): T | undefined =>
+  (o as { bakery?: T } | undefined)?.bakery;
+
+/**
+ * Whether `o` is in the bake: its own `@bakery { enabled }`, or the nearest ancestor that states one.
+ * `undefined` means nobody said, and the sheet's `include` decides.
+ */
+export function bakeEnabled(o: THREE.Object3D): boolean | undefined {
+  for (let n: THREE.Object3D | null = o; n; n = n.parent) {
+    const enabled = bakerySettings<NodeBakery>(n)?.enabled;
+    if (enabled !== undefined) return enabled;
+  }
+  return undefined;
+}
 
 export type CollectOptions = {
   /** default albedo for materials without a `color` (linear grey) */
   defaultAlbedo?: number;
+  /**
+   * `all` (the default) bakes every visible mesh except the ones that turn themselves off; `none`
+   * bakes only the ones that opt in. Defaults to the root's own `@bakery { include }`.
+   */
+  include?: "all" | "none";
 };
 
 /** Walks the scene once and flattens everything the path tracer needs. Does not mutate `root`. */
@@ -94,9 +113,15 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   const v = new THREE.Vector3();
   const lightDir = new THREE.Vector3();
 
+  const byDefault = (opts.include ?? bakerySettings<SceneBakery>(root)?.include ?? "all") === "all";
+
   root.traverse((o) => {
-    if (!o.visible || skipped(o)) return;
-    if ((o as THREE.Light).isLight) return collectLight(o as THREE.Light, lights, sky);
+    if (!o.visible) return;
+    const enabled = bakeEnabled(o);
+    // a light is an input, not a receiver: `include: none` picks the meshes to bake, and only an
+    // explicit `@bakery { enabled: false }` takes a light out (it stays live at runtime instead)
+    if ((o as THREE.Light).isLight) return enabled === false ? undefined : collectLight(o as THREE.Light, lights, sky);
+    if (!(enabled ?? byDefault)) return;
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || (mesh as unknown as { isSkinnedMesh?: boolean }).isSkinnedMesh) return;
 
@@ -259,9 +284,9 @@ function intern(
 }
 
 function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMaterial {
-  const m = material as THREE.MeshStandardMaterial & { userData: Record<string, unknown> };
-  // `userData.bakeAlbedo` is the escape hatch for anything the reflectance guess gets wrong
-  const override = m.userData?.bakeAlbedo as [number, number, number] | undefined;
+  const m = material as THREE.MeshStandardMaterial;
+  // `@bakery { albedo: [r, g, b] }` is the escape hatch for anything the reflectance guess gets wrong
+  const override = bakerySettings<MaterialBakery>(m)?.albedo;
   let albedo: [number, number, number] = override
     ? [...override]
     : m.color
@@ -277,7 +302,7 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
   const scale = m.metalnessMap ? (meanColor(m.metalnessMap)?.[2] ?? 1) : 1;
   const diffuse = 1 - Math.min(1, Math.max(0, (m.metalness ?? 0) * scale));
   // an override is the final reflectance, not an input to the guess -- darkening it too would make
-  // `bakeAlbedo = [1,1,1]` unreachable on any metal, and a furnace test impossible to write.
+  // `albedo: [1, 1, 1]` unreachable on any metal, and a furnace test impossible to write.
   if (!override && m.metalness !== undefined) albedo = [albedo[0] * diffuse, albedo[1] * diffuse, albedo[2] * diffuse];
 
   const intensity = m.emissiveIntensity ?? 1;
@@ -295,7 +320,7 @@ const SRGB_TO_LINEAR = Float32Array.from({ length: 256 }, (_, i) => {
 /**
  * Mean linear reflectance of an albedo map.
  * ponytail: one colour per texture, not per-texel — colour bleeding gets the map's hue but not its
- * pattern. Sampling the real texture means an albedo atlas on the GPU; set `userData.bakeAlbedo` until then.
+ * pattern. Sampling the real texture means an albedo atlas on the GPU; set `@bakery { albedo }` until then.
  */
 function meanColor(texture: THREE.Texture): [number, number, number] | undefined {
   const image = texture.image as { data?: ArrayLike<number>; width?: number; height?: number } | undefined;
@@ -383,7 +408,7 @@ function collectLight(light: THREE.Light, lights: BakeLight[], sky: BakeSky): vo
     decay: isDirectional ? 2 : ((light as THREE.PointLight).decay ?? 2),
     cosOuter: Math.cos(angle),
     cosInner: Math.cos(angle * (1 - penumbra)),
-    // `userData.bakeRadius` turns a delta light into a sphere light — the only way to get soft baked shadows
-    radius: Math.max(0, Number(light.userData?.bakeRadius ?? 0)),
+    // `@bakery { radius }` turns a delta light into a sphere light — the only way to get soft baked shadows
+    radius: Math.max(0, bakerySettings<NodeBakery>(light)?.radius ?? 0),
   });
 }

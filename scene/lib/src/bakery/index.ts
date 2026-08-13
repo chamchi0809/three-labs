@@ -21,4 +21,5 @@
  * ```
  */
 export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, type Lightmap, type LightmapManifest } from "./apply.ts";
-export { bakeGeometry, nodeKey } from "./scene.ts";
+export { bakeEnabled, bakeGeometry, bakerySettings, nodeKey } from "./scene.ts";
+export type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";

@@ -8,8 +8,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "check": "node node_modules/tscene/dist/cli.js check scenes",
-    "bake": "node node_modules/tscene/dist/bakery/cli.js scenes/room.tscene --out public/lightmaps --size 512 --samples 1024",
-    "bake:sponza": "node node_modules/tscene/dist/bakery/cli.js scenes/sponza.tscene --out public/lightmaps --size 2048 --samples 1024"
+    "bake": "node node_modules/tscene/dist/bakery/cli.js scenes/room.tscene",
+    "bake:sponza": "node node_modules/tscene/dist/bakery/cli.js scenes/sponza.tscene"
   },
   "dependencies": {
     "tscene": "workspace:*"

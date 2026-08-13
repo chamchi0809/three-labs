@@ -34,6 +34,7 @@
             "3": { "name": "entity.name.type.template.scene" }
           }
         },
+        { "name": "keyword.control.bakery.scene", "match": "@bakery\\b" },
         { "name": "invalid.illegal.unknown-at-rule.scene", "match": "@[A-Za-z-]+" }
       ]
     },

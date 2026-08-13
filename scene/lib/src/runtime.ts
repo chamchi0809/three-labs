@@ -119,8 +119,9 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
   const root = new Group();
   root.name = "scene";
   for (const m of nodes) {
-    if (m.kind !== "node") continue;
-    root.add((await construct(m.object, ctx)) as Object3D);
+    // a top-level `@bakery { … }` is the sheet's own settings, so it lands on the root
+    if (m.kind === "at") settings(root, m, ctx);
+    else if (m.kind === "node") root.add((await construct(m.object, ctx)) as Object3D);
   }
   ctx.settled = true;
   for (const replay of ctx.deferred) await replay();
@@ -363,6 +364,7 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
 
 async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
   if (m.kind === "var") return;
+  if (m.kind === "at") return settings(target, m, ctx);
   if (m.kind === "node") {
     const o = m.object;
     if (o.name === "find") return applyFind(target, o, ctx);
@@ -406,6 +408,35 @@ async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
   } catch (e) {
     // a getter-only property (a registry class the checker cannot see) throws in strict mode
     fail(`cannot set ${m.name}: ${(e as Error).message}`, m, ctx);
+  }
+}
+
+/**
+ * `@bakery { … }` — settings for a tool, not for three, so they land on `target.bakery` instead of
+ * being assigned property by property. Merged key by key: a template's block and the node's own block
+ * combine, and the later one wins per key.
+ */
+function settings(target: any, m: Member & { kind: "at" }, ctx: Ctx): void {
+  target[m.name] = { ...target[m.name], ...(literal(m.value, ctx) as object) };
+}
+
+/**
+ * A settings value: numbers, strings, booleans, arrays and records, and nothing else. Deliberately not
+ * {@link evaluate} — a bare word in here is a plain string (`include: none`), not a three constant.
+ */
+function literal(v: Value, ctx: Ctx): unknown {
+  switch (v.kind) {
+    case "number": return v.unit === "deg" ? (v.value * Math.PI) / 180 : v.value;
+    case "hex": return v.value;
+    case "string": return v.value;
+    case "array": return v.items.map((i) => literal(i, ctx));
+    case "record": return Object.fromEntries(v.entries.map((e) => [e.name, literal(e.value, ctx)]));
+    case "ident":
+      if (v.name === "true") return true;
+      if (v.name === "false") return false;
+      if (v.name === "null") return null;
+      return v.name;
+    default: return fail(`a setting cannot be ${v.kind === "object" ? `a ${v.name}()` : `a ${v.kind}`}`, v, ctx);
   }
 }
 

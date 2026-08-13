@@ -7,6 +7,11 @@ import { rasterize } from "./raster.ts";
 import { areaLights, bakeGeometry, collectScene, nodeKey, type BakeMesh } from "./scene.ts";
 import { dilate } from "./filter.ts";
 import { applyLightmap, decodeFloats, encodeFloats, type LightmapManifest } from "./apply.ts";
+import type { NodeBakery, SceneBakery } from "../names.ts";
+
+/** what `@bakery { … }` leaves behind, written by hand — three's own types know nothing about it */
+const bakery = <T extends object>(o: T, settings: NodeBakery | SceneBakery): T =>
+  Object.assign(o, { bakery: settings });
 
 /** A 2x2 quad on the XZ plane at y = 0, facing +Y, filling the whole atlas. */
 function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
@@ -98,7 +103,7 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   root.add(panel);
 
   const hidden = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
-  hidden.userData.bake = false;
+  bakery(hidden, { enabled: false });
   root.add(hidden);
 
   const ambient = new THREE.AmbientLight(0xffffff, Math.PI);
@@ -109,7 +114,7 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
 
   const scene = collectScene(root);
 
-  assert.equal(scene.meshes.length, 2, "userData.bake === false keeps a mesh out entirely");
+  assert.equal(scene.meshes.length, 2, "@bakery { enabled: false } keeps a mesh out entirely");
   assert.deepEqual(
     scene.meshes.map((m) => m.key),
     ["wall", "panel"],
@@ -162,7 +167,7 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   mesh.name = "floor";
   const baked = new THREE.PointLight(0xffffff, 7);
   const live = new THREE.PointLight(0xffffff, 3);
-  live.userData.bake = false; // "stays live at runtime": not one of the lights the atlas contains
+  bakery(live, { enabled: false }); // "stays live at runtime": not one of the lights the atlas contains
   root.add(mesh, baked, live);
 
   const vertices = bakeGeometry(mesh).getAttribute("position").count;
@@ -208,6 +213,45 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
     applyLightmap(root, { manifest: { ...manifest, meshes: [{ ...manifest.meshes[0]!, vertices: 3 }] }, texture }),
     /baked from 3 vertices|has \d+ vertices/,
   );
+}
+
+// --- `@bakery { include }` and the subtree it applies to --------------------------------------------
+{
+  const build = () => {
+    const root = new THREE.Group();
+    const plain = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+    plain.name = "plain";
+    const group = new THREE.Group();
+    group.name = "group";
+    const child = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+    child.name = "child";
+    const override = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+    override.name = "override";
+    group.add(child, override);
+    root.add(plain, group, new THREE.PointLight(0xffffff, 1));
+    return { root, plain, group, child, override };
+  };
+  const keys = (root: THREE.Object3D, opts?: Parameters<typeof collectScene>[1]) =>
+    collectScene(root, opts).meshes.map((m) => m.key);
+
+  // include: all — everything but what turns itself off, and the subtree under it
+  const a = build();
+  bakery(a.group, { enabled: false });
+  bakery(a.override, { enabled: true });
+  assert.deepEqual(keys(a.root), ["plain", "group/override"], "enabled is inherited, and a child can opt back in");
+
+  // include: none — only what opts in, and the subtree under it
+  const b = build();
+  bakery(b.group, { enabled: true });
+  bakery(b.override, { enabled: false });
+  assert.deepEqual(keys(b.root, { include: "none" }), ["group/child"], "include: none bakes only the opted-in subtree");
+  assert.equal(collectScene(b.root, { include: "none" }).lights.length, 1, "include: none does not mute lights");
+
+  // the sheet's own block is the default, and an explicit option beats it
+  const c = build();
+  bakery(c.root, { include: "none" } satisfies SceneBakery);
+  assert.deepEqual(keys(c.root), [], "a sheet's include: none is picked up off the root");
+  assert.deepEqual(keys(c.root, { include: "all" }), ["plain", "group/child", "group/override"], "the caller wins");
 }
 
 console.log("raster.test.ts ok");

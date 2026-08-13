@@ -152,6 +152,26 @@ type HotListener = (mod) => void;
 
 ***
 
+### Knob
+
+```ts
+type Knob = {
+  length?: number;
+  type: "number" | "string" | "boolean" | "numbers";
+  values?: string[];
+};
+```
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="length"></a> `length?` | `number` |
+| <a id="type"></a> `type` | `"number"` \| `"string"` \| `"boolean"` \| `"numbers"` |
+| <a id="values"></a> `values?` | `string`[] |
+
+***
+
 ### Loader
 
 ```ts
@@ -208,6 +228,24 @@ type LoadOptions = {
 
 ***
 
+### MaterialBakery
+
+```ts
+type MaterialBakery = {
+  albedo?: [number, number, number];
+};
+```
+
+A material's own `@bakery { … }`.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="albedo"></a> `albedo?` | \[`number`, `number`, `number`\] | the linear reflectance the tracer bounces off this material, overriding the guess from `map`/`color` |
+
+***
+
 ### Member
 
 ```ts
@@ -226,6 +264,11 @@ type Member =
   name: string;
   namePos: Pos;
   value: Value;
+}
+  | Pos & {
+  kind: "at";
+  name: string;
+  value: RecordValue;
 };
 ```
 
@@ -317,6 +360,26 @@ type MountOptions = LoadOptions & {
 
 ***
 
+### NodeBakery
+
+```ts
+type NodeBakery = {
+  enabled?: boolean;
+  radius?: number;
+};
+```
+
+A node's own `@bakery { … }`. `enabled` is inherited by the whole subtree unless a child overrides it.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="enabled"></a> `enabled?` | `boolean` | `false` keeps the node out of the bake — as an occluder *and* a receiver. On a light: stays live at runtime |
+| <a id="radius"></a> `radius?` | `number` | soft shadows: the light becomes a sphere of this world radius (a directional light reads radians) |
+
+***
+
 ### ObjectValue
 
 ```ts
@@ -366,6 +429,58 @@ type Pos = {
 | <a id="end"></a> `end` | `number` |
 | <a id="file"></a> `file?` | `string` |
 | <a id="start"></a> `start` | `number` |
+
+***
+
+### RecordValue
+
+```ts
+type RecordValue = Extract<Value, {
+  kind: "record";
+}>;
+```
+
+***
+
+### SceneBakery
+
+```ts
+type SceneBakery = {
+  batch?: number;
+  bounces?: number;
+  denoiseRadius?: number;
+  dilateRadius?: number;
+  exr?: boolean;
+  include?: "all" | "none";
+  indirect?: number;
+  name?: string;
+  out?: string;
+  padding?: number;
+  samples?: number;
+  size?: number;
+  texelsPerUnit?: number;
+};
+```
+
+What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()` except the renderer.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="batch"></a> `batch?` | `number` | - |
+| <a id="bounces"></a> `bounces?` | `number` | - |
+| <a id="denoiseradius"></a> `denoiseRadius?` | `number` | - |
+| <a id="dilateradius"></a> `dilateRadius?` | `number` | - |
+| <a id="exr"></a> `exr?` | `boolean` | - |
+| <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` bakes every mesh but the ones that turn themselves off; `none` bakes only the ones that opt in |
+| <a id="indirect"></a> `indirect?` | `number` | - |
+| <a id="name"></a> `name?` | `string` | - |
+| <a id="out"></a> `out?` | `string` | where to write, relative to the sheet |
+| <a id="padding"></a> `padding?` | `number` | - |
+| <a id="samples"></a> `samples?` | `number` | - |
+| <a id="size"></a> `size?` | `number` | - |
+| <a id="texelsperunit"></a> `texelsPerUnit?` | `number` | - |
 
 ***
 
@@ -491,6 +606,7 @@ type Value =
   | Pos & {
   entries: {
      name: string;
+     namePos: Pos;
      value: Value;
   }[];
   kind: "record";
@@ -513,6 +629,18 @@ const ALIASES: Record<string, string>;
 ```
 
 call-name → three class. `texture`/`gltf` are loader-backed.
+
+***
+
+### BAKERY
+
+```ts
+const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>;
+```
+
+`@bakery { … }` is settings for the baker, not for three, so the schema cannot type it — this table
+is what the checker validates against, per position. Adding a knob to [SceneBakery](#scenebakery) and friends
+without a row here means the checker rejects it.
 
 ***
 

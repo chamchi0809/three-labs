@@ -24,8 +24,10 @@ pnpm dev:bakery    # the demo, press G to A/B baked GI against realtime direct l
 - **three's own light math, verbatim.** `DirectionalLight`, `PointLight` and `SpotLight` reproduce
   `getDistanceAttenuation`, the distance window and the spot penumbra exactly, so a bake matches what the
   realtime renderer was already showing. `AmbientLight` and `HemisphereLight` collapse into a sky gradient.
-- **Soft shadows.** `userData.bakeRadius` on a light turns it into a sphere (or, for a directional light,
+- **Soft shadows.** `@bakery { radius }` on a light turns it into a sphere (or, for a directional light,
   an angular cone) and gives a real penumbra.
+- **Settings live in the sheet.** `@bakery { … }` holds the bake's own knobs and picks which nodes are in
+  it, so baking a scene is `tscene-bake scenes/room.tscene` and nothing else.
 - **Irradiance, not colour.** The atlas holds `E`, which is exactly what three's `lightMap` slot wants,
   so applying a bake is a texture assignment — no custom material, no patched shader.
 
@@ -38,7 +40,8 @@ Two entry points. `tscene/bakery` is browser safe and does nothing but apply a b
 // bake, in Node
 import { bakeSceneFile } from "tscene/bakery/node";
 
-const { files } = await bakeSceneFile("scenes/room.tscene", { out: "public/lightmaps", size: 512, samples: 1024 });
+// with no options at all, the sheet's own `@bakery { … }` block decides everything
+const { files } = await bakeSceneFile("scenes/room.tscene", { size: 512, samples: 1024 });
 ```
 
 ```ts
@@ -74,26 +77,74 @@ await writeBake(result, "public/lightmaps", "room");
 `loadLightmap(url)` is the other half of `applyLightmap`: it returns `{ manifest, texture }`, which is
 also what `applyLightmap` accepts in place of a url when two roots share one atlas.
 
+### `@bakery` in the sheet
+
+A scene's bake settings belong with the scene, not in the command that bakes it. `@bakery { … }` is
+valid in three places: the sheet itself, a node, and a material.
+
+```scene
+/* the sheet's own block: every option of bakeSceneFile(), plus who is in the bake */
+@bakery {
+  out: "../public/lightmaps";
+  size: 512;
+  samples: 1024;
+}
+
+mesh #floor {
+  geometry: planeGeometry(4, 4);
+  material: meshStandardMaterial {
+    /* the tracer guesses reflectance from map/color; this overrides the guess */
+    @bakery { albedo: [0.5, 0.5, 0.5] };
+  };
+}
+
+/* soft shadows: a sphere light of world radius 0.35 (a directional light reads radians) */
+pointLight #lamp(#fff2d8, 6) {
+  @bakery { radius: 0.35 };
+}
+
+/* out of the bake entirely — as an occluder and as a receiver, this node and its children */
+group #props {
+  @bakery { enabled: false };
+}
+```
+
+`out` is relative to the sheet; the CLI's `--out` is relative to where it runs. Everything passed to
+`bakeSceneFile` (or a CLI flag) wins over the sheet, and the sheet wins over the stage defaults.
+
+Which meshes get baked is `include`, and `enabled` is the per-node say in it:
+
+| | |
+| --- | --- |
+| `@bakery { include: all }` | the default: every visible mesh but the ones that turn themselves off |
+| `@bakery { include: none }` | only the meshes that opt in with `@bakery { enabled: true }` |
+| `@bakery { enabled: … }` on a node | applies to its whole subtree; the nearest one wins, so a child can opt back in |
+
+`include` selects meshes, never lights: a light is an input to the bake, so it stays in whatever the mode.
+`enabled: false` on a light means "stays live at runtime" instead — `applyLightmap` leaves it alone and it
+is not in `lightmap.lights`.
+
+A node built by a loader is reached the same way anything else about it is, through `find()`:
+
+```scene
+gltf #level("/level.glb") {
+  find("Glass") { @bakery { enabled: false }; }
+}
+```
+
 ### CLI
 
 ```sh
-tscene-bake scenes/room.tscene --out public/lightmaps --size 512 --samples 1024 [--exr]
+tscene-bake scenes/room.tscene            # settings come from the sheet's @bakery
+tscene-bake scenes/room.tscene --size 512 --samples 1024 --exr
 ```
 
-`--help` lists the rest (`--bounces`, `--indirect`, `--batch`, `--padding`, `--texels-per-unit`, `--denoise`,
-`--dilate`). Each stage prints its elapsed time, and the trace — the long one — prints a running estimate
-of what is left.
+`--help` lists the rest (`--out`, `--name`, `--bounces`, `--indirect`, `--batch`, `--padding`,
+`--texels-per-unit`, `--denoise`, `--dilate`). Each stage prints its elapsed time, and the trace — the long
+one — prints a running estimate of what is left.
 
 `--indirect` is the one knob that is not physical: it is a gain on everything gathered past the first
 bounce, so an interior that bakes flat can be pushed without touching the direct light. 1 is the truth.
-
-### Per-node overrides
-
-| `userData` | Effect |
-| --- | --- |
-| `bake: false` | keep the node out of the bake entirely — as an occluder *and* a receiver. On a light it means "stays live at runtime": `applyLightmap` leaves it alone and it is not in `lightmap.lights` |
-| `bakeRadius: n` | soft shadows: the light becomes a sphere of world radius `n` (a directional light reads it as an angular radius in radians) |
-| `bakeAlbedo: [r, g, b]` | override the linear reflectance the tracer bounces off this material |
 
 ## Output
 
@@ -156,7 +207,7 @@ ones worth knowing about:
 
 - **Albedo is one colour per material**, the mean of its `map` (and darkened by the mean of its
   `metalnessMap`, since glTF leaves `metalness` at 1 and puts the real value in the texture). Colour
-  bleeding gets a texture's hue but not its pattern; use `userData.bakeAlbedo` where that matters.
+  bleeding gets a texture's hue but not its pattern; use `@bakery { albedo }` where that matters.
 - **Shadow rays run a closest-hit query** because three-mesh-bvh has no any-hit shapecast yet, so a
   shadow ray costs a full traversal.
 - **The area-light estimator clamps its solid angle**, which slightly darkens the first centimetre around

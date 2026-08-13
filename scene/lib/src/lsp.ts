@@ -10,7 +10,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BUILTINS, className, nodeName } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, className, nodeName, type Knob } from "./names.ts";
 import { expand, parse, type Loader, type Member, type ObjectValue, type Pos, type Sheet } from "./parse.ts";
 import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
 
@@ -161,19 +161,23 @@ function locate(sheet: Sheet, offset: number): Hit | undefined {
 }
 
 /**
- * Name of the block the cursor sits in — `mesh.floor #ground {` → `mesh`, `material: meshStandardMaterial {` → `meshStandardMaterial`.
+ * The block the cursor sits in: what opened it — `mesh.floor #ground {` → `mesh`,
+ * `material: meshStandardMaterial {` → `meshStandardMaterial`, `@bakery {` → `@bakery` — and where its
+ * `{` is, so the block enclosing *that* can be found the same way.
  * Found by brace counting rather than parsing, because a document being typed into rarely parses.
  * ponytail: a `{`, `}` or `;` inside a comment or string throws this off; the parser owns diagnostics, this only drives completion.
  */
-function enclosingName(text: string, offset: number): string | undefined {
+function enclosingBlock(text: string, offset: number): { name: string | undefined; brace: number } | undefined {
   let depth = 0;
   for (let i = offset - 1; i >= 0; i--) {
     if (text[i] === "}") depth++;
     else if (text[i] === "{" && depth-- === 0) {
       const header = text.slice(0, i).split(/[;{}]/).pop()!;
       const template = /@template\s+([a-zA-Z_]\w*)?\s*\./.exec(header);
-      if (template) return template[1] ?? "object3D";
-      return /([a-zA-Z_]\w*)\s*$/.exec(header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, ""))?.[1];
+      if (template) return { name: template[1] ?? "object3D", brace: i };
+      const at = /@([a-zA-Z_]\w*)\s*$/.exec(header);
+      if (at) return { name: `@${at[1]}`, brace: i };
+      return { name: /([a-zA-Z_]\w*)\s*$/.exec(header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, ""))?.[1], brace: i };
     }
   }
   return undefined;
@@ -219,7 +223,11 @@ connection.onCompletion((params) => {
     return out;
   }
 
-  const owner = enclosingName(text, offset);
+  const block = enclosingBlock(text, offset);
+  // `@bakery { … }` is not three's namespace: its keys are a fixed table, and no three name belongs in it
+  if (block?.name === "@bakery") return bakeryCompletions(bakeryPosition(text, block.brace), head);
+
+  const owner = block?.name;
   const cls = owner ? schema.classes[className(owner)] : undefined;
 
   // right after `prop:` — offer only values that fit the declared type
@@ -304,6 +312,32 @@ const propCompletions = (cls: ClassInfo) =>
     .filter(([, p]) => settable(p.type, p.readonly))
     .map(([name, p]) => ({ label: name, kind: CompletionItemKind.Property, detail: show(p.type), insertText: `${name}: ` }));
 
+/** which of the three `@bakery` tables applies, decided by the block the `@bakery` block sits in */
+function bakeryPosition(text: string, brace: number): keyof typeof BAKERY {
+  const outer = enclosingBlock(text, brace)?.name;
+  if (!outer) return "scene";
+  return isA(className(outer), "Material") ? "material" : "node";
+}
+
+const knobType = (k: Knob) =>
+  k.values ? k.values.join(" | ") : k.type === "numbers" ? `${k.length ?? ""} numbers`.trim() : k.type;
+
+/** the keys of one `@bakery` position, or — right after `key:` — the values that key accepts */
+function bakeryCompletions(position: keyof typeof BAKERY, head: string) {
+  const table = BAKERY[position];
+  const key = /([A-Za-z_]\w*)\s*:\s*[\w-]*$/.exec(head)?.[1];
+  if (key) {
+    const values = table[key]?.values ?? (table[key]?.type === "boolean" ? ["true", "false"] : []);
+    return values.map((label) => ({ label, kind: CompletionItemKind.Value, detail: `@bakery ${key}` }));
+  }
+  return Object.entries(table).map(([name, k]) => ({
+    label: name,
+    kind: CompletionItemKind.Property,
+    detail: knobType(k),
+    insertText: `${name}: `,
+  }));
+}
+
 const objectCompletions = () => [
   ...Object.entries(BUILTINS).map(([name, b]) => ({ label: name, kind: CompletionItemKind.Keyword, detail: b.signature })),
   ...Object.entries(schema.classes)
@@ -382,6 +416,13 @@ connection.onHover(async (params) => {
   }
   if (word && schema.constants[word]) {
     return { contents: md("```ts", `${word}: ${show(schema.constants[word]!)}`, "```", `exported by ${schema.entry}`), range: here };
+  }
+  // a `@bakery` key is a setting for a tool, so the schema knows nothing about it — the table does
+  const bakery = enclosingBlock(text, offset);
+  if (word && bakery?.name === "@bakery") {
+    const position = bakeryPosition(text, bakery.brace);
+    const knob = BAKERY[position][word];
+    return knob ? { contents: md("```scene", `@bakery ${word}: ${knobType(knob)}`, "```", `${position} setting`), range: here } : null;
   }
 
   const sheet = tryParse(doc);

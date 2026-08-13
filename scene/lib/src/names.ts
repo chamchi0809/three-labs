@@ -25,5 +25,72 @@ export const LOADERS: Record<string, { class: string; args: TypeRef[] }> = {
   gltf: { class: "Group", args: [{ kind: "string" }] },
 };
 
+// ---------------------------------------------------------------- @bakery
+
+/** What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()` except the renderer. */
+export type SceneBakery = {
+  /** `all` bakes every mesh but the ones that turn themselves off; `none` bakes only the ones that opt in */
+  include?: "all" | "none";
+  size?: number;
+  samples?: number;
+  bounces?: number;
+  indirect?: number;
+  batch?: number;
+  padding?: number;
+  texelsPerUnit?: number;
+  denoiseRadius?: number;
+  dilateRadius?: number;
+  /** where to write, relative to the sheet */
+  out?: string;
+  name?: string;
+  exr?: boolean;
+};
+
+/** A node's own `@bakery { … }`. `enabled` is inherited by the whole subtree unless a child overrides it. */
+export type NodeBakery = {
+  /** `false` keeps the node out of the bake — as an occluder *and* a receiver. On a light: stays live at runtime */
+  enabled?: boolean;
+  /** soft shadows: the light becomes a sphere of this world radius (a directional light reads radians) */
+  radius?: number;
+};
+
+/** A material's own `@bakery { … }`. */
+export type MaterialBakery = {
+  /** the linear reflectance the tracer bounces off this material, overriding the guess from `map`/`color` */
+  albedo?: [number, number, number];
+};
+
+export type Knob = { type: "number" | "string" | "boolean" | "numbers"; length?: number; values?: string[] };
+
+/**
+ * `@bakery { … }` is settings for the baker, not for three, so the schema cannot type it — this table
+ * is what the checker validates against, per position. Adding a knob to {@link SceneBakery} and friends
+ * without a row here means the checker rejects it.
+ */
+export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>> = {
+  scene: {
+    include: { type: "string", values: ["all", "none"] },
+    size: { type: "number" },
+    samples: { type: "number" },
+    bounces: { type: "number" },
+    indirect: { type: "number" },
+    batch: { type: "number" },
+    padding: { type: "number" },
+    texelsPerUnit: { type: "number" },
+    denoiseRadius: { type: "number" },
+    dilateRadius: { type: "number" },
+    out: { type: "string" },
+    name: { type: "string" },
+    exr: { type: "boolean" },
+  },
+  node: {
+    enabled: { type: "boolean" },
+    radius: { type: "number" },
+  },
+  material: {
+    albedo: { type: "numbers", length: 3 },
+  },
+};
+
 export const className = (name: string) => ALIASES[name] ?? name[0]!.toUpperCase() + name.slice(1);
 export const nodeName = (cls: string) => cls[0]!.toLowerCase() + cls.slice(1);

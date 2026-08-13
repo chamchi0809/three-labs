@@ -48,6 +48,13 @@
     ],
     "description": "Reusable property block for a node type, applied with .name"
   },
+  "bakery": {
+    "prefix": "bakery",
+    "body": [
+      "@bakery { ${1|size,samples,include,out,enabled,radius,albedo|}: ${2} };"
+    ],
+    "description": "Lightmap baker settings — on the sheet, a node or a material"
+  },
   "import": {
     "prefix": "import",
     "body": [

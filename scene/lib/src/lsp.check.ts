@@ -306,6 +306,35 @@ await check("@import links to its target and completes sibling sheets", async ()
   await new Promise((r) => setTimeout(r, 200));
 });
 
+await check("@bakery completes its own keys, never three's names", async () => {
+  const doc = `@bakery {\n  \n}\n\nmesh #box {\n  @bakery {\n    \n  }\n  material: meshStandardMaterial {\n    @bakery {\n      \n    }\n  }\n}\n`;
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 10 }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, 200));
+  // every empty line in `doc` is inside one @bakery block, one per position
+  const blank = (n: number) => ({ textDocument: { uri }, position: { line: [1, 6, 10][n]!, character: 6 } });
+
+  const sheet = labels(await request("textDocument/completion", blank(0)));
+  assert.ok(sheet.includes("samples") && sheet.includes("include"), `expected sheet settings, got ${sheet.slice(0, 5)}`);
+  assert.ok(!sheet.includes("ambientLight"), "three class names leaked into @bakery");
+  assert.ok(!sheet.includes("castShadow"), "three properties leaked into @bakery");
+
+  assert.deepEqual(labels(await request("textDocument/completion", blank(1))).sort(), ["enabled", "radius"]);
+  assert.deepEqual(labels(await request("textDocument/completion", blank(2))), ["albedo"]);
+
+  // after a key, the values that key accepts, and hover reads the same table
+  const typed = doc.replace("@bakery {\n  \n}", "@bakery {\n  include: \n}");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 11 }, contentChanges: [{ text: typed }] } });
+  await new Promise((r) => setTimeout(r, 200));
+  const values = { textDocument: { uri }, position: { line: 1, character: "  include: ".length } };
+  assert.deepEqual(labels(await request("textDocument/completion", values)), ["all", "none"]);
+
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: { line: 1, character: 4 } });
+  assert.match(hover.contents.value, /@bakery include: all \| none/);
+
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 12 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
 await check("formatting normalises the whole document", async () => {
   const messy = `Mesh#a{CastShadow:true;geometry:boxGeometry(1,1,1)}`;
   const scratch = path.join(dir, "messy.tscene");

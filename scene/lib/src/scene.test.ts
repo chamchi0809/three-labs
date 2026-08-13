@@ -113,6 +113,14 @@ test("arrays, records and calc() round-trip through the printer", () => {
   assert.match(once, /calc\(\(var\(--h\) \* 2\) - 1\)/);
 });
 
+test("@bakery round-trips at the top level and inside a node", () => {
+  const src = `@bakery { size: 512; include: none };\n\npointLight #lamp {\n  @bakery { radius: 0.35 };\n}\n`;
+  const once = print(parse(src, "a.tscene"));
+  assert.equal(print(parse(once, "a.tscene")), once);
+  assert.match(once, /@bakery \{ size: 512; include: none \};/);
+  assert.match(once, /  @bakery \{ radius: 0\.35 \};/);
+});
+
 test("calc() folds once the variables are known", async () => {
   const value = async (text: string) => {
     const { nodes } = await expand(parse(`--h: 2;\nmesh { renderOrder: ${text}; }`), noImports);
@@ -310,6 +318,26 @@ test("arrays and records are checked against the declared type", async () => {
   assert.match((await checkText(`mesh { visible: { a: 1 }; }`))[0]!, /expects boolean, got any/);
 });
 
+test("@bakery keys are checked per position", async () => {
+  assert.deepEqual(
+    await checkText(`@bakery { size: 512; out: "maps"; exr: true; include: none }
+      pointLight { @bakery { enabled: false; radius: 0.35 }; }
+      mesh { material: meshStandardMaterial { @bakery { albedo: [0.5, 0.5, 0.5] }; }; }`),
+    [],
+  );
+  assert.match((await checkText(`@bakery { sise: 512 }`))[0]!, /no scene setting "sise"; did you mean size\?/);
+  assert.match((await checkText(`mesh { @bakery { size: 512 }; }`))[0]!, /no node setting "size"/);
+  assert.match((await checkText(`@bakery { size: "big" }`))[0]!, /@bakery size expects a number/);
+  assert.match((await checkText(`mesh { @bakery { enabled: 1 }; }`))[0]!, /@bakery enabled expects true or false/);
+  assert.match((await checkText(`@bakery { include: some }`))[0]!, /@bakery include expects all \| none/);
+  assert.match(
+    (await checkText(`mesh { material: meshStandardMaterial { @bakery { albedo: [1, 1] }; }; }`))[0]!,
+    /@bakery albedo expects 3 numbers/,
+  );
+  assert.match(parse(`@bakry { size: 512 }`).errors[0]!.message, /unknown at-rule @bakry/);
+  assert.match(parse(`mesh { @bakery; }`).errors[0]!.message, /@bakery takes a block/);
+});
+
 test("templates are typed by the node they apply to", async () => {
   assert.deepEqual(await checkText(`@template mesh.glow { castShadow: true; }\nmesh.glow { }`), []);
   assert.deepEqual(await checkText(`@template .hidden { visible: false; }\npointLight.hidden { }`), []);
@@ -456,6 +484,20 @@ test("loadScene builds real three objects", async () => {
   const lamp = root.getObjectByName("lamp") as any;
   assert.equal(lamp.intensity, 5);
   assert.equal(root.getObjectByName("stage")!.children.length, 2);
+});
+
+test("@bakery lands on .bakery, merged key by key", async () => {
+  const root = await load(`
+    @bakery { size: 512; include: none };
+    @template mesh.baked { @bakery { enabled: true; radius: 2 }; }
+    mesh.baked #box {
+      @bakery { radius: 0.5 };
+      material: meshStandardMaterial { @bakery { albedo: [0.5, 0.25, 0.125] }; };
+    }`);
+  assert.deepEqual((root as any).bakery, { size: 512, include: "none" });
+  const box = root.getObjectByName("box") as any;
+  assert.deepEqual(box.bakery, { enabled: true, radius: 0.5 }, "the node's own block wins key by key");
+  assert.deepEqual(box.material.bakery, { albedo: [0.5, 0.25, 0.125] });
 });
 
 test("one AST node is one instance, so a shared --var is a shared material", async () => {

@@ -148,6 +148,27 @@ check that the manifest belongs to this scene.
 
 ***
 
+### bakeEnabled()
+
+```ts
+function bakeEnabled(o): boolean | undefined;
+```
+
+Whether `o` is in the bake: its own `@bakery { enabled }`, or the nearest ancestor that states one.
+`undefined` means nobody said, and the sheet's `include` decides.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `o` | `Object3D` |
+
+#### Returns
+
+`boolean` \| `undefined`
+
+***
+
 ### bakeGeometry()
 
 ```ts
@@ -166,6 +187,32 @@ can differ between two triangles that share a vertex. Deterministic: bake and ru
 #### Returns
 
 `BufferGeometry`
+
+***
+
+### bakerySettings()
+
+```ts
+function bakerySettings<T>(o): T | undefined;
+```
+
+What a sheet's `@bakery { … }` block left on the object it was written in.
+
+#### Type Parameters
+
+| Type Parameter |
+| ------ |
+| `T` *extends* \| [`SceneBakery`](index.md#scenebakery) \| [`NodeBakery`](index.md#nodebakery) \| [`MaterialBakery`](index.md#materialbakery) |
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `o` | `object` \| `undefined` |
+
+#### Returns
+
+`T` \| `undefined`
 
 ***
 
@@ -293,3 +340,21 @@ Path from `root` to `o`, using node names where there are any. Stable across rel
 #### Returns
 
 `string`
+
+## References
+
+### MaterialBakery
+
+Re-exports [MaterialBakery](index.md#materialbakery)
+
+***
+
+### NodeBakery
+
+Re-exports [NodeBakery](index.md#nodebakery)
+
+***
+
+### SceneBakery
+
+Re-exports [SceneBakery](index.md#scenebakery)
