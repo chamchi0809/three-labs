@@ -80,7 +80,12 @@ also what `applyLightmap` accepts in place of a url when two roots share one atl
 tscene-bake scenes/room.tscene --out public/lightmaps --size 512 --samples 1024 [--exr]
 ```
 
-`--help` lists the rest (`--bounces`, `--batch`, `--padding`, `--texels-per-unit`, `--denoise`, `--dilate`).
+`--help` lists the rest (`--bounces`, `--indirect`, `--batch`, `--padding`, `--texels-per-unit`, `--denoise`,
+`--dilate`). Each stage prints its elapsed time, and the trace — the long one — prints a running estimate
+of what is left.
+
+`--indirect` is the one knob that is not physical: it is a gain on everything gathered past the first
+bounce, so an interior that bakes flat can be pushed without touching the direct light. 1 is the truth.
 
 ### Per-node overrides
 

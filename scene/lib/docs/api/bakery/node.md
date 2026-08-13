@@ -323,6 +323,7 @@ type TraceOptions = {
   batch?: number;
   bias?: number;
   bounces?: number;
+  indirect?: number;
   onProgress?: (fraction) => void;
   samples?: number;
 };
@@ -335,6 +336,7 @@ type TraceOptions = {
 | <a id="batch"></a> `batch?` | `number` | paths per dispatch. Lower it if the driver kills long compute passes. |
 | <a id="bias"></a> `bias?` | `number` | ray origin offset along the normal. Defaults to 1e-4 of the scene diagonal. |
 | <a id="bounces"></a> `bounces?` | `number` | diffuse bounces after the first hit — 4 is plenty indoors, 2 outdoors |
+| <a id="indirect"></a> `indirect?` | `number` | gain on everything past the first bounce — 1 is physical, >1 the usual cheat for a flat-looking interior. Direct light and the sky seen straight from a texel are untouched. |
 | <a id="onprogress"></a> `onProgress?` | (`fraction`) => `void` | - |
 | <a id="samples"></a> `samples?` | `number` | total paths per texel. This is the only real quality knob. |
 

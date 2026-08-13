@@ -10,6 +10,7 @@ const USAGE = `tlightmap <scene.tscene> [options]
   --size <px>          atlas resolution (default 1024)
   --samples <n>        paths per texel (default 512)
   --bounces <n>        diffuse bounces (default 4)
+  --indirect <gain>    gain on everything past the first bounce (default 1)
   --batch <n>          paths per dispatch (default 32)
   --padding <texels>   space around each chart (default 2)
   --texels-per-unit <n>  fixed lightmap density; 0 fits the atlas (default 0)
@@ -26,6 +27,7 @@ const { values, positionals } = parseArgs({
     size: { type: "string" },
     samples: { type: "string" },
     bounces: { type: "string" },
+    indirect: { type: "string" },
     batch: { type: "string" },
     padding: { type: "string" },
     "texels-per-unit": { type: "string" },
@@ -43,7 +45,30 @@ if (values.help || positionals.length !== 1) {
 
 const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
 
+const clock = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+};
+
+// a rewriting line on a terminal, one line per finished stage when the output is a file
+const tty = process.stderr.isTTY;
+const started = Date.now();
 let stage = "";
+let stageStart = started;
+let fraction = 0;
+
+/** `trace  42% · 1m03s · 1m24s left`. Only trace reports a fraction; the rest just show elapsed. */
+const render = () => {
+  const elapsed = Date.now() - stageStart;
+  const percent = fraction > 0 ? `${Math.round(fraction * 100)}%`.padStart(4) : "    ";
+  const eta = fraction > 0 ? ` · ${clock((elapsed / fraction) * (1 - fraction))} left` : "";
+  return `${stage} ${percent} · ${clock(elapsed)}${eta}`;
+};
+const paint = () => process.stderr.write(`\r${render().padEnd(48)}`);
+// xatlas can sit in one unwrap for a minute, so the clock has to move on its own, not on progress
+const ticker = tty ? setInterval(paint, 1000) : undefined;
+ticker?.unref();
+
 const result = await bakeSceneFile(positionals[0]!, {
   out: values.out,
   name: values.name,
@@ -51,20 +76,31 @@ const result = await bakeSceneFile(positionals[0]!, {
   size: num(values.size, 1024),
   samples: num(values.samples, 512),
   bounces: num(values.bounces, 4),
+  indirect: num(values.indirect, 1),
   batch: num(values.batch, 32),
   padding: num(values.padding, 2),
   texelsPerUnit: num(values["texels-per-unit"], 0),
   denoiseRadius: num(values.denoise, 1),
   dilateRadius: num(values.dilate, 4),
-  onProgress: (next, fraction) => {
-    if (next !== stage) process.stderr.write(`${stage ? "\n" : ""}${next} `);
-    stage = next;
-    process.stderr.write(fraction >= 1 ? "done" : ".");
+  onProgress: (next, done) => {
+    if (next !== stage) {
+      stage = next;
+      stageStart = Date.now();
+    }
+    fraction = done;
+    if (done >= 1) {
+      process.stderr.write(`${tty ? "\r" : ""}${`${next} done in ${clock(Date.now() - stageStart)}`.padEnd(48)}\n`);
+    } else if (tty) {
+      paint();
+    }
   },
 });
 
+clearInterval(ticker);
+
 process.stderr.write(
-  `\n${result.width}x${result.height}, ${(result.utilization * 100).toFixed(0)}% packed, exposure ${result.exposure.toFixed(3)}\n`,
+  `${result.width}x${result.height}, ${(result.utilization * 100).toFixed(0)}% packed, ` +
+    `exposure ${result.exposure.toFixed(3)}, baked in ${clock(Date.now() - started)}\n`,
 );
 process.stdout.write(`${result.files.join("\n")}\n`);
 

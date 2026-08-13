@@ -25,6 +25,11 @@ export type TraceOptions = {
   batch?: number;
   /** ray origin offset along the normal. Defaults to 1e-4 of the scene diagonal. */
   bias?: number;
+  /**
+   * gain on everything past the first bounce — 1 is physical, >1 the usual cheat for a flat-looking
+   * interior. Direct light and the sky seen straight from a texel are untouched.
+   */
+  indirect?: number;
   onProgress?: (fraction: number) => void;
 };
 
@@ -84,6 +89,7 @@ export async function trace(
     batch,
     bounces,
     bias,
+    indirect: Math.max(0, opts.indirect ?? 1),
     lightCount: scene.lights.length,
     emissiveCount: area.count,
     totalArea: area.totalArea,
@@ -242,6 +248,7 @@ type TraceFnArgs = {
   batch: number;
   bounces: number;
   bias: number;
+  indirect: number;
   lightCount: number;
   emissiveCount: number;
   totalArea: number;
@@ -432,9 +439,11 @@ function traceFn(args: TraceFnArgs) {
 
 					}
 
-					// bounce radiance is albedo/PI * E, and the PI from the estimator cancels the 1/PI
+					// bounce radiance is albedo/PI * E, and the PI from the estimator cancels the 1/PI.
+					// the indirect gain rides in on the first bounce, so it scales everything gathered
+					// past this point and nothing before it.
 					let material = u32( ${bvh.storage.attributes}[ hit.indices.x ].normal.w + 0.5 );
-					throughput *= ${materials}[ material * 2u ].xyz;
+					throughput *= ${materials}[ material * 2u ].xyz * select( 1.0, ${f(args.indirect)}, b == 0u );
 					if ( max( throughput.x, max( throughput.y, throughput.z ) ) < 1e-3 ) {
 
 						break;

@@ -69,8 +69,8 @@ if (!(await hasWebGPU())) {
 const renderer = await createHeadlessRenderer();
 
 /** Irradiance per probe, as [r, g, b] triples. */
-async function measure(root: THREE.Object3D, list: Probe[], samples: number, bounces: number) {
-  const raw = await trace(renderer, collectScene(root), probes(list), { samples, bounces, batch: 256 });
+async function measure(root: THREE.Object3D, list: Probe[], samples: number, bounces: number, indirect = 1) {
+  const raw = await trace(renderer, collectScene(root), probes(list), { samples, bounces, batch: 256, indirect });
   return list.map((_, i) => {
     const n = raw[i * 4 + 3];
     assert.equal(n, samples, "every probe must accumulate exactly the requested sample count");
@@ -138,6 +138,13 @@ const close = (got: number, want: number, tol: number, what: string) =>
   close(facingFloor[1], Math.PI * (1 - F), Math.PI * 0.02, "colour bleeding (green)");
   close(facingFloor[2], Math.PI * (1 - F), Math.PI * 0.02, "colour bleeding (blue)");
   assert.ok(facingFloor[0] > facingFloor[1] * 2, "the bounce must actually be red");
+
+  // the indirect gain scales exactly the bounce and nothing else: E.r = PI * (1 - F) + gain * PI * F
+  for (const gain of [0, 0.5]) {
+    const [dimmed] = await measure(root, [{ p: [0, 1, 0], n: [0, -1, 0] }], samples, 1, gain);
+    close(dimmed[0], Math.PI * (1 - F + gain * F), Math.PI * 0.02, `indirect ${gain} (red)`);
+    close(dimmed[1], Math.PI * (1 - F), Math.PI * 0.02, `indirect ${gain} must not touch direct sky (green)`);
+  }
 }
 
 // --- 4: an emissive square overhead --------------------------------------------------------------
