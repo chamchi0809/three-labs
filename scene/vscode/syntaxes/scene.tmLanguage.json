@@ -76,6 +76,15 @@
         },
         { "name": "support.function.calc.scene", "match": "\\b(calc)(?=\\s*\\()" },
         {
+          "match": "\\b(each)\\s*(\\()\\s*(--[A-Za-z_][\\w-]*)",
+          "captures": {
+            "1": { "name": "support.function.each.scene" },
+            "2": { "name": "punctuation.section.parens.begin.scene" },
+            "3": { "name": "variable.other.custom-property.scene" }
+          }
+        },
+        { "name": "support.function.math.scene", "match": "\\b(pi|abs|sign|sqrt|exp|log|sin|cos|tan|asin|acos|atan2|atan|floor|ceil|round|pow|min|max|mod|clamp|smoothstep)\\b(?!\\s*:)" },
+        {
           "match": "\\b(ref)\\s*(\\()\\s*(#[A-Za-z_][\\w-]*)",
           "captures": {
             "1": { "name": "support.function.ref.scene" },
@@ -84,6 +93,20 @@
           }
         },
         { "name": "support.function.builtin.scene", "match": "\\b(find|play|repeat)(?=\\s*[#(])" },
+        {
+          "match": "(?<=[)\\]])\\s*(\\.)([A-Za-z_]\\w*)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "punctuation.accessor.scene" },
+            "2": { "name": "entity.name.function.member.scene" }
+          }
+        },
+        {
+          "match": "(?<=[)\\]])\\s*(\\.)([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.scene" },
+            "2": { "name": "variable.other.property.scene" }
+          }
+        },
         { "name": "entity.name.function.scene", "match": "\\b[a-z][A-Za-z0-9]*(?=\\s*\\()" },
         { "name": "constant.numeric.scene", "match": "[-+]?(?:0[xX][0-9a-fA-F]+|(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?)(deg|rad)?\\b" },
         { "name": "constant.language.boolean.scene", "match": "\\b(true|false|null)\\b" },

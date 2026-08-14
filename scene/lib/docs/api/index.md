@@ -394,6 +394,7 @@ type ObjectValue = Pos & {
   body: Member[];
   classes: string[];
   classSpans: Pos[];
+  dynamic?: true;
   hasBody: boolean;
   id?: string;
   idSpan?: Pos;
@@ -410,6 +411,7 @@ type ObjectValue = Pos & {
 | `body` | [`Member`](#member)[] | - |
 | `classes` | `string`[] | - |
 | `classSpans` | [`Pos`](#pos-1)[] | source range of each `.cls` including the dot, index-aligned with `classes` |
+| `dynamic?` | `true` | Set by expand() on a node inside an `each()` whose value depends on the loop binding. One AST node is normally one instance — that is what makes a material in a `--var` shared — but a node that reads the loop variable has to be built once per iteration. |
 | `hasBody` | `boolean` | - |
 | `id?` | `string` | - |
 | `idSpan?` | [`Pos`](#pos-1) | source range of `#id` including the hash |
@@ -663,6 +665,36 @@ type Value =
   op: "+" | "-" | "*" | "/";
   right: Value;
 }
+  | Pos & {
+  args: Value[];
+  kind: "fn";
+  name: string;
+}
+  | Pos & {
+  body: Value;
+  kind: "each";
+  name: string;
+  namePos: Pos;
+  over: Value;
+}
+  | Pos & {
+  kind: "read";
+  name: string;
+  namePos: Pos;
+  target: Value;
+}
+  | Pos & {
+  args: Value[];
+  kind: "call";
+  name: string;
+  namePos: Pos;
+  target: Value;
+}
+  | Pos & {
+  at: Value;
+  kind: "index";
+  target: Value;
+}
   | ObjectValue;
 ```
 
@@ -714,6 +746,21 @@ const LOADERS: Record<string, {
   class: string;
 }>;
 ```
+
+***
+
+### MATH
+
+```ts
+const MATH: Record<string, {
+  arity: number;
+  summary: string;
+}>;
+```
+
+What `calc()` can call. Numbers in, one number out — enough to write a parametric surface, and
+deliberately not enough to be a scripting language. `docs/language.md` is checked against this table,
+so a new function cannot be added without documenting it.
 
 ## Functions
 
@@ -896,6 +943,27 @@ Convenience: fetch a .tscene file and build it.
 #### Returns
 
 `Promise`\<`Group`\<`Object3DEventMap`\>\>
+
+***
+
+### math()
+
+```ts
+function math(name, args): number;
+```
+
+The one implementation of [MATH](#math), shared by the constant folder and the runtime.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `name` | `string` |
+| `args` | `number`[] |
+
+#### Returns
+
+`number`
 
 ***
 

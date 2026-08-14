@@ -44,7 +44,9 @@ group #stage {
 | property names | three's own camelCase (`castShadow`), plus dotted paths (`material.opacity`) and method calls (`lookAt(0,1,0);`) |
 | node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) — `three/addons` included (`loftGeometry`, `roomEnvironment`) |
 | values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ capStart: true }` |
-| language functions | `var(--x, fallback)` `calc(...)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
+| value chains | `.name` and `.name(...)` after a value that is already closed, `[i]` to index a list — `splineCurve(pts).getPoints(120)` |
+| language functions | `var(--x, fallback)` `calc(...)` `each(--i, n, value)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
+| `calc()` | `+ - * /` and parens, plus `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sqrt` `exp` `log` `pow` `abs` `sign` `min` `max` `mod` `clamp` `smoothstep` `floor` `ceil` `round` `pi` |
 | `@bakery { ... }` | settings for a tool rather than for three — the [lightmap baker](./docs/bakery.md)'s, on the sheet, a node or a material |
 
 ## Runtime
@@ -92,6 +94,36 @@ transcoder path. A sheet that names a baked lightmap in `@bakery { lightmap }` g
 with the handle on `root.userData.lightmap`; `{ lightmap: false }` skips that.
 
 Runtime errors carry their location: `main.tscene:12:5: ...`.
+
+### Geometry in the sheet
+
+`each()` is a list — the value once per index, or once per item of another list — and `calc()` has the
+arithmetic to fill one in. Together with `.name(...)` on a value, that is enough to write a parametric
+surface without leaving the sheet:
+
+```css
+/* a lathe: one ring per point of a smoothed profile, 64 points around each */
+--profile: splineCurve([vec2(0.2, 0), vec2(1.2, 0.4), vec2(0.7, 1.6), vec2(0.2, 1.7)]);
+
+mesh #pot {
+  geometry: loftGeometry(
+    each(--p, var(--profile).getPoints(120), each(--j, 64, vec3(
+      calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+      var(--p).y,
+      calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+    ))),
+    { capStart: true; capEnd: true }
+  );
+}
+```
+
+Unlike `repeat()`, `each()` is a loop and not an unrolling: the body is checked once and evaluated once
+per iteration, so a hundred thousand points cost a hundred thousand evaluations rather than a hundred
+thousand lines of AST. `--p` is typed as whatever the list holds, so `var(--p).z` on a list of `Vector2`
+is an error the same way a misspelled property is.
+
+The demo's second sheet is three's `webgpu_geometry_loft` example this way: fifteen shapes, 51 lofts and
+113,000 cross-section points, none of them from JavaScript.
 
 ### three/addons
 

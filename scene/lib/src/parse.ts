@@ -1,6 +1,7 @@
 // .tscene — CSS-like syntax for three.js scene graphs.
 //   nesting = children, `#id` = object.name, `.cls` = @template application.
 //   values are explicit calls: vec3(0,1,0), color(#ff8000), texture("./t.png"), DoubleSide.
+import { MATH, math } from "./names.ts";
 
 export type Pos = { start: number; end: number; file?: string };
 
@@ -16,6 +17,12 @@ export type ObjectValue = Pos & {
   args: Value[];
   body: Member[];
   hasBody: boolean;
+  /**
+   * Set by expand() on a node inside an `each()` whose value depends on the loop binding. One AST node is
+   * normally one instance — that is what makes a material in a `--var` shared — but a node that reads the
+   * loop variable has to be built once per iteration.
+   */
+  dynamic?: true;
 };
 
 export type Value =
@@ -30,6 +37,16 @@ export type Value =
   /** `namePos` is the key's own range — what a "no such setting" fix rewrites inside an `@bakery` block */
   | (Pos & { kind: "record"; entries: { name: string; namePos: Pos; value: Value }[] })
   | (Pos & { kind: "calc"; op: "+" | "-" | "*" | "/"; left: Value; right: Value })
+  /** a {@link MATH} function inside `calc()`: `sin(x)`, `pow(x, 2)`, and `pi` with no arguments at all */
+  | (Pos & { kind: "fn"; name: string; args: Value[] })
+  /** `each(--j, 48, expr)` — `expr` once per index, or once per item when the second argument is an array */
+  | (Pos & { kind: "each"; name: string; namePos: Pos; over: Value; body: Value })
+  /** `var(--p).x` — a property of a value */
+  | (Pos & { kind: "read"; target: Value; name: string; namePos: Pos })
+  /** `splineCurve(…).getPoints(120)` — what a method of a value returns */
+  | (Pos & { kind: "call"; target: Value; name: string; namePos: Pos; args: Value[] })
+  /** `var(--points)[var(--i)]` */
+  | (Pos & { kind: "index"; target: Value; at: Value })
   | ObjectValue;
 
 export type Member =
@@ -341,7 +358,44 @@ export function parse(text: string, file?: string): Sheet {
     return { kind: "object", name: name.value, id, idSpan, classes, classSpans, args, body, hasBody, start: name.start, end, file };
   }
 
-  function parseValue(): Value {
+  /**
+   * `.name`, `.name(…)` and `[…]` after a value that is already complete. A `.` *before* an argument list
+   * is a `@template` class, which is why `parseObject` has eaten those already — `foo.glow(1)` applies a
+   * template, `foo(1).glow` reads a property.
+   */
+  function postfix(target: Value): Value {
+    for (;;) {
+      if (at("punc", ".") && peek(1).type === "ident") {
+        next();
+        const name = expect("ident");
+        const namePos = { start: name.start, end: name.end, file };
+        if (!at("punc", "(")) {
+          target = { kind: "read", target, name: name.value, namePos, start: target.start, end: name.end, file };
+          continue;
+        }
+        next();
+        const args: Value[] = [];
+        while (!at("punc", ")")) {
+          args.push(parseValue());
+          if (at("punc", ",")) next();
+          else break;
+        }
+        target = { kind: "call", target, name: name.value, namePos, args, start: target.start, end: expect("punc", ")").end, file };
+        continue;
+      }
+      if (at("punc", "[")) {
+        next();
+        const at0 = parseValue();
+        target = { kind: "index", target, at: at0, start: target.start, end: expect("punc", "]").end, file };
+        continue;
+      }
+      return target;
+    }
+  }
+
+  const parseValue = (): Value => postfix(parsePrimary());
+
+  function parsePrimary(): Value {
     const t = peek();
     if (t.type === "punc" && t.value === "[") {
       next();
@@ -399,6 +453,18 @@ export function parse(text: string, file?: string): Sheet {
         const expr = parseSum();
         return { ...expr, start: t.start, end: expect("punc", ")").end, file };
       }
+      // `each(--j, 48, expr)` — a list, so it is a value and never a node
+      if (t.value === "each" && peek(1).type === "punc" && peek(1).value === "(") {
+        next(); next();
+        const name = expect("var");
+        expect("punc", ",");
+        const over = parseValue();
+        expect("punc", ",");
+        const body = parseValue();
+        const close = expect("punc", ")");
+        const namePos = { start: name.start, end: name.end, file };
+        return { kind: "each", name: name.value, namePos, over, body, start: t.start, end: close.end, file };
+      }
       const n = peek(1);
       const isObject = n.type === "hash" || (n.type === "punc" && (n.value === "(" || n.value === "{" || n.value === "."));
       if (isObject) return parseObject();
@@ -440,7 +506,26 @@ export function parse(text: string, file?: string): Sheet {
       next();
       const v = parseSum();
       expect("punc", ")");
-      return v;
+      return postfix(v);
+    }
+    const t = peek();
+    // a math function, and `pi`, which takes no arguments and so needs no parens
+    if (t.type === "ident" && MATH[t.value]) {
+      const parens = peek(1).type === "punc" && peek(1).value === "(";
+      if (parens || MATH[t.value]!.arity === 0) {
+        next();
+        const args: Value[] = [];
+        if (parens) {
+          next();
+          while (!at("punc", ")")) {
+            args.push(parseSum());
+            if (at("punc", ",")) next();
+            else break;
+          }
+        }
+        const end = parens ? expect("punc", ")").end : t.end;
+        return { kind: "fn", name: t.value, args, start: t.start, end, file };
+      }
     }
     return parseValue();
   }
@@ -484,15 +569,29 @@ export function print(sheet: Sheet): string {
       case "array": return `[${v.items.map((i) => value(i, indent)).join(", ")}]`;
       case "record": return `{ ${v.entries.map((e) => `${e.name}: ${value(e.value, indent)}`).join("; ")} }`;
       case "calc": return `calc(${expr(v, indent)})`;
+      // a bare fn only ever comes out of a calc(), so it needs the wrapper back
+      case "fn": return `calc(${arith(v, indent)})`;
+      case "each": return `each(--${v.name}, ${value(v.over, indent)}, ${value(v.body, indent)})`;
+      case "read": return `${value(v.target, indent)}.${v.name}`;
+      case "call": return `${value(v.target, indent)}.${v.name}(${v.args.map((a) => value(a, indent)).join(", ")})`;
+      case "index": return `${value(v.target, indent)}[${value(v.at, indent)}]`;
       case "object": return object(v, indent);
     }
   };
 
   // nested arithmetic is always parenthesised, so precedence survives a round trip
   const expr = (v: Value & { kind: "calc" }, indent: string): string => {
-    const side = (s: Value) => (s.kind === "calc" ? `(${expr(s, indent)})` : value(s, indent));
+    const side = (s: Value) => (s.kind === "calc" ? `(${expr(s, indent)})` : arith(s, indent));
     return `${side(v.left)} ${v.op} ${side(v.right)}`;
   };
+
+  /** inside a calc(), where a function is written bare rather than wrapped in another calc() */
+  const arith = (v: Value, indent: string): string =>
+    v.kind === "fn"
+      ? MATH[v.name]!.arity === 0
+        ? v.name
+        : `${v.name}(${v.args.map((a) => (a.kind === "calc" ? expr(a, indent) : arith(a, indent))).join(", ")})`
+      : value(v, indent);
 
   const header = (o: ObjectValue) =>
     o.name + o.classes.map((c) => `.${c}`).join("") + (o.id ? ` #${o.id}` : "") +
@@ -571,15 +670,52 @@ type Scope = {
   /** names declared in *this* block, so a redeclaration can be told from shadowing an outer one */
   own: Set<string>;
   templates: Map<string, { body: Member[]; scope: Scope; decl: Pos }>;
+  /**
+   * Names an `each()` binds. They have no value until the loop runs, so `var()` is left standing and the
+   * arithmetic around it stays unfolded — the runtime is what finally evaluates it.
+   */
+  loop: Map<string, Pos>;
 };
 
-const childScope = (s: Scope): Scope => ({ vars: new Map(s.vars), own: new Set(), templates: s.templates });
+const childScope = (s: Scope): Scope => ({ vars: new Map(s.vars), own: new Set(), templates: s.templates, loop: s.loop });
+
+/**
+ * Can the constant folder still work this out, or does it have to wait for the runtime? A loop binding, a
+ * property of one, or what a method returns are all only known once the scene is being built; a string or
+ * a list never becomes a number, and those are what `calc() works on numbers only` is for.
+ */
+function deferred(v: Value): boolean {
+  switch (v.kind) {
+    case "var": case "read": case "call": case "index": case "each": case "ident": case "object": case "ref": return true;
+    case "calc": return deferred(v.left) || deferred(v.right);
+    case "fn": return v.args.some(deferred);
+    default: return false;
+  }
+}
+
+/** does this value read a loop binding — i.e. is it a different value on every iteration? */
+function varies(v: Value, loop: Map<string, Pos>): boolean {
+  switch (v.kind) {
+    case "var": return loop.has(v.name);
+    case "calc": return varies(v.left, loop) || varies(v.right, loop);
+    case "fn": return v.args.some((a) => varies(a, loop));
+    case "array": return v.items.some((i) => varies(i, loop));
+    case "record": return v.entries.some((e) => varies(e.value, loop));
+    case "read": return varies(v.target, loop);
+    case "index": return varies(v.target, loop) || varies(v.at, loop);
+    case "call": return varies(v.target, loop) || v.args.some((a) => varies(a, loop));
+    // an each() of its own shadows nothing it does not bind, so its body counts too
+    case "each": return varies(v.over, loop) || varies(v.body, loop);
+    case "object": return v.args.some((a) => varies(a, loop)) || v.body.some((m) => m.kind !== "node" ? varies(m.value, loop) : varies(m.object, loop));
+    default: return false;
+  }
+}
 
 /** Resolves @import, substitutes var(--x) and applies .class templates. */
 export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
   const diagnostics: Diagnostic[] = [];
   const templates: Template[] = [];
-  const scope: Scope = { vars: new Map(), own: new Set(), templates: new Map() };
+  const scope: Scope = { vars: new Map(), own: new Set(), templates: new Map(), loop: new Map() };
   const root = sheet.file ?? "<input>";
   const included = new Set<string>([root]);
   const ids = new Map<string, ObjectValue>();
@@ -658,6 +794,8 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
     const left = subst(v.left, sc);
     const right = subst(v.right, sc);
     if (left.kind !== "number" || right.kind !== "number") {
+      // not statically a number: the runtime folds what is left of the expression
+      if (deferred(left) || deferred(right)) return { ...v, left, right };
       err("calc() works on numbers only", v);
       return { kind: "number", value: 0, unit: "", start: v.start, end: v.end, file: v.file };
     }
@@ -669,8 +807,37 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
     return { kind: "number", value, unit: left.unit || right.unit, start: v.start, end: v.end, file: v.file };
   }
 
+  /** `sin(x)` and friends: folded when the arguments are already numbers, left standing when they are not */
+  function apply(v: Value & { kind: "fn" }, sc: Scope): Value {
+    const args = v.args.map((a) => subst(a, sc));
+    const knob = MATH[v.name]!;
+    if (args.length !== knob.arity) {
+      err(`${v.name}() takes ${knob.arity} argument(s), got ${args.length}`, v);
+      return { kind: "number", value: 0, unit: "", start: v.start, end: v.end, file: v.file };
+    }
+    if (!args.every((a) => a.kind === "number")) {
+      if (args.some(deferred)) return { ...v, args };
+      err(`${v.name}() works on numbers only`, v);
+      return { kind: "number", value: 0, unit: "", start: v.start, end: v.end, file: v.file };
+    }
+    const numbers = args.map((a) => (a.kind === "number" && a.unit === "deg" ? (a.value * Math.PI) / 180 : (a as { value: number }).value));
+    return { kind: "number", value: math(v.name, numbers), unit: "", start: v.start, end: v.end, file: v.file };
+  }
+
+  /** `each(--j, 48, expr)` — the binding is the loop's, so the body is substituted with it left standing */
+  function loop(v: Value & { kind: "each" }, sc: Scope): Value {
+    const inner = childScope(sc);
+    inner.loop = new Map(sc.loop);
+    // `--index` and `--count` come along, exactly as they do in repeat()
+    for (const name of [v.name, "index", "count"]) inner.loop.set(name, v.namePos);
+    return { ...v, over: subst(v.over, sc), body: subst(v.body, inner) };
+  }
+
   function subst(v: Value, sc: Scope): Value {
     if (v.kind === "var") {
+      // a name the enclosing each() binds shadows every declaration of it; it gets its value at run time
+      const bound = sc.loop.get(v.name);
+      if (bound) { bind(v.namePos, bound); return v; }
       const found = sc.vars.get(v.name);
       if (found) { bind(v.namePos, found.decl); return found.value; }
       if (v.fallback) return subst(v.fallback, sc);
@@ -684,6 +851,11 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
       return out;
     }
     if (v.kind === "calc") return fold(v, sc);
+    if (v.kind === "fn") return apply(v, sc);
+    if (v.kind === "each") return loop(v, sc);
+    if (v.kind === "read") return { ...v, target: subst(v.target, sc) };
+    if (v.kind === "index") return { ...v, target: subst(v.target, sc), at: subst(v.at, sc) };
+    if (v.kind === "call") return { ...v, target: subst(v.target, sc), args: v.args.map((a) => subst(a, sc)) };
     if (v.kind === "array") return { ...v, items: v.items.map((i) => subst(i, sc)) };
     if (v.kind === "record") return { ...v, entries: v.entries.map((e) => ({ ...e, value: subst(e.value, sc) })) };
     if (v.kind === "object") return object(v, sc);
@@ -752,7 +924,11 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
       body.push(...expandBody(t.body, inner));
     }
     body.push(...expandBody(o.body, sc));
-    return { ...o, args: o.args.map((a) => subst(a, sc)), body };
+    const out: ObjectValue = { ...o, args: o.args.map((a) => subst(a, sc)), body };
+    // one AST node is one instance — unless it reads an each() binding, in which case every iteration
+    // has to build its own
+    if (sc.loop.size && varies(out, sc.loop)) out.dynamic = true;
+    return out;
   }
 
   function expandBody(list: Member[], sc: Scope): Member[] {

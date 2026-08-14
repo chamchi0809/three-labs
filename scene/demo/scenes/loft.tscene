@@ -1,16 +1,154 @@
 /*
  * three's `webgpu_geometry_loft` example, as a sheet.
  *
- * Every surface here is a `loftGeometry()` — LoftGeometry from `three/addons/geometries/LoftGeometry.js`,
- * named the way any other three class is named. The vite plugin traces it back to that module and imports
- * it by name, so the bundle carries one addon and not the barrel.
+ * Every surface is a `loftGeometry()` — LoftGeometry out of `three/addons/geometries/LoftGeometry.js`,
+ * named the way any other three class is named — and every cross section it is skinned through is written
+ * here: `each()` for the loops, `calc()` for the trigonometry, `splineCurve(…).getPoints(n)` for the
+ * profiles that want smoothing. No vertex of it comes from JavaScript.
  *
- * What a sheet cannot say, it asks the registry for (`src/registry.ts`, declared in `declared.ts`):
- *   - the cross sections each loft is skinned through — thousands of vertices of trigonometry
- *   - the TSL node materials, which are shader graphs
- *   - `barrier()`, a ring of fourteen posts placed by sine and cosine
- * Everything else — the graph, the sizes, the placements, the caps, the shadows — is here.
+ * What is still handed over by the host (`src/loft/`, declared in `src/loft/declared.ts`) is the shading:
+ * these are TSL node materials, and a shader graph is not something CSS syntax has any business
+ * describing.
  */
+
+/* ───────────────────────────────────────────────────────────── cross sections ── */
+
+/*
+ * A ring is `sin`/`cos` around the y axis, so a revolved profile is two nested each()s: one per profile
+ * point, one per point around it. `.revolved` below is that, with the profile as a parameter — which is
+ * why the seven lathed shapes are a list of numbers each and nothing more.
+ */
+
+/* the cup's handle: an ear shaped loop swept along a spline, tapering at both ends so they stay buried
+   inside the thin wall. The tangent of the path is what orients each ring. */
+--handlePath: splineCurve([vec2(2.2, 3.3), vec2(2.9, 3.45), vec2(3.6, 2.85), vec2(3.65, 1.95), vec2(3, 1.2), vec2(1.78, 1.05)]);
+--handlePoints: var(--handlePath).getPoints(60);
+--handleStations: each(--i, 61, calc(var(--i) / 60));
+/* a record is how a loop keeps a partial result: computed once per section, read by every point of it */
+--handleFrames: each(--t, var(--handleStations), {
+  p: var(--handlePoints)[var(--index)];
+  tangent: var(--handlePath).getTangent(var(--t));
+  scale: calc((1 - 0.25 * var(--t)) * (0.28 + 0.72 * smoothstep(var(--t), 0, 0.12)) * (0.28 + 0.72 * (1 - smoothstep(var(--t), 0.88, 1))));
+});
+--handleSections: each(--f, var(--handleFrames), each(--j, 16, vec3(
+  calc(var(--f).p.x - 0.22 * var(--f).scale * cos(var(--j) / var(--count) * 2 * pi) * var(--f).tangent.y),
+  calc(var(--f).p.y + 0.22 * var(--f).scale * cos(var(--j) / var(--count) * 2 * pi) * var(--f).tangent.x),
+  calc(0.27 * var(--f).scale * sin(var(--j) / var(--count) * 2 * pi))
+)));
+
+/* a seashell: circular sections that grow while sweeping along a logarithmic spiral. 3 turns, and the
+   whole thing is normalised by the growth at the last one so it ends up about 6 units across. */
+--shellFrames: each(--i, 151, {
+  angle: calc(3 * 2 * pi * (var(--i) / 150));
+  e: calc(exp(0.54 * 2 * pi * (var(--i) / 150)) / exp(0.54 * 2 * pi));
+});
+--shellSections: each(--f, var(--shellFrames), each(--j, 32, vec3(
+  calc((3 * var(--f).e + 2.4 * var(--f).e * cos(var(--j) / var(--count) * 2 * pi)) * sin(var(--f).angle)),
+  calc(4.5 * (1 - var(--f).e) + 2.4 * var(--f).e * sin(var(--j) / var(--count) * 2 * pi)),
+  calc((3 * var(--f).e + 2.4 * var(--f).e * cos(var(--j) / var(--count) * 2 * pi)) * cos(var(--f).angle))
+)));
+
+/* a twisted star: non-circular sections — a five lobed rosette — that rotate and pinch along the loft */
+--starFrames: each(--i, 61, {
+  y: calc(var(--i) / 60 * 10);
+  twist: calc(var(--i) / 60 * pi / 3);
+  scale: calc(1 - 0.35 * sin(var(--i) / 60 * pi));
+});
+--starSections: each(--f, var(--starFrames), each(--j, 96, vec3(
+  calc(sin(var(--j) / var(--count) * 2 * pi + var(--f).twist) * (2.4 + 0.7 * cos(5 * (var(--j) / var(--count) * 2 * pi))) * var(--f).scale),
+  var(--f).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi + var(--f).twist) * (2.4 + 0.7 * cos(5 * (var(--j) / var(--count) * 2 * pi))) * var(--f).scale)
+)));
+
+/* a ribbon: sections of two points, so `closed: false` leaves it a strip instead of closing it into a tube */
+--ribbonSections: each(--i, 121, [
+  vec3(calc(3 * sin(var(--i) / 120 * 2 * pi * 2.5)), calc(var(--i) / 120 * 7.5), calc(3 * cos(var(--i) / 120 * 2 * pi * 2.5))),
+  vec3(calc(3 * sin(var(--i) / 120 * 2 * pi * 2.5)), calc(var(--i) / 120 * 7.5 + 2), calc(3 * cos(var(--i) / 120 * 2 * pi * 2.5)))
+]);
+
+/* a toothpaste tube: circular sections that flatten into a wide crimped seam towards the top */
+--toothpasteFrames: each(--i, 81, {
+  y: calc(var(--i) / 80 * 4.2);
+  width: calc((0.5 + 0.28 * smoothstep(var(--i) / 80, 0.08, 0.2)) * (1 - smoothstep(var(--i) / 80, 0.3, 0.95)) + 1.15 * smoothstep(var(--i) / 80, 0.3, 0.95));
+  depth: calc((0.5 + 0.28 * smoothstep(var(--i) / 80, 0.08, 0.2)) * (1 - smoothstep(var(--i) / 80, 0.3, 0.95)) + 0.05 * smoothstep(var(--i) / 80, 0.3, 0.95));
+});
+--toothpasteSections: each(--f, var(--toothpasteFrames), each(--j, 48, vec3(
+  calc(sin(var(--j) / var(--count) * 2 * pi) * var(--f).width),
+  var(--f).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi) * var(--f).depth)
+)));
+
+/* a pumpkin: a squashed sphere with seven broad lobes split by narrow creases, sunken around the stem */
+--pumpkinFrames: each(--i, 61, {
+  y: calc(2.05 * (var(--i) / 60) - 0.75 * smoothstep(var(--i) / 60, 0.8, 1));
+  radius: calc(1.85 * pow(sin(pi * (0.03 + 0.94 * (var(--i) / 60))), 0.62));
+  creases: calc(0.15 * sin(pi * (var(--i) / 60)));
+});
+--pumpkinSections: each(--f, var(--pumpkinFrames), each(--j, 96, vec3(
+  calc(sin(var(--j) / var(--count) * 2 * pi) * var(--f).radius * (1 - var(--f).creases + var(--f).creases * pow(abs(cos(3.5 * (var(--j) / var(--count) * 2 * pi))), 0.35))),
+  var(--f).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi) * var(--f).radius * (1 - var(--f).creases + var(--f).creases * pow(abs(cos(3.5 * (var(--j) / var(--count) * 2 * pi))), 0.35)))
+)));
+
+/* its stalk: a ribbed stem, flared at the base, that rises out of the hollow and leans over */
+--pumpkinStemFrames: each(--i, 31, {
+  y: calc(1.3 + 1.15 * (var(--i) / 30));
+  radius: calc(0.2 - 0.09 * (var(--i) / 30) + 0.14 * pow(1 - (var(--i) / 30), 4));
+  lean: calc(0.45 * (var(--i) / 30) * (var(--i) / 30));
+});
+--pumpkinStemSections: each(--f, var(--pumpkinStemFrames), each(--j, 32, vec3(
+  calc(var(--f).lean + sin(var(--j) / var(--count) * 2 * pi) * var(--f).radius * (0.92 + 0.13 * pow(abs(cos(2.5 * (var(--j) / var(--count) * 2 * pi))), 0.5))),
+  var(--f).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi) * var(--f).radius * (0.92 + 0.13 * pow(abs(cos(2.5 * (var(--j) / var(--count) * 2 * pi))), 0.5)))
+)));
+
+/* the theater curtain: rows of pleated rings hanging from above, the folds deepening and drifting
+   sideways as they fall. 480 points a ring is what makes the pleats fine rather than faceted. */
+--curtainFrames: each(--i, 31, {
+  t: calc(var(--i) / 30);
+  y: calc(-5 + 25 * (var(--i) / 30));
+});
+--curtainSections: each(--f, var(--curtainFrames), each(--j, 480, vec3(
+  calc(sin(var(--j) / var(--count) * 2 * pi) * (55 + (1.2 - 0.5 * var(--f).t) * sin(var(--j) / var(--count) * 2 * pi * 48 + var(--f).t * 2) + 0.5 * sin(var(--j) / var(--count) * 2 * pi * 5 + var(--f).t * 3))),
+  var(--f).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi) * (55 + (1.2 - 0.5 * var(--f).t) * sin(var(--j) / var(--count) * 2 * pi * 48 + var(--f).t * 2) + 0.5 * sin(var(--j) / var(--count) * 2 * pi * 5 + var(--f).t * 3)))
+)));
+
+/* ───────────────────────────────────────────────────────── the rope barrier ── */
+
+--posts: 14;
+--barrierRadius: 20;
+/* the chord between two posts, so both ends of the cord end up buried inside a pole */
+--ropeLength: calc(2 * var(--barrierRadius) * sin(pi / var(--posts)));
+
+/* a cord sagging between two stanchions. The in-plane tangent of the sag orients its rings. */
+--ropeFrames: each(--i, 41, {
+  x: calc((var(--i) / 40 - 0.5) * var(--ropeLength));
+  y: calc(-3.6 * (var(--i) / 40) * (1 - var(--i) / 40));
+  ty: calc(-3.6 * (1 - 2 * (var(--i) / 40)));
+  tl: calc(sqrt(var(--ropeLength) * var(--ropeLength) + 3.6 * 3.6 * (1 - 2 * (var(--i) / 40)) * (1 - 2 * (var(--i) / 40))));
+});
+--ropeSections: each(--f, var(--ropeFrames), each(--j, 16, vec3(
+  calc(var(--f).x - 0.08 * cos(var(--j) / var(--count) * 2 * pi) * var(--f).ty / var(--f).tl),
+  calc(var(--f).y + 0.08 * cos(var(--j) / var(--count) * 2 * pi) * var(--ropeLength) / var(--f).tl),
+  calc(0.08 * sin(var(--j) / var(--count) * 2 * pi))
+)));
+
+/* a flat disc base, a slender pole and a small ball finial */
+--stanchionSections: each(--p, splineCurve([
+  vec2(0.16, 0), vec2(0.42, 0.04), vec2(0.46, 0.12), vec2(0.28, 0.22), vec2(0.08, 0.38), vec2(0.06, 1),
+  vec2(0.06, 1.85), vec2(0.11, 1.95), vec2(0.19, 2.08), vec2(0.2, 2.2), vec2(0.11, 2.3), vec2(0.04, 2.34)
+]).getPoints(80), each(--j, 24, vec3(
+  calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+  var(--p).y,
+  calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+)));
+
+/* one AST node is one instance, so both of these are built once and shared by all fourteen copies */
+--stanchionGeometry: loftGeometry(var(--stanchionSections), { capStart: true; capEnd: true });
+--ropeGeometry: loftGeometry(var(--ropeSections));
+
+/* ─────────────────────────────────────────────────────────────── templates ── */
 
 /* the exhibition casts and receives; the two flat discs opt back out below */
 @template mesh.exhibit {
@@ -18,13 +156,60 @@
   receiveShadow: true;
 }
 
-/* a plinth: one profile at three sizes, turned so the marbling differs from pedestal to pedestal */
+/*
+ * Revolve a 2d profile (x = radius, y = height) into circular sections, smoothing it through a spline
+ * first — the lathe every turned shape here is made on. Takes `--profile`, `--divisions`, `--segments`
+ * and the two caps.
+ */
+@template mesh.revolved {
+  geometry: loftGeometry(
+    each(--p, splineCurve(var(--profile)).getPoints(var(--divisions)), each(--j, var(--segments), vec3(
+      calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+      var(--p).y,
+      calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+    ))),
+    { capStart: var(--capStart, false); capEnd: var(--capEnd, false) }
+  );
+}
+
+/*
+ * A plinth: a stepped base, a tapered shaft and a cornice, revolved **without** smoothing — one ring per
+ * profile point. The doubled points split the vertex normals, which is what keeps those turnings crisp.
+ * Takes `--radius`, `--height` and the (x, z) it stands on.
+ */
 @template mesh.pedestal {
-  geometry: loftGeometry(var(--sections), { capStart: true, capEnd: true });
+  geometry: loftGeometry(
+    each(--p, [
+      vec2(0.2, 0),
+      vec2(calc(var(--radius) * 1.06), 0),
+      vec2(calc(var(--radius) * 1.06), calc(var(--height) * 0.1)),
+      vec2(calc(var(--radius) * 1.06), calc(var(--height) * 0.1)),
+      vec2(calc(var(--radius) * 0.98), calc(var(--height) * 0.16)),
+      vec2(calc(var(--radius) * 0.94), calc(var(--height) * 0.55)),
+      vec2(calc(var(--radius) * 0.97), calc(var(--height) * 0.84)),
+      vec2(calc(var(--radius) * 1.04), calc(var(--height) * 0.88)),
+      vec2(calc(var(--radius) * 1.04), calc(var(--height) * 0.97)),
+      vec2(calc(var(--radius) * 1.04), calc(var(--height) * 0.97)),
+      vec2(calc(var(--radius) * 0.98), var(--height)),
+      vec2(calc(var(--radius) * 0.98), var(--height)),
+      vec2(calc(var(--radius) * 0.5), calc(var(--height) - 0.004)),
+      vec2(0.2, var(--height))
+    ], each(--j, 48, vec3(
+      calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+      var(--p).y,
+      calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+    ))),
+    { capStart: true; capEnd: true }
+  );
   material: marbleMaterial;
+  castShadow: true;
+  receiveShadow: true;
   position: vec3(var(--x), -5, var(--z));
+  /* so the marbling differs from plinth to plinth */
   rotation.y: calc(var(--x) * 0.7 + var(--z) * 1.3);
 }
+
+/* ─────────────────────────────────────────────────────────────── the scene ── */
 
 directionalLight #sun(#ffffff, 3) {
   position: vec3(18, 30, 12);
@@ -49,40 +234,52 @@ group #turntable {
     receiveShadow: true;
   }
 
-  /* pleated rings hanging from above: 31 sections of 480 points, closed and uncapped */
   mesh.exhibit #curtain {
-    geometry: loftGeometry(curtainSections);
+    geometry: loftGeometry(var(--curtainSections));
     material: curtainMaterial;
   }
 
-  mesh.exhibit.pedestal #coffeePlinth { --x: 0; --z: 0; --sections: pedestalLargeSections; }
-  mesh.exhibit.pedestal #vasePlinth { --x: -10.5; --z: -10.5; --sections: pedestalMediumSections; }
-  mesh.exhibit.pedestal #shellPlinth { --x: 10.5; --z: -10.5; --sections: pedestalMediumSections; }
-  mesh.exhibit.pedestal #starPlinth { --x: -10.5; --z: 10.5; --sections: pedestalMediumSections; }
-  mesh.exhibit.pedestal #ribbonPlinth { --x: 10.5; --z: 10.5; --sections: pedestalMediumSections; }
-  mesh.exhibit.pedestal #tubePlinth { --x: 7.8; --z: 0; --sections: pedestalSmallSections; }
-  mesh.exhibit.pedestal #pumpkinPlinth { --x: 0; --z: 7.8; --sections: pedestalSmallSections; }
-  mesh.exhibit.pedestal #mushroomPlinth { --x: -7.8; --z: 0; --sections: pedestalSmallSections; }
-  mesh.exhibit.pedestal #gobletPlinth { --x: 0; --z: -7.8; --sections: pedestalSmallSections; }
+  mesh.pedestal #coffeePlinth { --radius: 3.6; --height: 2.2; --x: 0; --z: 0; }
+  mesh.pedestal #vasePlinth { --radius: 3.6; --height: 1.1; --x: -10.5; --z: -10.5; }
+  mesh.pedestal #shellPlinth { --radius: 3.6; --height: 1.1; --x: 10.5; --z: -10.5; }
+  mesh.pedestal #starPlinth { --radius: 3.6; --height: 1.1; --x: -10.5; --z: 10.5; }
+  mesh.pedestal #ribbonPlinth { --radius: 3.6; --height: 1.1; --x: 10.5; --z: 10.5; }
+  mesh.pedestal #tubePlinth { --radius: 2; --height: 1.6; --x: 7.8; --z: 0; }
+  mesh.pedestal #pumpkinPlinth { --radius: 2; --height: 1.6; --x: 0; --z: 7.8; }
+  mesh.pedestal #mushroomPlinth { --radius: 2; --height: 1.6; --x: -7.8; --z: 0; }
+  mesh.pedestal #gobletPlinth { --radius: 2; --height: 1.6; --x: 0; --z: -7.8; }
 
   /*
-   * A coffee set. The cup is lofted from the bottom center, up one side of the wall and back down the
-   * inside, and the handle is swept along a spline — one surface each, no boolean anything.
+   * A coffee set. The cup is lofted from the bottom center, up the egg shaped outer wall, over the lip
+   * and back down the inside — one surface, no boolean anything — and the handle is swept along a spline.
    */
   group #coffee {
     position: vec3(0, -2.8, 0);
     scale: vec3(0.75, 0.75, 0.75);
-    mesh.exhibit #saucer {
-      geometry: loftGeometry(saucerSections, { capStart: true, capEnd: true });
+    mesh.exhibit.revolved #saucer {
+      /* out along the underside, around the thin rim and back across the gently dished top */
+      --profile: [vec2(0.2, 0), vec2(1.3, 0.08), vec2(2.6, 0.35), vec2(3.7, 0.8), vec2(4.2, 1), vec2(3.4, 0.68), vec2(2, 0.3), vec2(1, 0.18), vec2(0.2, 0.26)];
+      --divisions: 120;
+      --segments: 64;
+      --capStart: true;
+      --capEnd: true;
       material: porcelainMaterial;
     }
-    mesh.exhibit #cup {
-      geometry: loftGeometry(cupSections, { capStart: true, capEnd: true });
+    mesh.exhibit.revolved #cup {
+      --profile: [
+        vec2(0.2, 0), vec2(0.7, 0.04), vec2(1.05, 0.1), vec2(1.75, 0.55), vec2(2.25, 1.45), vec2(2.36, 2.2),
+        vec2(2.3, 3.1), vec2(2.22, 3.82), vec2(2.18, 3.95), vec2(2.06, 3.8), vec2(2.18, 2.2), vec2(1.5, 0.75),
+        vec2(0.9, 0.55), vec2(0.2, 0.62)
+      ];
+      --divisions: 120;
+      --segments: 64;
+      --capStart: true;
+      --capEnd: true;
       material: porcelainMaterial;
       position: vec3(0, 0.3, 0);
     }
     mesh.exhibit #handle {
-      geometry: loftGeometry(handleSections);
+      geometry: loftGeometry(var(--handleSections));
       material: porcelainMaterial;
       position: vec3(0, 0.3, 0);
       rotation.y: 0.15rad;
@@ -95,76 +292,114 @@ group #turntable {
     }
   }
 
-  /* circular sections with a varying radius */
-  mesh.exhibit #vase {
-    geometry: loftGeometry(vaseSections, { capStart: true });
+  /* a vase: a full belly, a slender waist and a flared lip */
+  mesh.exhibit.revolved #vase {
+    --profile: [
+      vec2(0.2, 0), vec2(1.05, 0.05), vec2(1.5, 0.3), vec2(2.1, 1.4), vec2(2.2, 2.3), vec2(1.8, 3.6),
+      vec2(1.2, 4.8), vec2(0.85, 5.8), vec2(0.72, 6.6), vec2(0.8, 7.3), vec2(1.1, 7.9), vec2(1.3, 8.2)
+    ];
+    --divisions: 100;
+    --segments: 48;
+    --capStart: true;
     material: vaseMaterial;
     position: vec3(-10.5, -3.9, -10.5);
   }
 
-  /* circular sections that grow while sweeping along a logarithmic spiral */
   mesh.exhibit #shell {
-    geometry: loftGeometry(shellSections);
+    geometry: loftGeometry(var(--shellSections));
     material: shellMaterial;
     position: vec3(10.5, -1.98, -10.5);
     rotation.y: -90deg;
     scale: vec3(0.8, 0.8, 0.8);
   }
 
-  /* non-circular sections that rotate and scale along the loft */
   mesh.exhibit #star {
-    geometry: loftGeometry(starSections, { capStart: true, capEnd: true });
+    geometry: loftGeometry(var(--starSections), { capStart: true; capEnd: true });
     material: starMaterial;
     position: vec3(-10.5, -3.9, 10.5);
     scale: vec3(0.8, 0.8, 0.8);
   }
 
-  /* open two-point sections — what `closed: false` is for */
   mesh.exhibit #ribbon {
-    geometry: loftGeometry(ribbonSections, { closed: false });
+    geometry: loftGeometry(var(--ribbonSections), { closed: false });
     material: ribbonMaterial;
     position: vec3(10.5, -3.9, 10.5);
   }
 
-  /* circular sections that morph into a flat crimped seam */
   mesh.exhibit #toothpaste {
-    geometry: loftGeometry(toothpasteSections, { capStart: true, capEnd: true });
+    geometry: loftGeometry(var(--toothpasteSections), { capStart: true; capEnd: true });
     material: toothpasteMaterial;
     position: vec3(7.8, -3.4, 0);
     rotation.y: 0.5rad;
   }
 
-  /* lobed sections around a squashed profile, and a stalk out of the hollow at the top */
   mesh.exhibit #pumpkin {
-    geometry: loftGeometry(pumpkinSections, { capStart: true, capEnd: true });
+    geometry: loftGeometry(var(--pumpkinSections), { capStart: true; capEnd: true });
     material: pumpkinMaterial;
     position: vec3(0, -3.4, 7.8);
   }
   mesh.exhibit #pumpkinStem {
-    geometry: loftGeometry(pumpkinStemSections, { capEnd: true });
+    geometry: loftGeometry(var(--pumpkinStemSections), { capEnd: true });
     material: pumpkinStemMaterial;
     position: vec3(0, -3.4, 7.8);
   }
 
-  /* a cap that folds under its own rim, over a tapered stem */
-  mesh.exhibit #mushroomCap {
-    geometry: loftGeometry(mushroomCapSections, { capEnd: true });
+  /* a mushroom: a cap that folds under its own rim, over a tapered stem */
+  mesh.exhibit.revolved #mushroomCap {
+    /* from under the rim, around the edge and over the dome */
+    --profile: [vec2(0.35, 2.02), vec2(1.1, 2), vec2(1.65, 2.15), vec2(1.78, 2.4), vec2(1.5, 2.85), vec2(0.95, 3.18), vec2(0.2, 3.32)];
+    --divisions: 80;
+    --segments: 48;
+    --capEnd: true;
     material: mushroomCapMaterial;
     position: vec3(-7.8, -3.4, 0);
   }
-  mesh.exhibit #mushroomStem {
-    geometry: loftGeometry(mushroomStemSections, { capStart: true, capEnd: true });
+  mesh.exhibit.revolved #mushroomStem {
+    --profile: [vec2(0.2, 0), vec2(0.55, 0.05), vec2(0.45, 0.9), vec2(0.4, 1.7), vec2(0.42, 2.3)];
+    --divisions: 60;
+    --segments: 32;
+    --capStart: true;
+    --capEnd: true;
     material: mushroomStemMaterial;
     position: vec3(-7.8, -3.4, 0);
   }
 
-  /* a foot, a thin stem and a bowl with folded back walls */
-  mesh.exhibit #goblet {
-    geometry: loftGeometry(gobletSections, { capStart: true, capEnd: true });
+  /* a goblet: a foot, a thin stem, and a bowl that folds back down inside */
+  mesh.exhibit.revolved #goblet {
+    --profile: [
+      vec2(0.2, 0), vec2(1.25, 0.05), vec2(1.35, 0.2), vec2(0.6, 0.5), vec2(0.28, 0.9), vec2(0.24, 1.7),
+      vec2(0.7, 2.15), vec2(1.15, 2.8), vec2(1.28, 3.5), vec2(1.27, 3.62), vec2(1.16, 3.5), vec2(0.95, 2.85),
+      vec2(0.45, 2.25), vec2(0.2, 2.32)
+    ];
+    --divisions: 140;
+    --segments: 48;
+    --capStart: true;
+    --capEnd: true;
     material: gobletMaterial;
     position: vec3(0, -3.4, -7.8);
   }
 
-  /* a node out of the registry: fourteen stanchions and the cord sagging between them */
-  barrier();
+  /* the barrier: fourteen brass stanchions, and the cord sagging between each pair */
+  repeat(14) {
+    mesh.exhibit #post {
+      geometry: var(--stanchionGeometry);
+      material: brassMaterial;
+      position: vec3(
+        calc(sin((var(--index) + 0.5) / var(--count) * 2 * pi) * var(--barrierRadius)),
+        -5,
+        calc(cos((var(--index) + 0.5) / var(--count) * 2 * pi) * var(--barrierRadius))
+      );
+    }
+    /* halfway round to the next post, and in by the sagitta so the cord's ends meet the poles */
+    mesh.exhibit #cord {
+      geometry: var(--ropeGeometry);
+      material: ropeMaterial;
+      position: vec3(
+        calc(sin((var(--index) + 1) / var(--count) * 2 * pi) * var(--barrierRadius) * cos(pi / var(--count))),
+        -2.95,
+        calc(cos((var(--index) + 1) / var(--count) * 2 * pi) * var(--barrierRadius) * cos(pi / var(--count)))
+      );
+      rotation.y: calc((var(--index) + 1) / var(--count) * 2 * pi);
+    }
+  }
 }

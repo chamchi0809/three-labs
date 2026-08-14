@@ -10,7 +10,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BUILTINS, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
 
@@ -227,6 +227,20 @@ connection.onCompletion((params) => {
   const at = /@[\w-]*$/.exec(head);
   if (at) return atCompletions(doc, at.index, offset, enclosingBlock(text, offset)?.name);
 
+  // `.` after a value that is already complete reads a property or calls a method; a `.` after a bare
+  // node name is a template, which is the branch below
+  if (/[)\]]\s*\.[\w-]*$/.test(head)) return memberCompletions(receiverAt(head));
+
+  // inside `calc(` — arithmetic, so three's namespace has nothing to offer and the math table does
+  if (inCalc(head)) {
+    return Object.entries(MATH).map(([label, m]) => ({
+      label,
+      kind: CompletionItemKind.Function,
+      detail: m.summary,
+      ...(m.arity ? { insertText: `${label}(` } : {}),
+    }));
+  }
+
   // `.` after a node name completes templates declared for that node type, including imported ones
   const dotted = /([A-Za-z_]\w*)\.[\w-]*$/.exec(head);
   if (dotted) {
@@ -426,6 +440,74 @@ function bakeryCompletions(position: keyof typeof BAKERY, head: string) {
   }));
 }
 
+/** index of the `(` that matches the `)` at the end of `text`, or -1 */
+function openingParen(text: string): number {
+  let depth = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (text[i] === ")") depth++;
+    else if (text[i] === "(" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The type of the value in front of the last `.` in `head` — `splineCurve([…]).getPoints(4).` resolves to
+ * `Vector2[]`. Only a chain of calls is followed: a `var(--p)` receiver is a loop binding the schema cannot
+ * see, and a bare name is a template application.
+ */
+function receiverAt(head: string): TypeRef | undefined {
+  const dot = head.lastIndexOf(".");
+  if (dot < 0) return undefined;
+  let text = head.slice(0, dot).replace(/\s+$/, "");
+  const methods: string[] = [];
+  while (text.endsWith(")")) {
+    const open = openingParen(text);
+    if (open < 0) return undefined;
+    const name = /([A-Za-z_]\w*)\s*$/.exec(text.slice(0, open))?.[1];
+    if (!name) return undefined;
+    const before = text.slice(0, text.slice(0, open).lastIndexOf(name)).replace(/\s+$/, "");
+    if (before.endsWith(".")) { methods.unshift(name); text = before.slice(0, -1).replace(/\s+$/, ""); continue; }
+    // the innermost call is the constructor, and the names peeled off it are methods called on its result
+    let type: TypeRef | undefined = schema.classes[className(name)] ? { kind: "class", name: className(name) } : undefined;
+    for (const method of methods) {
+      if (type?.kind !== "class") return undefined;
+      type = schema.classes[concrete(type.name)]?.methods[method]?.[0]?.returns;
+    }
+    return type;
+  }
+  return undefined;
+}
+
+/** the properties and methods of a value's type */
+function memberCompletions(type: TypeRef | undefined) {
+  const cls = type?.kind === "class" ? schema.classes[concrete(type.name)] : undefined;
+  if (!cls) return [];
+  return [
+    ...Object.entries(cls.props).map(([label, p]) => ({ label, kind: CompletionItemKind.Property, detail: show(p.type) })),
+    ...Object.entries(cls.methods).map(([label, m]) => ({
+      label,
+      kind: CompletionItemKind.Method,
+      detail: `(${m[0]!.params.map((p) => `${p.name}${p.optional ? "?" : ""}`).join(", ")}) → ${show(m[0]!.returns)}`,
+      insertText: `${label}(`,
+    })),
+  ];
+}
+
+/** is the cursor inside an unclosed `calc(`, where arithmetic is the only thing that fits? */
+function inCalc(head: string): boolean {
+  let depth = 0;
+  for (let i = head.length - 1; i >= 0; i--) {
+    const c = head[i]!;
+    if (c === ")") depth++;
+    else if (c === "(") {
+      if (depth) { depth--; continue; }
+      const name = /([A-Za-z_]\w*)\s*$/.exec(head.slice(0, i))?.[1];
+      return name === "calc" || (!!name && !!MATH[name]);
+    } else if (c === "{" || c === "}" || c === ";") return false;
+  }
+  return false;
+}
+
 /** the options bag a `{` at `brace` is filling in — the property it is assigned to, or the argument it sits in */
 function recordAt(text: string, brace: number): Extract<TypeRef, { kind: "record" }> | undefined {
   const head = text.slice(0, brace);
@@ -535,6 +617,15 @@ connection.onHover(async (params) => {
   }
   if (BUILTINS[word]) {
     return { contents: md("```scene", BUILTINS[word]!.signature, "```", BUILTINS[word]!.summary), range: here };
+  }
+  if (word === "each") {
+    return { contents: md("```scene", "each(--name, count | list, value)", "```", "a list: `value` once per index, or once per item. Binds `--name`, `--index` and `--count`"), range: here };
+  }
+  // a calc() function, which is the language's own and so not in the schema
+  if (MATH[word] && inCalc(text.slice(0, start))) {
+    const knob = MATH[word]!;
+    const args = { 0: "", 1: "(x)", 2: "(a, b)", 3: "(x, a, b)" }[knob.arity] ?? "(…)";
+    return { contents: md("```scene", `${word}${args}`, "```", knob.summary), range: here };
   }
   if (word && schema.constants[word]) {
     return { contents: md("```ts", `${word}: ${show(schema.constants[word]!)}`, "```", `exported by ${schema.entry}`), range: here };
@@ -918,6 +1009,22 @@ connection.onDocumentSymbol((params) => {
 /** the legend the client is handed at initialize; a token's type is its index here */
 const TOKEN_TYPES = ["comment", "string", "number", "keyword", "variable", "property", "class", "function", "enumMember", "decorator"];
 
+/** is this ident inside an unclosed `calc(`? the token stream answer to {@link inCalc} */
+function callable(toks: Tok[], i: number): boolean {
+  let depth = 0;
+  for (let j = i - 1; j >= 0; j--) {
+    const t = toks[j]!;
+    if (t.type !== "punc") continue;
+    if (t.value === ")") depth++;
+    else if (t.value === "(") {
+      if (depth) { depth--; continue; }
+      const name = toks[j - 1];
+      return name?.type === "ident" && (name.value === "calc" || !!MATH[name.value]);
+    } else if (t.value === "{" || t.value === "}" || t.value === ";") return false;
+  }
+  return false;
+}
+
 /** what a token means, decided from its neighbours — the parser's rules, one token of lookahead */
 function tokenType(toks: Tok[], i: number): string | undefined {
   const t = toks[i]!;
@@ -934,8 +1041,16 @@ function tokenType(toks: Tok[], i: number): string | undefined {
     default: return undefined;
   }
   if (next?.type === "punc" && next.value === ":") return "property";
-  if (prev?.type === "punc" && prev.value === ".") return "decorator"; // .template
-  if (BUILTINS[t.value]) return "function";
+  // `.glow` is a template, but `.getPoints(` and `.x` after a closed value read the value itself
+  if (prev?.type === "punc" && prev.value === ".") {
+    const before = toks[i - 2];
+    return before?.type === "punc" && (before.value === ")" || before.value === "]")
+      ? (next?.type === "punc" && next.value === "(" ? "function" : "property")
+      : "decorator";
+  }
+  if (BUILTINS[t.value] || t.value === "each") return "function";
+  // a math function is only one inside a calc(); elsewhere `min` could be anybody's property
+  if (MATH[t.value] && callable(toks, i)) return "function";
   if (schema.classes[className(t.value)]) return "class";
   if (schema.constants[t.value]) return "enumMember";
   return "variable";

@@ -17,7 +17,7 @@ type ClassInfo = {
   copyable: boolean;
   ctor: Param[];
   doc?: string;
-  methods: Record<string, Param[][]>;
+  methods: Record<string, Method[]>;
   props: Record<string, PropInfo>;
 };
 ```
@@ -31,7 +31,7 @@ type ClassInfo = {
 | <a id="copyable"></a> `copyable` | `boolean` | - |
 | <a id="ctor"></a> `ctor` | [`Param`](#param)[] | first construct signature, in order |
 | <a id="doc"></a> `doc?` | `string` | - |
-| <a id="methods"></a> `methods` | `Record`\<`string`, [`Param`](#param)[][]\> | call signatures of each public method — `lookAt(x, y, z);` is checked against these |
+| <a id="methods"></a> `methods` | `Record`\<`string`, [`Method`](#method)[]\> | call signatures of each public method — `lookAt(x, y, z);` is checked against these |
 | <a id="props"></a> `props` | `Record`\<`string`, [`PropInfo`](#propinfo)\> | - |
 
 ***
@@ -51,6 +51,26 @@ type Field = {
 | ------ | ------ |
 | <a id="optional"></a> `optional` | `boolean` |
 | <a id="type"></a> `type` | [`TypeRef`](#typeref) |
+
+***
+
+### Method
+
+```ts
+type Method = {
+  params: Param[];
+  returns: TypeRef;
+};
+```
+
+one call signature of a method: what it takes, and what a `foo(…).bar(…)` value is worth
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="params"></a> `params` | [`Param`](#param)[] |
+| <a id="returns"></a> `returns` | [`TypeRef`](#typeref) |
 
 ***
 

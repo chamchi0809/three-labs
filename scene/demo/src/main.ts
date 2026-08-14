@@ -4,9 +4,10 @@
 //   stage — the language's own surface: nesting, `@template`, `var()`/`calc()`, `gltf()` with `find()` and
 //           `play()` reaching into it, a `texture()` the vite plugin turned into a hashed `?url` import.
 //   loft  — three's `webgpu_geometry_loft` example. Every surface is `loftGeometry()`, the addon class,
-//           which the plugin imports from `three/addons/geometries/LoftGeometry.js` by name. What a
-//           declarative sheet cannot say — the cross sections, the TSL shader graphs, a subtree whose
-//           fourteen copies need trigonometry — comes through `registry` (see `src/loft/`).
+//           which the plugin imports from `three/addons/geometries/LoftGeometry.js` by name, and every
+//           cross section it is skinned through is written in the sheet: `each()` for the loops, `calc()`
+//           for the trigonometry, `splineCurve(…).getPoints(n)` for the profiles. Only the shading comes
+//           through `registry` — TSL node materials, which are shader graphs (see `src/loft/`).
 //
 // Each sheet mounts into a container of its own, lazily and then for good, so switching is a `visible`
 // flag and both keep hot-reloading. What is left here is what needs the renderer: the room environment,
@@ -150,7 +151,7 @@ const SCENES: Entry[] = [
     name: "loft",
     sheet: loft,
     registry: loftRegistry,
-    note: "Surfaces skinned through cross sections — loftGeometry() from three/addons. After three's loft geometry example.",
+    note: "51 lofts over 113k cross-section points, every one of them written in the sheet. After three's loft geometry example.",
     lens: [45, 1, 1000],
     eye: [0, 15, 40],
     target: [0, -3, 0],

@@ -102,5 +102,23 @@
       "}"
     ],
     "description": "Play an animation clip that came with the loaded model"
+  },
+  "each": {
+    "prefix": "each",
+    "body": [
+      "each(--${1:i}, ${2:48}, ${3:vec3(0, 0, 0)})"
+    ],
+    "description": "A list: the value once per index, or once per item of a list. Binds --i, --index and --count"
+  },
+  "ring": {
+    "prefix": "ring",
+    "body": [
+      "each(--${1:j}, ${2:48}, vec3(",
+      "  calc(sin(var(--${1:j}) / var(--count) * 2 * pi) * ${3:1}),",
+      "  ${4:0},",
+      "  calc(cos(var(--${1:j}) / var(--count) * 2 * pi) * ${3:1})",
+      "))"
+    ],
+    "description": "A ring of points around the y axis — one cross section of a loftGeometry()"
   }
 }

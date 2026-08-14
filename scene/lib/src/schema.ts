@@ -17,6 +17,8 @@ export type TypeRef =
 
 export type Field = { type: TypeRef; optional: boolean };
 export type Param = { name: string; type: TypeRef; optional: boolean };
+/** one call signature of a method: what it takes, and what a `foo(…).bar(…)` value is worth */
+export type Method = { params: Param[]; returns: TypeRef };
 export type PropInfo = { type: TypeRef; readonly: boolean; doc?: string };
 export type ClassInfo = {
   bases: string[];
@@ -24,7 +26,7 @@ export type ClassInfo = {
   ctor: Param[];
   props: Record<string, PropInfo>;
   /** call signatures of each public method — `lookAt(x, y, z);` is checked against these */
-  methods: Record<string, Param[][]>;
+  methods: Record<string, Method[]>;
   copyable: boolean;
   abstract: boolean;
   doc?: string;
@@ -69,7 +71,7 @@ export type Schema = {
   declared?: string[];
 };
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 /** the modules to reflect, in the order a later one shadows an earlier one: addons first, entry over them */
 const specifiers = (entry: string, modules: string[], addons: boolean | undefined) =>
@@ -188,7 +190,7 @@ function classInfo(checker: ts.TypeChecker, symbol: ts.Symbol, instance: ts.Type
   const ctor = paramsOf(checker, staticType.getConstructSignatures()[0], ref);
 
   const props: Record<string, PropInfo> = {};
-  const methods: Record<string, Param[][]> = {};
+  const methods: Record<string, Method[]> = {};
   let copyable = false;
   for (const p of checker.getPropertiesOfType(instance)) {
     const name = p.getName();
@@ -202,7 +204,7 @@ function classInfo(checker: ts.TypeChecker, symbol: ts.Symbol, instance: ts.Type
     const t = checker.getTypeOfSymbolAtLocation(p, d);
     const calls = t.getCallSignatures();
     if (calls.length) {
-      methods[name] = calls.map((c) => paramsOf(checker, c, d));
+      methods[name] = calls.map((c) => ({ params: paramsOf(checker, c, d), returns: typeRef(checker, c.getReturnType()) }));
       continue;
     }
     props[name] = { type: typeRef(checker, t), readonly: !!(mods & ts.ModifierFlags.Readonly), ...doc(docOf(checker, p)) };

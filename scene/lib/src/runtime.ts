@@ -6,7 +6,7 @@
 import { AnimationClip, AnimationMixer, Group, SRGBColorSpace, TextureLoader } from "three/webgpu";
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
-import { className } from "./names.ts";
+import { className, math } from "./names.ts";
 
 /** What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet, one module. */
 export type SceneModule = {
@@ -100,6 +100,8 @@ type Ctx = {
   deferred: (() => Promise<void>)[];
   /** name → constructor/constant: the sheet's build-time three imports, with opts.registry on top */
   registry: Record<string, any>;
+  /** what the enclosing `each()` calls bind right now — the only variables left by the time we get here */
+  loop: Map<string, unknown>;
   /** after the tree is built an unknown #id is a real error, not a forward reference */
   settled?: boolean;
 };
@@ -117,7 +119,7 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
 
   const ctx: Ctx = {
     opts: { ...opts, base }, sheet: { text: sheet.text, file: sheet.file }, mixers: [],
-    made: new WeakMap(), ids: new Map(), deferred: [],
+    made: new WeakMap(), ids: new Map(), deferred: [], loop: new Map(),
     // the caller's registry wins, so `{ water: Water }` can also shadow a three export
     registry: { ...moduleRegistry(mod), ...opts.registry },
   };
@@ -397,6 +399,9 @@ async function gltfLoader(ctx: Ctx) {
 }
 
 function construct(o: ObjectValue, ctx: Ctx): Promise<any> {
+  // one AST node is one instance — except inside an each(), where expand() marked the nodes that read
+  // the loop binding and every iteration owes a fresh one
+  if (o.dynamic) return build(o, ctx);
   let made = ctx.made.get(o);
   if (!made) ctx.made.set(o, (made = build(o, ctx)));
   return made;
@@ -603,8 +608,31 @@ async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
       for (const e of v.entries) out[e.name] = await evaluate(e.value, ctx);
       return out;
     }
-    case "calc": return fail("unfolded calc()", v, ctx);
-    case "var": return fail(`unresolved variable --${v.name}`, v, ctx);
+    // expand() folds the arithmetic it can; what is left reads an each() binding, so it lands here
+    case "calc": case "fn": return arith(v, ctx);
+    case "each": return iterate(v, ctx);
+    case "read": {
+      const target = await evaluate(v.target, ctx);
+      if (target == null) fail(`cannot read ${v.name} of ${String(target)}`, v, ctx);
+      return (target as Record<string, unknown>)[v.name];
+    }
+    case "index": {
+      const target = await evaluate(v.target, ctx);
+      if (!Array.isArray(target)) fail(`cannot index a ${typeof target}`, v, ctx);
+      return (target as unknown[])[Number(await evaluate(v.at, ctx))];
+    }
+    case "call": {
+      const target = await evaluate(v.target, ctx);
+      const method = (target as Record<string, unknown> | null)?.[v.name];
+      if (typeof method !== "function") fail(`${v.name} is not a method of this value`, v, ctx);
+      const args: unknown[] = [];
+      for (const a of v.args) args.push(await evaluate(a, ctx));
+      return (method as (...a: unknown[]) => unknown).apply(target, args);
+    }
+    case "var": {
+      if (ctx.loop.has(v.name)) return ctx.loop.get(v.name);
+      return fail(`unresolved variable --${v.name}`, v, ctx);
+    }
     case "ident":
       if (v.name === "true") return true;
       if (v.name === "false") return false;
@@ -613,4 +641,52 @@ async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
       if (constant !== undefined) return constant;
       return fail(`unknown constant ${JSON.stringify(v.name)}${HINT}`, v, ctx);
   }
+}
+
+/**
+ * `each(--j, 48, expr)` — the body once per index, or once per item of a list.
+ *
+ * The binding is restored rather than dropped, so a nested each() that shadows `--index` hands the outer
+ * one back on the way out.
+ */
+async function iterate(v: Value & { kind: "each" }, ctx: Ctx): Promise<unknown[]> {
+  const over = await evaluate(v.over, ctx);
+  const items = Array.isArray(over) ? over : undefined;
+  const count = items ? items.length : Number(over);
+  if (!Number.isInteger(count) || count < 0) fail(`each() counts to a whole number or walks a list, got ${String(over)}`, v.over, ctx);
+
+  const saved = [v.name, "index", "count"].map((name) => [name, ctx.loop.has(name), ctx.loop.get(name)] as const);
+  const out: unknown[] = [];
+  try {
+    ctx.loop.set("count", count);
+    for (let i = 0; i < count; i++) {
+      ctx.loop.set(v.name, items ? items[i] : i);
+      ctx.loop.set("index", i);
+      out.push(await evaluate(v.body, ctx));
+    }
+  } finally {
+    for (const [name, had, was] of saved) had ? ctx.loop.set(name, was) : ctx.loop.delete(name);
+  }
+  return out;
+}
+
+/** the arithmetic expand() could not fold, over the loop bindings it was waiting for */
+async function arith(v: Value, ctx: Ctx): Promise<number> {
+  if (v.kind === "calc") {
+    const [left, right] = [await arith(v.left, ctx), await arith(v.right, ctx)];
+    switch (v.op) {
+      case "+": return left + right;
+      case "-": return left - right;
+      case "*": return left * right;
+      case "/": return right === 0 ? fail("calc() divides by zero", v, ctx) : left / right;
+    }
+  }
+  if (v.kind === "fn") {
+    const args: number[] = [];
+    for (const a of v.args) args.push(await arith(a, ctx));
+    return math(v.name, args);
+  }
+  const value = await evaluate(v, ctx);
+  if (typeof value !== "number" || !Number.isFinite(value)) fail(`calc() works on numbers, got ${JSON.stringify(value)}`, v, ctx);
+  return value as number;
 }

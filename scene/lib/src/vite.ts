@@ -36,6 +36,12 @@ function threeNames(statements: Statement[]): Set<string> {
       case "record": return v.entries.forEach((e) => value(e.value));
       case "calc": value(v.left); return value(v.right);
       case "var": if (v.fallback) value(v.fallback); return;
+      // the language's own forms: nothing here is a three name, but their operands are
+      case "fn": return v.args.forEach(value);
+      case "each": value(v.over); return value(v.body);
+      case "read": return value(v.target);
+      case "index": value(v.target); return value(v.at);
+      case "call": value(v.target); return v.args.forEach(value);
     }
   };
   // a builtin is the language's own, never a class — but its body still names plenty of three
@@ -112,6 +118,11 @@ function assetUrls(statements: Statement[]): string[] {
       case "record": return v.entries.forEach((e) => value(e.value, visit));
       case "calc": value(v.left, visit); return value(v.right, visit);
       case "var": return void (v.fallback && value(v.fallback, visit));
+      case "fn": return v.args.forEach((a) => value(a, visit));
+      case "each": value(v.over, visit); return value(v.body, visit);
+      case "read": return value(v.target, visit);
+      case "index": value(v.target, visit); return value(v.at, visit);
+      case "call": value(v.target, visit); return v.args.forEach((a) => value(a, visit));
     }
   };
   const member = (m: Member, visit: (o: ObjectValue) => void): void => {

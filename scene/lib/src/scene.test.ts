@@ -113,6 +113,40 @@ test("arrays, records and calc() round-trip through the printer", () => {
   assert.match(once, /calc\(\(var\(--h\) \* 2\) - 1\)/);
 });
 
+test("each(), calc() functions and value chains round-trip through the printer", () => {
+  const src = `--pts: splineCurve([vec2(0, 0), vec2(1, 1)]).getPoints(8);\n\nmesh {\n  morphTargetInfluences: each(--i, var(--pts), calc(sin(var(--index) / var(--count) * 2 * pi) * var(--i).x));\n}\n`;
+  const once = print(parse(src, "a.tscene"));
+  assert.equal(print(parse(once, "a.tscene")), once, `not idempotent:\n${once}`);
+  assert.match(once, /splineCurve\(\[vec2\(0, 0\), vec2\(1, 1\)\]\)\.getPoints\(8\)/);
+  assert.match(once, /each\(--i, var\(--pts\), calc\(/);
+  assert.match(once, /sin\(/);
+  assert.match(once, /\bpi\b/); // no parens on a nullary function
+  assert.match(print(parse(`mesh { renderOrder: calc(var(--a, 1)[0].x); }`)), /var\(--a, 1\)\[0\]\.x/);
+});
+
+test("calc() folds its functions, and leaves the loop's arithmetic to the runtime", async () => {
+  const value = async (text: string) => {
+    const { nodes } = await expand(parse(`mesh { renderOrder: ${text}; }`), noImports);
+    const m = nodes[0]!.kind === "node" ? nodes[0]!.object.body[0] : undefined;
+    return m?.kind === "prop" ? m.value : undefined;
+  };
+  const folded = async (text: string) => {
+    const v = await value(text);
+    return v?.kind === "number" ? v.value : `unfolded ${v?.kind}`;
+  };
+  assert.equal(await folded(`calc(pow(2, 10))`), 1024);
+  assert.equal(await folded(`calc(pi)`), Math.PI);
+  assert.equal(await folded(`calc(abs(0 - 2) + sign(3) + floor(1.7))`), 4);
+  assert.equal(await folded(`calc(smoothstep(0.5, 0, 1))`), 0.5);
+  assert.equal(await folded(`calc(mod(0 - 1, 4))`), 3); // the divisor's sign, not the dividend's
+  assert.equal(await folded(`calc(sin(90deg))`), 1);    // a unit is applied before the function
+  // a method call is not a constant, so the folder hands the whole expression on
+  assert.equal(await folded(`calc(splineCurve([vec2(0, 0)]).getPoints(2)[0].x * 2)`), "unfolded calc");
+  const bad = async (text: string) => (await expand(parse(`mesh { renderOrder: ${text}; }`), noImports)).diagnostics.map((d) => d.message);
+  assert.match((await bad(`calc(sin("x"))`))[0]!, /sin\(\) works on numbers only/);
+  assert.match((await bad(`calc(pow(2))`))[0]!, /pow\(\) takes 2 argument/);
+});
+
 test("@bakery round-trips at the top level and inside a node", () => {
   const src = `@bakery { size: 512; include: none };\n\npointLight #lamp {\n  @bakery { radius: 0.35 };\n}\n`;
   const once = print(parse(src, "a.tscene"));
@@ -336,6 +370,26 @@ test("arrays and records are checked against the declared type", async () => {
   assert.match((await checkText(`mesh { morphTargetInfluences: ["a"]; }`))[0]!, /item expects number, got string/);
   assert.match((await checkText(`mesh { visible: [true]; }`))[0]!, /expects boolean, got boolean\[\]/);
   assert.match((await checkText(`mesh { visible: { a: 1 }; }`))[0]!, /expects boolean, got any/);
+});
+
+test("each(), value chains and calc() functions are checked against the typings", async () => {
+  const loft = (sections: string) => checkText(`mesh { geometry: loftGeometry(${sections}); }`);
+  // the shape the whole loft demo is written in: a spline sampled into rings of sin/cos
+  assert.deepEqual(
+    await loft(`each(--p, splineCurve([vec2(0, 0), vec2(1, 1)]).getPoints(40), each(--j, 24, vec3(
+      calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x), var(--p).y, 0)))`),
+    [],
+  );
+  // `--p` is a Vector2, so the schema knows what it does and does not have
+  assert.match((await loft(`each(--p, splineCurve([vec2(0, 0)]).getPoints(4), var(--p).z)`))[0]!, /Vector2 has no property "z"; did you mean x\?/);
+  assert.match((await loft(`each(--p, splineCurve([vec2(0, 0)]).getPionts(4), 0)`))[0]!, /SplineCurve has no method "getPionts"; did you mean getPoints\?/);
+  assert.match((await checkText(`mesh { renderOrder: vec3(1, 2, 3).normalize; }`))[0]!, /Vector3\.normalize is a method — call it as \.normalize\(…\)/);
+  assert.match((await checkText(`mesh { renderOrder: vec3(1, 2, 3)[0]; }`))[0]!, /Vector3 is not a list, so it cannot be indexed/);
+  // an each() is a list, so it does not fit a scalar, and its body has to fit the element type
+  assert.match((await checkText(`mesh { renderOrder: each(--i, 3, var(--i)); }`))[0]!, /expects number, got number\[\]/);
+  assert.match((await checkText(`mesh { morphTargetInfluences: each(--i, 3, "s"); }`))[0]!, /each\(\) item expects number, got string/);
+  assert.match((await checkText(`mesh { morphTargetInfluences: each(--i, "x", 0); }`))[0]!, /each\(\) counts to a number or walks an array, got string/);
+  assert.match((await checkText(`mesh { renderOrder: calc(vec3(1, 2, 3) * 2); }`))[0]!, /calc\(\) works on numbers, got Vector3/);
 });
 
 test("@bakery keys are checked per position", async () => {
@@ -563,6 +617,41 @@ test("runtime handles ref(), method calls and dotted paths, and ignores warnings
   assert.equal(a.position.x, 3);
   assert.ok(Math.abs(a.rotation.x) > 0); // lookAt actually ran
   assert.equal((root.getObjectByName("b") as any).target, a);
+});
+
+test("each() evaluates its body per iteration, and shares only what does not vary", async () => {
+  const root = await load(`
+    --profile: splineCurve([vec2(0.2, 0), vec2(1.2, 0.4), vec2(0.2, 1.7)]);
+    --shared: meshStandardMaterial { roughness: 0.4; };
+    group #stage {
+      mesh #pot {
+        material: var(--shared);
+        /* 8 rings of 4 points, out of a spline sampled at 8 divisions */
+        userData: {
+          rings: each(--p, var(--profile).getPoints(7), each(--j, 4, vec3(
+            calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+            var(--p).y,
+            calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+          )));
+          walk: each(--n, [10, 20, 30], calc(var(--n) + var(--index) * 100));
+        };
+      }
+      mesh #other { material: var(--shared); }
+    }
+  `);
+  const pot = root.getObjectByName("pot")!;
+  const rings = pot.userData.rings as { x: number; y: number; z: number }[][];
+  assert.equal(rings.length, 8);
+  assert.equal(rings[0]!.length, 4);
+  // a quarter turn round the first profile point: sin = 1, cos = 0, at radius 0.2
+  assert.ok(Math.abs(rings[0]![1]!.x - 0.2) < 1e-9, `${rings[0]![1]!.x}`);
+  assert.ok(Math.abs(rings[0]![1]!.z) < 1e-9);
+  // every point is its own Vector3 — the AST node is one, the instances are not
+  assert.equal(new Set(rings.flat()).size, 32);
+  // walking a list binds the item, and --index comes along
+  assert.deepEqual(pot.userData.walk, [10, 120, 230]);
+  // …while a node that reads no binding is still one instance, shared by both meshes
+  assert.equal((pot as { material?: unknown }).material, (root.getObjectByName("other") as { material?: unknown }).material);
 });
 
 test("repeat() unrolls with --index and --count", async () => {

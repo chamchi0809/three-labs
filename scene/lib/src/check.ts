@@ -1,8 +1,8 @@
 // Type checks an expanded .tscene AST against a reflected three schema.
 // Pure (no typescript / no three import) so it runs in the browser too.
 import type { Diagnostic, Member, ObjectValue, Pos, Template, Value } from "./parse.ts";
-import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
-import { ALIASES, BAKERY, BUILTINS, LOADERS, className, concrete, nodeName, type Knob } from "./names.ts";
+import type { ClassInfo, Method, Schema, TypeRef } from "./schema.ts";
+import { ALIASES, BAKERY, BUILTINS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 
 /** Levenshtein distance, two rows at a time */
 function distance(a: string, b: string): number {
@@ -20,8 +20,9 @@ function distance(a: string, b: string): number {
 export function check(nodes: Member[], schema: Schema, templates: Template[] = []): Diagnostic[] {
   const out: Diagnostic[] = [];
   const templateOf = new Map(templates.map((t) => [t.name, t]));
-  const err = (message: string, pos: Pos, fix?: Diagnostic["fix"]) =>
+  const err = (message: string, pos: Pos, fix?: Diagnostic["fix"]): void => {
     out.push({ message, severity: "error", start: pos.start, end: pos.end, file: pos.file, ...(fix ? { fix } : {}) });
+  };
 
   const info = (cls: string): ClassInfo | undefined => schema.classes[cls];
 
@@ -47,12 +48,32 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
   /** node names the host registers at runtime — the schema cannot see them, so they are unchecked */
   const declared = (name: string) => schema.declared?.includes(name) ?? false;
 
+  /** what an enclosing `each()` binds its name to, so `var(--p).x` resolves */
+  const loop = new Map<string, TypeRef>();
+
+  /** the type of `target.name`, or of what `target.name(…)` returns */
+  function memberType(v: Value & { kind: "read" | "call" }): TypeRef {
+    const target = valueType(v.target);
+    if (target.kind !== "class") return { kind: "any" };
+    const cls = concrete(target.name);
+    if (v.kind === "read") return propOf(cls, v.name)?.type ?? { kind: "any" };
+    // an overload set: every signature of a three method returns the same thing in practice
+    return info(cls)?.methods[v.name]?.[0]?.returns ?? { kind: "any" };
+  }
+
   function valueType(v: Value): TypeRef {
     switch (v.kind) {
       case "number": return { kind: "number" };
       case "hex": return { kind: "number" };
       case "string": return { kind: "string" };
-      case "var": return { kind: "any" };
+      case "fn": return { kind: "number" };
+      case "each": return { kind: "array", of: elementBound(v, () => valueType(v.body)) };
+      case "read": case "call": return memberType(v);
+      case "index": {
+        const t = valueType(v.target);
+        return t.kind === "array" ? t.of : { kind: "any" };
+      }
+      case "var": return loop.get(v.name) ?? { kind: "any" };
       case "ref": {
         const cls = v.node && className(v.node);
         return cls && info(cls) ? { kind: "class", name: cls } : { kind: "any" };
@@ -125,6 +146,24 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     return undefined;
   }
 
+  /**
+   * Runs `fn` with the `each()` bindings in scope: the named one gets the item type, and `--index` and
+   * `--count` are numbers, exactly as in `repeat()`.
+   */
+  function elementBound<T>(v: Value & { kind: "each" }, fn: () => T): T {
+    const over = valueType(v.over);
+    const item: TypeRef = over.kind === "array" ? over.of : { kind: "number" };
+    const saved = [v.name, "index", "count"].map((name) => [name, loop.get(name)] as const);
+    loop.set(v.name, item);
+    loop.set("index", { kind: "number" });
+    loop.set("count", { kind: "number" });
+    try {
+      return fn();
+    } finally {
+      for (const [name, was] of saved) was === undefined ? loop.delete(name) : loop.set(name, was);
+    }
+  }
+
   /** the options bag `t` accepts, or undefined if `t` takes no record at all */
   function recordType(t: TypeRef): Extract<TypeRef, { kind: "record" }> | undefined {
     if (t.kind === "record") return t;
@@ -154,9 +193,29 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     if (missing.length) err(`${what} is missing ${missing.map(([name]) => name).join(", ")}`, v);
   }
 
-  function checkValue(v: Value, expect: { type: TypeRef; what: string }) {
+  function checkValue(v: Value, expect: { type: TypeRef; what: string }): void {
     const mismatch = () => err(`${expect.what} expects ${show(expect.type)}, got ${show(valueType(v))}`, v);
     if (v.kind === "object") return checkObject(v, expect);
+    if (v.kind === "calc" || v.kind === "fn") {
+      checkArith(v);
+      if (!assignable({ kind: "number" }, expect.type)) mismatch();
+      return;
+    }
+    if (v.kind === "read" || v.kind === "call" || v.kind === "index") {
+      checkChain(v);
+      if (!assignable(valueType(v), expect.type)) mismatch();
+      return;
+    }
+    if (v.kind === "each") {
+      const el = elementType(expect.type);
+      if (!el) return mismatch();
+      const over = valueType(v.over);
+      if (!assignable(over, { kind: "union", of: [{ kind: "number" }, { kind: "array", of: { kind: "any" } }] })) {
+        err(`each() counts to a number or walks an array, got ${show(over)}`, v.over);
+      }
+      checkValue(v.over, { type: { kind: "any" }, what: `each() over` });
+      return elementBound(v, () => checkValue(v.body, { type: el, what: `each() item` }));
+    }
     if (v.kind === "array") {
       const el = elementType(expect.type);
       if (!el) return mismatch();
@@ -183,6 +242,56 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     if (!assignable(valueType(v), expect.type)) mismatch();
   }
 
+  /** `calc(…)` and the functions in it: numbers all the way down, and the right number of arguments */
+  function checkArith(v: Value) {
+    if (v.kind === "calc") { checkArith(v.left); checkArith(v.right); return; }
+    if (v.kind === "fn") {
+      const knob = MATH[v.name]!;
+      if (v.args.length !== knob.arity) err(`${v.name}() takes ${knob.arity} argument(s), got ${v.args.length}`, v);
+      for (const a of v.args) checkArith(a);
+      return;
+    }
+    if (v.kind === "read" || v.kind === "call" || v.kind === "index") checkChain(v);
+    if (v.kind === "number" || v.kind === "hex") return;
+    if (!assignable(valueType(v), { kind: "number" })) err(`calc() works on numbers, got ${show(valueType(v))}`, v);
+  }
+
+  /** `var(--p).x`, `splineCurve(…).getPoints(120)`, `var(--points)[0]` — each link against the schema */
+  function checkChain(v: Value) {
+    if (v.kind === "index") {
+      checkChain(v.target);
+      const t = valueType(v.target);
+      if (t.kind !== "array" && t.kind !== "any") err(`${show(t)} is not a list, so it cannot be indexed`, v);
+      checkValue(v.at, { type: { kind: "number" }, what: "an index" });
+      return;
+    }
+    if (v.kind !== "read" && v.kind !== "call") return checkValue(v, { type: { kind: "any" }, what: "a value" });
+    checkChain(v.target);
+    const target = valueType(v.target);
+    if (target.kind !== "class") return; // `any` — a loop binding over a list the schema cannot type
+    const cls = concrete(target.name);
+    if (!info(cls)) return;
+    const method = info(cls)!.methods[v.name];
+    if (v.kind === "call") {
+      if (!method) {
+        const alt = suggest(v.name, Object.keys(info(cls)!.methods));
+        err(`${cls} has no method ${JSON.stringify(v.name)}` + (alt ? `; did you mean ${alt}?` : ""), v.namePos,
+          alt ? { start: v.namePos.start, end: v.namePos.end, text: alt } : undefined);
+        return;
+      }
+      checkOverloads(method, v.args, `${cls}.${v.name}()`, v);
+      return;
+    }
+    if (propOf(cls, v.name)) return;
+    if (method) {
+      err(`${cls}.${v.name} is a method — call it as .${v.name}(…)`, v.namePos);
+      return;
+    }
+    const alt = suggest(v.name, Object.keys(info(cls)!.props));
+    err(`${cls} has no property ${JSON.stringify(v.name)}` + (alt ? `; did you mean ${alt}?` : ""), v.namePos,
+      alt ? { start: v.namePos.start, end: v.namePos.end, text: alt } : undefined);
+  }
+
   /** positional arguments against a constructor or method signature */
   function checkArgs(params: { name: string; type: TypeRef; optional: boolean }[], args: Value[], what: string, at: Pos) {
     if (args.length > params.length) {
@@ -195,9 +304,9 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
   }
 
   /** an overloaded method (`lookAt(v)` / `lookAt(x, y, z)`) passes if any signature does; else the closest one reports */
-  function checkOverloads(signatures: Param[][], args: Value[], what: string, at: Pos) {
+  function checkOverloads(signatures: Method[], args: Value[], what: string, at: Pos) {
     let best: { distance: number; produced: Diagnostic[] } | undefined;
-    for (const params of signatures) {
+    for (const { params } of signatures) {
       const mark = out.length;
       checkArgs(params, args, what, at);
       const produced = out.splice(mark);

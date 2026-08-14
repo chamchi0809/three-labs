@@ -46,6 +46,9 @@ gltf #hero("/hero.glb") {
   }
   play("Idle") { timeScale: 0.5; }
 }
+mesh #ring {
+  geometry: loftGeometry(each(--p, splineCurve([vec2(1, 0)]).getPoints(8), vec3(calc(sin(var(--index)) * var(--p).x), 0, 0)));
+}
 `;
 
 // Tokenise every line, then look up the scope stack at the first offset of a given substring.
@@ -105,6 +108,10 @@ has("ref", "support.function.ref");
 has("#box", "entity.other.attribute-name.id", 13); // the ref target, not a hex colour
 for (const builtin of ["repeat", "find", "play"]) has(builtin, "support.function.builtin");
 has("#head", "entity.other.attribute-name.id", 18); // the alias find() binds
+has("each", "support.function.each");
+has("sin", "support.function.math");
+has("getPoints", "entity.name.function.member"); // a method of the value in front of the dot, not a template
+has("x", "variable.other.property"); // …and `.x` after `)` is a property read
 
 // every path the manifest contributes must exist, and extension.js must at least parse
 const manifest = require("./package.json");

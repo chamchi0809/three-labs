@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALIASES, BUILTINS, LOADERS } from "./names.ts";
+import { ALIASES, BUILTINS, LOADERS, MATH } from "./names.ts";
 import { checkSource, loadSchema } from "./tools.ts";
 import type { Loader } from "./parse.ts";
 
@@ -63,6 +63,13 @@ for (const doc of docs) {
 await check("the language reference covers every builtin, alias and loader", () => {
   const text = read("docs/language.md");
   const missing = [...Object.keys(BUILTINS), ...Object.keys(ALIASES), ...Object.keys(LOADERS)].filter((name) => !text.includes(`${name}(`));
+  assert.deepEqual(missing, [], `undocumented in docs/language.md: ${missing.join(", ")}`);
+});
+
+await check("the language reference covers every calc() function", () => {
+  const text = read("docs/language.md");
+  // `pi` takes no parens, so the table is what has to name it
+  const missing = Object.keys(MATH).filter((name) => !new RegExp(`\\b${name}\\b`).test(text));
   assert.deepEqual(missing, [], `undocumented in docs/language.md: ${missing.join(", ")}`);
 });
 

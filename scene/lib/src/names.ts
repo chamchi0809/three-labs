@@ -25,6 +25,70 @@ export const LOADERS: Record<string, { class: string; args: TypeRef[] }> = {
   gltf: { class: "Group", args: [{ kind: "string" }] },
 };
 
+/**
+ * What `calc()` can call. Numbers in, one number out — enough to write a parametric surface, and
+ * deliberately not enough to be a scripting language. `docs/language.md` is checked against this table,
+ * so a new function cannot be added without documenting it.
+ */
+export const MATH: Record<string, { arity: number; summary: string }> = {
+  pi: { arity: 0, summary: "3.141592653589793" },
+  abs: { arity: 1, summary: "absolute value" },
+  sign: { arity: 1, summary: "-1, 0 or 1" },
+  sqrt: { arity: 1, summary: "square root" },
+  exp: { arity: 1, summary: "e to the power of x" },
+  log: { arity: 1, summary: "natural logarithm" },
+  sin: { arity: 1, summary: "sine, in radians" },
+  cos: { arity: 1, summary: "cosine, in radians" },
+  tan: { arity: 1, summary: "tangent, in radians" },
+  asin: { arity: 1, summary: "arcsine, in radians" },
+  acos: { arity: 1, summary: "arccosine, in radians" },
+  atan: { arity: 1, summary: "arctangent, in radians" },
+  floor: { arity: 1, summary: "round down" },
+  ceil: { arity: 1, summary: "round up" },
+  round: { arity: 1, summary: "round to the nearest integer" },
+  atan2: { arity: 2, summary: "atan2(y, x) — the angle of a vector, in radians" },
+  pow: { arity: 2, summary: "pow(x, e) — x to the power of e" },
+  min: { arity: 2, summary: "the smaller of two numbers" },
+  max: { arity: 2, summary: "the larger of two numbers" },
+  mod: { arity: 2, summary: "mod(a, b) — the remainder, always with b's sign" },
+  clamp: { arity: 3, summary: "clamp(x, low, high)" },
+  smoothstep: { arity: 3, summary: "smoothstep(x, edge0, edge1) — 0 below edge0, 1 above edge1, an S curve between" },
+};
+
+/** The one implementation of {@link MATH}, shared by the constant folder and the runtime. */
+export const math = (name: string, args: number[]): number => {
+  const [a = 0, b = 0, c = 0] = args;
+  switch (name) {
+    case "pi": return Math.PI;
+    case "abs": return Math.abs(a);
+    case "sign": return Math.sign(a);
+    case "sqrt": return Math.sqrt(a);
+    case "exp": return Math.exp(a);
+    case "log": return Math.log(a);
+    case "sin": return Math.sin(a);
+    case "cos": return Math.cos(a);
+    case "tan": return Math.tan(a);
+    case "asin": return Math.asin(a);
+    case "acos": return Math.acos(a);
+    case "atan": return Math.atan(a);
+    case "floor": return Math.floor(a);
+    case "ceil": return Math.ceil(a);
+    case "round": return Math.round(a);
+    case "atan2": return Math.atan2(a, b);
+    case "pow": return Math.pow(a, b);
+    case "min": return Math.min(a, b);
+    case "max": return Math.max(a, b);
+    // JS `%` keeps the dividend's sign, which is never what a periodic pattern wants
+    case "mod": return ((a % b) + b) % b;
+    case "clamp": return Math.min(Math.max(a, b), c);
+    case "smoothstep": {
+      const t = Math.min(Math.max((a - b) / (c - b), 0), 1);
+      return t * t * (3 - 2 * t);
+    }
+    default: throw new Error(`unknown calc() function ${JSON.stringify(name)}`);
+  }
+};
+
 // ---------------------------------------------------------------- @bakery
 
 /** What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()` except the renderer. */

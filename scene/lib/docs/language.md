@@ -88,7 +88,7 @@ mesh #demo {
   geometry: boxGeometry(1, 1, 1);
   material: meshStandardMaterial {
     color: color(var(--tint));           /* var() — a variable */
-    opacity: calc(0.5 * 2 - 0.4);        /* calc() — + - * / and parens, folded to a number */
+    opacity: calc(0.5 * 2 - 0.4);        /* calc() — arithmetic, folded to a number */
     map: texture("./t.png");             /* loader */
     side: DoubleSide;                    /* a constant three exports */
     transparent: true;                   /* true / false / null */
@@ -98,6 +98,7 @@ mesh #demo {
   rotation: euler(45deg, 1rad, 0);       /* deg / rad suffixes */
   morphTargetInfluences: [0, 1];         /* array */
   userData: { hp: 3; tags: ["a"] };      /* record */
+  morphTargetInfluences: each(--i, 2, calc(var(--i) / 2));   /* each() — a list */
   visible: true;
 }
 directionalLight #sun {
@@ -158,6 +159,89 @@ mesh #a {
 Variables are lexically scoped: a declaration in a block shadows the outer one, and nothing is visible
 before its own declaration. The **top-level** variables of an `@import`ed sheet are visible from the
 import onwards.
+
+### `calc()`
+
+`+ - * /` with parentheses, folded to a number. It also has a fixed set of functions, and `pi`:
+
+| | |
+| --- | --- |
+| one argument | `abs` `sign` `sqrt` `exp` `log` `sin` `cos` `tan` `asin` `acos` `atan` `floor` `ceil` `round` |
+| two | `atan2(y, x)` `pow(x, e)` `min(a, b)` `max(a, b)` `mod(a, b)` |
+| three | `clamp(x, low, high)` `smoothstep(x, edge0, edge1)` |
+| none | `pi` |
+
+Angles are radians, `mod` takes the divisor's sign, and `smoothstep` is the S curve — three's
+`MathUtils.smoothstep`, not GLSL's argument order.
+
+```css
+mesh #a {
+  geometry: boxGeometry(1, 1, 1);
+  rotation.y: calc(pi / 4);
+  scale.x: calc(pow(2, 3) * smoothstep(0.5, 0, 1) - abs(0 - 1));
+}
+```
+
+Anything the folder cannot work out — an `each()` binding is not known until the loop runs — is left to
+the runtime. Everything else has to be a number where it stands.
+
+```css error: works on numbers
+mesh #b { renderOrder: calc(sin("x")); }
+```
+
+### Properties and methods of a value
+
+A `.name` after a value that is **already closed** reads a property; with arguments it calls a method and
+takes what comes back. `[…]` indexes a list. A `.name` *before* an argument list is a `@template` class,
+which is what keeps `meshStandardMaterial.glow { }` meaning what it always did.
+
+```css
+--profile: splineCurve([vec2(0.2, 0), vec2(1.2, 0.4), vec2(0.2, 1.7)]);
+--points: var(--profile).getPoints(40);
+
+mesh #pot {
+  geometry: boxGeometry(1, 1, 1);
+  scale.x: calc(var(--points)[0].x * 2);
+}
+```
+
+Both are checked against the same reflected typings as everything else — a misspelled method, a property
+that is not there, or indexing something that is not a list are all errors.
+
+```css error: has no method
+mesh #c { scale.x: splineCurve([vec2(0, 0)]).getPionts(4).length; }
+```
+
+### `each()`
+
+```
+each(--name, count | list, value)
+```
+
+A list: `value` evaluated once per index when the second argument is a number, and once per item when it
+is a list. `--name` is bound to the index or the item, and `--index` and `--count` come along as they do
+in [`repeat()`](#repeatn).
+
+Unlike `repeat()`, this is a loop and not an unrolling: the body is checked once and evaluated once per
+iteration, so a `loftGeometry()` of thirty thousand points costs thirty thousand evaluations and not
+thirty thousand lines of AST. A node inside the body that reads the binding is built fresh every time;
+one that does not is shared, exactly as it is anywhere else.
+
+```css
+--profile: splineCurve([vec2(0.2, 0), vec2(1.2, 0.4), vec2(0.7, 1.6), vec2(0.2, 1.7)]);
+
+mesh #pot {
+  /* one ring per profile point, 24 points around each — a lathe, written out */
+  geometry: loftGeometry(
+    each(--p, var(--profile).getPoints(40), each(--j, 24, vec3(
+      calc(sin(var(--j) / var(--count) * 2 * pi) * var(--p).x),
+      var(--p).y,
+      calc(cos(var(--j) / var(--count) * 2 * pi) * var(--p).x)
+    ))),
+    { capStart: true; capEnd: true }
+  );
+}
+```
 
 ### `ref()`
 
