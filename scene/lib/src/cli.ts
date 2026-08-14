@@ -25,6 +25,7 @@ if (flags.has("help")) {
   --fix            rewrite files (same as the fix command)
   --entry <mod>    three entry point to reflect (default three/webgpu)
   --module <mod>   extra module whose exports become usable nodes (repeatable)
+  --no-addons      do not reflect three/addons (on by default)
   --declare <name> node name the host registers at runtime, accepted unchecked (repeatable)
   --watch          re-check whenever a .tscene file changes
   --format <fmt>   text (default) or json
@@ -45,6 +46,8 @@ const patterns = globs.length ? globs : ["**/*.tscene"];
 const schema = loadSchema({
   entry: opt("entry"),
   modules: values["module"],
+  // undefined, not true: an explicit `addons` turns a three without the barrel into a hard error
+  ...(flags.has("no-addons") ? { addons: false } : {}),
   declare: values["declare"],
   cache: !flags.has("no-cache"),
 });

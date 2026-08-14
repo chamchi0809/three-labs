@@ -355,7 +355,9 @@ function moduleRegistry(root: SceneModule | undefined): Record<string, any> {
 const lookup = (name: string, ctx: Ctx) => ctx.registry[name] ?? ctx.registry[className(name)];
 
 // a sheet parsed from a string was never seen by the plugin, so nothing imported three on its behalf
-const HINT = ' — a sheet loaded from a string has no build-time registry: import { threeRegistry } from "tscene/three" and pass it as `registry`';
+const HINT =
+  ' — a sheet loaded from a string has no build-time registry: import { threeRegistry } from "tscene/three"' +
+  ' (and { addonRegistry } from "tscene/addons" for three/addons classes) and pass it as `registry`';
 
 // module-level: a reloaded scene reuses the bytes it already downloaded
 // ponytail: keyed by url only — two loadScene calls with different draco/ktx2 options share the first result

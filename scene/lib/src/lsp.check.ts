@@ -342,9 +342,37 @@ await check("@bakery completes its own keys, never three's names", async () => {
   await new Promise((r) => setTimeout(r, 200));
 });
 
+await check("an options bag completes and hovers the fields its slot declares", async () => {
+  // `loftGeometry` is a three/addons class, and its second argument is an interface, not a class.
+  // The comment on the first line holds an unclosed paren, which is what tells a value block open inside
+  // an argument list from a node body — it must not be read as part of the header.
+  const doc = `// an unclosed paren ( in a comment\nmesh #box {\n  geometry: loftGeometry([], {\n    \n  });\n  userData: {\n    \n  };\n  \n}\n`;
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 13 }, contentChanges: [{ text: doc }] } });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const options = labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 4 } }));
+  assert.deepEqual(options, ["closed", "capStart", "capEnd"]);
+  // userData is `any`: its keys are the user's own, so there is nothing to offer and nothing to check
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 6, character: 4 } })), []);
+  // …and the node's own body is still the node's body
+  assert.ok(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 8, character: 2 } })).includes("castShadow"));
+
+  const typed = doc.replace("[], {\n    \n  }", "[], {\n    capStart: \n  }");
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 14 }, contentChanges: [{ text: typed }] } });
+  await new Promise((r) => setTimeout(r, 200));
+  const values = { textDocument: { uri }, position: { line: 3, character: "    capStart: ".length } };
+  assert.deepEqual(labels(await request("textDocument/completion", values)), ["true", "false"]);
+
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: { line: 3, character: 6 } });
+  assert.match(hover.contents.value, /LoftGeometryOptions\.capStart\?: boolean/);
+
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 15 }, contentChanges: [{ text }] } });
+  await new Promise((r) => setTimeout(r, 200));
+});
+
 await check("@ completes at-rules, never three's names", async () => {
   const doc = `@\n\nmesh #box {\n  @\n  userData: {\n    \n  };\n}\n`;
-  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 13 }, contentChanges: [{ text: doc }] } });
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 16 }, contentChanges: [{ text: doc }] } });
   await new Promise((r) => setTimeout(r, 200));
 
   const sheet = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: 1 } });
@@ -354,7 +382,7 @@ await check("@ completes at-rules, never three's names", async () => {
   // a record literal takes any key, so it takes neither three's names nor an at-rule
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 5, character: 4 } })), []);
 
-  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 14 }, contentChanges: [{ text }] } });
+  send({ method: "textDocument/didChange", params: { textDocument: { uri, version: 17 }, contentChanges: [{ text }] } });
   await new Promise((r) => setTimeout(r, 200));
 });
 

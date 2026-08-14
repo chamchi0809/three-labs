@@ -26,7 +26,9 @@ first, then from the server process's cwd.
 | Key | Default | Description |
 | --- | --- | --- |
 | `tscene.entry` | `three/webgpu` | where the types come from |
-| `tscene.modules` | `[]` | extra modules to expose as nodes/values (e.g. `three/addons/objects/Water.js`) |
+| `tscene.addons` | `true` | reflect `three/addons` too, so every addon class is a usable node |
+| `tscene.modules` | `[]` | extra modules to expose as nodes/values (e.g. `./src/Water.ts`) |
+| `tscene.declare` | `[]` | node names the app injects through `loadScene`'s `registry` — accepted unchecked |
 | `tscene.nodePath` | (empty) | node binary to run the server with. Empty uses VS Code's own node through `ELECTRON_RUN_AS_NODE` |
 | `tscene.serverPath` | (empty) | path to the server entry, set explicitly |
 | `tscene.trace.server` | `off` | log LSP traffic |

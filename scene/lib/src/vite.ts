@@ -5,7 +5,7 @@ import { BUILTINS, className, LOADERS } from "./names.ts";
 import { checkSource, formatDiagnostic, loadSchema, resolveSheet } from "./tools.ts";
 import type { Schema, SchemaOptions } from "./schema.ts";
 
-export type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "cache" | "declare"> & { check?: boolean; hmr?: boolean };
+export type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "addons" | "cache" | "declare"> & { check?: boolean; hmr?: boolean };
 
 // vite ids are always forward-slash, and the sheet registry is keyed by id — a win32
 // backslash path from path.resolve() would never match the module that registered itself
@@ -53,16 +53,42 @@ function threeNames(statements: Statement[]): Set<string> {
   return out;
 }
 
-let exports: Promise<Set<string>> | undefined;
-/** three's real exports — the truth an emitted `import { X }` has to survive. */
-function threeExports(): Promise<Set<string>> {
-  return (exports ??= import("three/webgpu").then(
-    (m) => new Set(Object.keys(m).filter((name) => /^[A-Za-z_$][\w$]*$/.test(name))),
-    (e: Error) => {
-      console.warn(`tscene: cannot read three's exports (${e.message}) — sheets will need an explicit \`registry\``);
-      return new Set<string>();
-    },
-  ));
+const exports = new Map<string, Promise<Set<string>>>();
+/** a module's real exports — the truth an emitted `import { X }` has to survive. */
+function moduleExports(spec: string): Promise<Set<string>> {
+  let found = exports.get(spec);
+  if (!found) {
+    exports.set(spec, (found = import(/* @vite-ignore */ spec).then(
+      (m: object) => new Set(Object.keys(m).filter((name) => /^[A-Za-z_$][\w$]*$/.test(name))),
+      (e: Error) => {
+        console.warn(`tscene: cannot read the exports of ${spec} (${e.message}) — sheets will need an explicit \`registry\``);
+        return new Set<string>();
+      },
+    )));
+  }
+  return found;
+}
+
+/**
+ * Where each name the sheet mentions has to be imported from: the entry for three's own exports, and its
+ * own deep module for everything else — importing `three/addons` for one class would pin all 270 of them.
+ * The schema is what knows that mapping, so a sheet naming an addon needs it even with `check: false`.
+ */
+async function byModule(names: string[], entry: string, sources: () => Record<string, string>): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const known = await moduleExports(entry);
+  // asked for lazily: a sheet that only names three's own classes must not pay for reflecting the typings
+  const foreign = names.some((name) => !known.has(name)) ? sources() : {};
+  for (const name of [...names].sort()) {
+    // a module the user added wins over the entry, exactly as the reflection order does
+    const spec = foreign[name] ?? (known.has(name) ? entry : undefined);
+    if (spec === undefined) continue; // not three's — a registry class, or a typo the checker already has
+    // a `modules` entry written as a path is relative to the config, and the import would be relative to
+    // the sheet. Those keep the old deal: name them in `registry` and the runtime finds them.
+    if (spec.startsWith(".") || path.isAbsolute(spec)) continue;
+    (out.get(spec) ?? out.set(spec, []).get(spec)!).push(name);
+  }
+  return out;
 }
 
 const ABSOLUTE = /^(\w+:|\/|data:)/;
@@ -114,7 +140,20 @@ function assetUrls(statements: Statement[]): string[] {
 
 export default function threeScene(options: PluginOptions = {}) {
   let schema: Schema | undefined;
+  let failed = false;
   let serve = false;
+  /** the name → module map, reflected on demand: `check: false` still needs it to place an addon */
+  const sources = (): Record<string, string> => {
+    if (!schema && !failed) {
+      try {
+        schema = loadSchema(options);
+      } catch (e) {
+        failed = true;
+        console.warn(`tscene: cannot reflect three's typings (${(e as Error).message}) — a sheet naming an addon will need an explicit \`registry\``);
+      }
+    }
+    return schema?.sources ?? {};
+  };
   return {
     name: "tscene",
     configResolved(config: { command: string }) {
@@ -138,9 +177,9 @@ export default function threeScene(options: PluginOptions = {}) {
       const lines = [`import { __sceneRegister, __sceneChanged } from "tscene";`];
 
       // the sheet's slice of three, named so the bundler can keep exactly it
-      const known = await threeExports();
-      const registry = [...threeNames(sheet.statements)].filter((name) => known.has(name)).sort();
-      if (registry.length) lines.push(`import { ${registry.join(", ")} } from "three/webgpu";`);
+      const modules = await byModule([...threeNames(sheet.statements)], options.entry ?? "three/webgpu", sources);
+      const registry = [...modules.values()].flat();
+      for (const [spec, names] of modules) lines.push(`import { ${names.join(", ")} } from ${JSON.stringify(spec)};`);
 
       const imports: Record<string, string> = {};
       for (const s of sheet.statements) {

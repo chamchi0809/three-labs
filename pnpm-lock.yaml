@@ -85,6 +85,12 @@ importers:
         specifier: ^0.1.3
         version: 0.1.3
 
+  scene/loft-demo:
+    dependencies:
+      tscene:
+        specifier: workspace:*
+        version: link:../lib
+
   scene/vscode:
     dependencies:
       vscode-languageclient:

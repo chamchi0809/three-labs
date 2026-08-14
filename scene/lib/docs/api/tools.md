@@ -36,6 +36,24 @@ type ClassInfo = {
 
 ***
 
+### Field
+
+```ts
+type Field = {
+  optional: boolean;
+  type: TypeRef;
+};
+```
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="optional"></a> `optional` | `boolean` |
+| <a id="type"></a> `type` | [`TypeRef`](#typeref) |
+
+***
+
 ### Param
 
 ```ts
@@ -51,8 +69,8 @@ type Param = {
 | Property | Type |
 | ------ | ------ |
 | <a id="name"></a> `name` | `string` |
-| <a id="optional"></a> `optional` | `boolean` |
-| <a id="type"></a> `type` | [`TypeRef`](#typeref) |
+| <a id="optional-1"></a> `optional` | `boolean` |
+| <a id="type-1"></a> `type` | [`TypeRef`](#typeref) |
 
 ***
 
@@ -72,7 +90,7 @@ type PropInfo = {
 | ------ | ------ |
 | <a id="doc-1"></a> `doc?` | `string` |
 | <a id="readonly"></a> `readonly` | `boolean` |
-| <a id="type-1"></a> `type` | [`TypeRef`](#typeref) |
+| <a id="type-2"></a> `type` | [`TypeRef`](#typeref) |
 
 ***
 
@@ -85,6 +103,7 @@ type Schema = {
   declared?: string[];
   entry: string;
   modules: string[];
+  sources: Record<string, string>;
   version: string;
 };
 ```
@@ -98,6 +117,7 @@ type Schema = {
 | <a id="declared"></a> `declared?` | `string`[] | - |
 | <a id="entry"></a> `entry` | `string` | - |
 | <a id="modules"></a> `modules` | `string`[] | - |
+| <a id="sources"></a> `sources` | `Record`\<`string`, `string`\> | name → the module to import it from, for everything that does *not* come from `entry`. An addon is keyed to its own deep path (`three/addons/geometries/LoftGeometry.js`) rather than to the barrel, so the vite plugin can emit an import a bundler keeps one class of. |
 | <a id="version"></a> `version` | `string` | - |
 
 ***
@@ -106,6 +126,7 @@ type Schema = {
 
 ```ts
 type SchemaOptions = {
+  addons?: boolean;
   cache?: boolean;
   cwd?: string;
   declare?: string[];
@@ -120,11 +141,12 @@ type SchemaOptions = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="addons"></a> `addons?` | `boolean` | Reflect `three/addons` too, so every addon class (`loftGeometry`, `roomEnvironment`, …) is a node. On by default; a three too old to have the barrel is skipped silently unless this is explicitly true. |
 | <a id="cache"></a> `cache?` | `boolean` | - |
 | <a id="cwd"></a> `cwd?` | `string` | - |
 | <a id="declare"></a> `declare?` | `string`[] | node names the host passes to loadScene's `registry` — accepted by the checker, unchecked |
 | <a id="entry-1"></a> `entry?` | `string` | - |
-| <a id="modules-1"></a> `modules?` | `string`[] | - |
+| <a id="modules-1"></a> `modules?` | `string`[] | Extra modules, resolved from `cwd`. A bare specifier is also what the vite plugin will import the class from; one written as a path is left to the runtime `registry`, since the emitted import would be relative to the sheet and not to here. |
 
 ***
 
@@ -149,12 +171,96 @@ type TypeRef =
   of: TypeRef;
 }
   | {
+  fields: Record<string, Field>;
+  kind: "record";
+  name?: string;
+}
+  | {
   kind: "union";
   of: TypeRef[];
 };
 ```
 
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  kind: "number" | "string" | "boolean" | "any" | "null";
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  kind: "enum";
+  members: string[];
+  name: string;
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  kind: "class";
+  name: string;
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  kind: "array";
+  of: TypeRef;
+}
+```
+
+***
+
+##### Type Literal
+
+```ts
+{
+  fields: Record<string, Field>;
+  kind: "record";
+  name?: string;
+}
+```
+
+an options bag — an interface or type literal of plain data, written as `{ capStart: true }`
+
+***
+
+##### Type Literal
+
+```ts
+{
+  kind: "union";
+  of: TypeRef[];
+}
+```
+
 ## Variables
+
+### ADDONS
+
+```ts
+const ADDONS: "three/addons" = "three/addons";
+```
+
+the barrel three re-exports every addon from — reflected on its own so `addons` needs no path
+
+***
 
 ### fsLoader
 

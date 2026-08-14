@@ -55,7 +55,12 @@ async function start(context) {
   client = new LanguageClient("tscene", "tscene", { run, debug }, {
     documentSelector: [{ scheme: "file", language: "scene" }],
     synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher("**/*.tscene") },
-    initializationOptions: { entry: config.get("entry"), modules: config.get("modules"), declare: config.get("declare") },
+    initializationOptions: {
+      entry: config.get("entry"),
+      modules: config.get("modules"),
+      addons: config.get("addons"),
+      declare: config.get("declare"),
+    },
     outputChannelName: "tscene",
   });
   context.subscriptions.push(client);

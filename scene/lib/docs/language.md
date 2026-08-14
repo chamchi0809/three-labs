@@ -36,7 +36,7 @@ name .class* #id? (constructor args) { body }
 
 | Part | Meaning |
 | --- | --- |
-| name | the three class name with a lowercase first letter (`mesh`, `meshStandardMaterial`, `pointLight`) |
+| name | the three class name with a lowercase first letter (`mesh`, `meshStandardMaterial`, `pointLight`). `three/addons` counts as three: `loftGeometry`, `roomEnvironment`, `roundedBoxGeometry` |
 | `.class` | lays down the body of the `@template` with that name first. Repeatable |
 | `#id` | `object.name = "id"`. Referenced with `ref(#id)` |
 | `(args)` | constructor arguments, positional only; an overload passes if any signature matches |
@@ -97,13 +97,41 @@ mesh #demo {
   renderOrder: 2;                        /* number */
   rotation: euler(45deg, 1rad, 0);       /* deg / rad suffixes */
   morphTargetInfluences: [0, 1];         /* array */
-  userData: { hp: 3; tags: ["a"] };      /* record — only where the type is any */
+  userData: { hp: 3; tags: ["a"] };      /* record */
   visible: true;
 }
 directionalLight #sun {
   target: ref(#demo);                    /* reference to another node */
 }
 ```
+
+### Records
+
+`{ key: value; … }` goes wherever the declared type is an options bag — an interface or a type literal of
+plain data — and wherever it is `any`. An options bag is checked key by key, the way a node body is; an
+`any` slot such as `userData` takes whatever you put in it.
+
+```css
+mesh #shape {
+  /* LoftGeometry's second argument is LoftGeometryOptions: three booleans, all optional */
+  geometry: loftGeometry([], { capStart: true; capEnd: true });
+  userData: { hp: 3 };
+}
+```
+
+```css error: has no setting
+mesh #typo { geometry: loftGeometry([], { capStrat: true }); }
+```
+
+Semicolons and commas both separate entries. An interface with methods on it is a live object, not
+settings, so it stays a class the sheet can only build with a constructor call.
+
+### three/addons
+
+The `three/addons` barrel is reflected alongside the entry point, so every addon class is a node or a
+value like any other — `loftGeometry`, `roundedBoxGeometry`, `roomEnvironment`, `textGeometry`. The vite
+plugin imports each one from the module it is declared in, not from the barrel, so a sheet that names one
+addon bundles one addon. `tscene check --no-addons` turns the reflection off.
 
 ### Constructor aliases
 

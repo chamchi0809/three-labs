@@ -11,7 +11,7 @@
 ### PluginOptions
 
 ```ts
-type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "cache" | "declare"> & {
+type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "addons" | "cache" | "declare"> & {
   check?: boolean;
   hmr?: boolean;
 };

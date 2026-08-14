@@ -58,7 +58,7 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
         return cls && info(cls) ? { kind: "class", name: cls } : { kind: "any" };
       }
       case "calc": return { kind: "number" };
-      // ponytail: a record only ever lands in an `any` slot (userData), so it needs no type of its own
+      // a record's keys are checked against the slot's own fields, so it never needs a type of its own
       case "record": return { kind: "any" };
       case "array": {
         const of: TypeRef[] = [];
@@ -94,11 +94,14 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     if (to.kind === "array") return from.kind === "array" && assignable(from.of, to.of);
     if (from.kind === "array") return false;
     if (to.kind === "class") return from.kind === "class" && isA(from.name, to.name);
+    if (to.kind === "record" || from.kind === "record") return from.kind === to.kind;
     return from.kind === to.kind;
   }
 
   const show = (t: TypeRef): string =>
-    t.kind === "class" || t.kind === "enum" ? t.name : t.kind === "union" ? t.of.map(show).join(" | ") : t.kind === "array" ? `${show(t.of)}[]` : t.kind;
+    t.kind === "class" || t.kind === "enum" ? t.name
+      : t.kind === "record" ? (t.name ?? `{ ${Object.keys(t.fields).join(", ")} }`)
+        : t.kind === "union" ? t.of.map(show).join(" | ") : t.kind === "array" ? `${show(t.of)}[]` : t.kind;
 
   /** closest candidate by edit distance, case-insensitively — `positon` finds `position` */
   function suggest(name: string, candidates: string[]): string | undefined {
@@ -122,6 +125,35 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     return undefined;
   }
 
+  /** the options bag `t` accepts, or undefined if `t` takes no record at all */
+  function recordType(t: TypeRef): Extract<TypeRef, { kind: "record" }> | undefined {
+    if (t.kind === "record") return t;
+    if (t.kind === "union") for (const part of t.of) { const r = recordType(part); if (r) return r; }
+    return undefined;
+  }
+
+  /** `{ capStart: true }` against the fields the slot declares — keys, their types, and what is missing */
+  function checkRecord(v: Value & { kind: "record" }, shape: Extract<TypeRef, { kind: "record" }>, slot: string) {
+    const table = shape.fields;
+    // a named bag reads better as itself than as the slot it sits in: `LoftGeometryOptions.capStart`
+    const what = shape.name ?? slot;
+    for (const e of v.entries) {
+      const field = table[e.name];
+      if (!field) {
+        const alt = suggest(e.name, Object.keys(table));
+        err(
+          `${show(shape)} has no setting ${JSON.stringify(e.name)}` + (alt ? `; did you mean ${alt}?` : ""),
+          e.namePos,
+          alt ? { start: e.namePos.start, end: e.namePos.end, text: alt } : undefined,
+        );
+        continue;
+      }
+      checkValue(e.value, { type: field.type, what: `${what}.${e.name}` });
+    }
+    const missing = Object.entries(table).filter(([name, f]) => !f.optional && !v.entries.some((e) => e.name === name));
+    if (missing.length) err(`${what} is missing ${missing.map(([name]) => name).join(", ")}`, v);
+  }
+
   function checkValue(v: Value, expect: { type: TypeRef; what: string }) {
     const mismatch = () => err(`${expect.what} expects ${show(expect.type)}, got ${show(valueType(v))}`, v);
     if (v.kind === "object") return checkObject(v, expect);
@@ -132,6 +164,8 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       return;
     }
     if (v.kind === "record") {
+      const shape = recordType(expect.type);
+      if (shape) return checkRecord(v, shape, expect.what);
       if (expect.type.kind !== "any") return mismatch();
       for (const e of v.entries) checkValue(e.value, { type: { kind: "any" }, what: `${expect.what}.${e.name}` });
       return;

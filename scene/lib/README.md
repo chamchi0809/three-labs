@@ -42,8 +42,8 @@ group #stage {
 | `name(...)` | constructor arguments (positional) |
 | `{ ... }` | **instance properties only**. Constructor-only settings like `BoxGeometry.widthSegments` go in `boxGeometry(1,1,1,2,2,2)` |
 | property names | three's own camelCase (`castShadow`), plus dotted paths (`material.opacity`) and method calls (`lookAt(0,1,0);`) |
-| node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) |
-| values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ hp: 3 }` |
+| node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) — `three/addons` included (`loftGeometry`, `roomEnvironment`) |
+| values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ capStart: true }` |
 | language functions | `var(--x, fallback)` `calc(...)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
 | `@bakery { ... }` | settings for a tool rather than for three — the [lightmap baker](./docs/bakery.md)'s, on the sheet, a node or a material |
 
@@ -93,6 +93,29 @@ with the handle on `root.userData.lightmap`; `{ lightmap: false }` skips that.
 
 Runtime errors carry their location: `main.tscene:12:5: ...`.
 
+### three/addons
+
+`three/addons` is reflected alongside the entry point, so an addon is a node like any other:
+
+```css
+mesh #crate {
+  geometry: roundedBoxGeometry(1, 1, 1, 4, 0.08);
+  material: meshStandardMaterial { roughness: 0.5; };
+}
+mesh #shell {
+  /* an options bag, checked field by field against the interface the addon declares */
+  geometry: loftGeometry([], { capStart: true; capEnd: true });
+}
+```
+
+The barrel re-exports 270 modules, so importing it for one class would pin all of them. The schema
+records which file every name is *declared* in instead, and the vite plugin emits that:
+`import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js"`. A sheet that names
+one addon bundles one addon.
+
+Turn it off with `threeScene({ addons: false })`, `tscene check --no-addons`, or `"tscene.addons": false`
+in VS Code.
+
 ### Bundle size
 
 The runtime never reaches into three by name. The vite plugin reads the classes a sheet mentions and
@@ -105,23 +128,36 @@ was never seen by the plugin, so it needs three handed to it:
 
 ```ts
 import { loadSceneFromURL } from "tscene";
-import { threeRegistry } from "tscene/three";   // this one does pull in all of three
+import { threeRegistry } from "tscene/three";     // this one does pull in all of three
+import { addonRegistry } from "tscene/addons";    // …and this one all of three/addons
 
-const root = await loadSceneFromURL("/scenes/room.tscene", { registry: threeRegistry });
+const root = await loadSceneFromURL("/scenes/loft.tscene", { registry: { ...threeRegistry, ...addonRegistry } });
 ```
 
+`tscene/addons` is the barrel, with everything that implies: ~2 MB of addons, and the two loaders that
+`import` from jsdelivr come along as external URLs (which also means node's own loader refuses it — in
+Node, hand over the classes you need instead). Reach for it when a sheet is only known at runtime;
+otherwise let the plugin do it.
+
 Same for `registry: { water: Water }` — a class the plugin cannot know about is still passed by hand,
-and is looked up before the sheet's own imports.
+and is looked up before the sheet's own imports. That is also how a value three has no class for gets in:
+a TSL node material, a table of `Vector3`s, or a `Group` subclass that builds its own subtree, with the
+names listed in `declare` so the checker takes them on faith.
 
 ## Type checking
 
-The schema is reflected out of the installed `three/webgpu` `.d.ts` with the TypeScript Compiler API:
-classes, constructor signatures, property types. Upgrading three upgrades the schema (cached under
-`node_modules/.cache/tscene`, keyed by version).
+The schema is reflected out of the installed `three/webgpu` and `three/addons` `.d.ts` with the TypeScript
+Compiler API: classes, constructor signatures, property types. Upgrading three upgrades the schema (cached
+under `node_modules/.cache/tscene`, keyed by version).
 
 Constant unions such as `type Side = typeof FrontSide | ...` keep their names, so `side: NormalBlending`
 is an error (a raw `side: 2` passes, because three accepts it). Completion offers only the members of
 that union.
+
+Interfaces of plain data are reflected as records, so an options bag is checked key by key —
+`loftGeometry([], { capStrat: true })` names a setting `LoftGeometryOptions` does not have, and a required
+field left out is an error. An interface with methods on it is a live object, not settings, and stays an
+opaque class.
 
 ```sh
 tscene check scenes/          # a directory, a glob or a file
@@ -129,7 +165,8 @@ tscene fix   scenes/          # casing + formatting
 tscene check --entry three    # when only core three is used
 tscene check --watch          # re-check on every change
 tscene check --format json    # for editors and CI
-tscene check --module three/addons/objects/Water.js   # expose that module's exports as nodes (repeatable)
+tscene check --no-addons      # do not reflect three/addons (on by default)
+tscene check --module my-water   # expose that module's exports as nodes too (repeatable)
 tscene check --declare water     # a node injected through the runtime registry — passes on name alone (repeatable)
 ```
 
@@ -141,8 +178,8 @@ Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 | Feature | Details |
 | --- | --- |
 | diagnostics | refreshed while typing, no save needed, following `@import`s |
-| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths and the node_modules packages that ship sheets inside `@import "`, the at-rules legal at the cursor after `@`, and the settings of the position inside `@bakery {` (its keys, then that key's values) |
-| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys |
+| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths and the node_modules packages that ship sheets inside `@import "`, the at-rules legal at the cursor after `@`, the settings of the position inside `@bakery {`, and the fields of the options bag inside a `{ }` whose slot has a type (each of the last two: its keys, then that key's values) |
+| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys; options-bag fields |
 | signature help | highlights the current argument inside `boxGeometry(` |
 | go to definition | templates (`.glow`), variables (`var(--x)`), `#id` (`ref(#a)`), `@import` paths (also ctrl-clickable as document links) |
 | find references / rename | `--var`, `#id`, `.template` — across every `.tscene` in the workspace, multi-root included. Rename validates the cursor position and the new name first (prepareRename). It follows the declaration↔use pairs `expand()` actually resolved, so a shadowed variable of the same name is left alone and a `var()` passed in as a template parameter is renamed along with it |
@@ -171,7 +208,7 @@ export default defineConfig({ plugins: [threeScene()] });
 One sheet is one module (`SceneModule`). An `@import` becomes an import of that module, and the relative
 paths a `texture()`/`gltf()` can be handed — a literal or a `var(--x)` this sheet declares — become `?url` imports, so the bundler handles hashing and copying. Every
 build and hot update runs the checker; failures show up in the overlay. Options:
-`{ entry, modules, declare, check, hmr }`.
+`{ entry, modules, addons, declare, check, hmr }`.
 
 Saving rebuilds the scene and nothing else. `mountScene` already listens; `onSceneChange` is the raw
 signal behind it (passing the module object you imported is fine, the current source is looked up for

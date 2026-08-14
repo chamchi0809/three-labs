@@ -103,7 +103,12 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra modules whose exported classes become usable nodes and values (e.g. three/addons/objects/Water.js)."
+          "description": "Extra modules whose exported classes become usable nodes and values (e.g. ./src/Water.ts)."
+        },
+        "tscene.addons": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reflect three/addons too, so every addon class (loftGeometry, roomEnvironment, …) is a usable node."
         },
         "tscene.declare": {
           "type": "array",

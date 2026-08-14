@@ -20,20 +20,24 @@ let schema: Schema;
 let folders: string[] = [];
 
 connection.onInitialize((params) => {
-  const options = (params.initializationOptions ?? {}) as { entry?: string; modules?: string[]; declare?: string[] };
+  const options = (params.initializationOptions ?? {}) as { entry?: string; modules?: string[]; addons?: boolean; declare?: string[] };
   folders = params.workspaceFolders?.map((f) => fileURLToPath(f.uri)) ?? (params.rootPath ? [params.rootPath] : []);
   // three may be installed at any folder root or above it (monorepo, global node_modules)
   const roots = [...folders, process.cwd()];
   for (const cwd of roots) {
     try {
-      schema = loadSchema({ cwd, entry: options.entry, modules: options.modules, declare: options.declare });
+      // `addons: false` only when the client says so — undefined lets a three without the barrel pass
+      schema = loadSchema({
+        cwd, entry: options.entry, modules: options.modules, declare: options.declare,
+        ...(options.addons === false ? { addons: false as const } : {}),
+      });
       break;
     } catch (e) {
       if (cwd === roots.at(-1)) {
         connection.window.showErrorMessage(`tscene: ${(e as Error).message}`);
         schema = {
           entry: options.entry ?? "three/webgpu", modules: options.modules ?? [], version: "0",
-          classes: {}, constants: {}, declared: options.declare,
+          classes: {}, constants: {}, sources: {}, declared: options.declare,
         };
       }
     }
@@ -87,7 +91,9 @@ function importTarget(spec: string, from: string): string | undefined {
 
 const range = (doc: TextDocument, pos: Pos) => ({ start: doc.positionAt(pos.start), end: doc.positionAt(pos.end) });
 const show = (t: TypeRef): string =>
-  t.kind === "class" || t.kind === "enum" ? t.name : t.kind === "union" ? t.of.map(show).join(" | ") : t.kind === "array" ? `${show(t.of)}[]` : t.kind;
+  t.kind === "class" || t.kind === "enum" ? t.name
+    : t.kind === "record" ? (t.name ?? `{ ${Object.keys(t.fields).join(", ")} }`)
+      : t.kind === "union" ? t.of.map(show).join(" | ") : t.kind === "array" ? `${show(t.of)}[]` : t.kind;
 const signature = (name: string, info: ClassInfo) =>
   `${name}(${info.ctor.map((p) => `${p.name}${p.optional ? "?" : ""}: ${show(p.type)}`).join(", ")})`;
 
@@ -175,13 +181,17 @@ function enclosingBlock(text: string, offset: number): { name: string | undefine
   for (let i = offset - 1; i >= 0; i--) {
     if (text[i] === "}") depth++;
     else if (text[i] === "{" && depth-- === 0) {
-      const header = text.slice(0, i).split(/[;{}]/).pop()!;
+      // comments are not part of the header, and they may hold anything the rules below look for
+      const header = text.slice(0, i).split(/[;{}]/).pop()!.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
       const template = /@template\s+([a-zA-Z_]\w*)?\s*\./.exec(header);
       if (template) return { name: template[1] ?? "object3D", brace: i };
       const at = /@([a-zA-Z_]\w*)\s*$/.exec(header);
       if (at) return { name: `@${at[1]}`, brace: i };
-      if (/:\s*$/.test(header)) return { name: ":record", brace: i }; // `userData: { … }` — the keys are the user's own
-      return { name: /([a-zA-Z_]\w*)\s*$/.exec(header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, ""))?.[1], brace: i };
+      if (/:\s*$/.test(header)) return { name: ":record", brace: i }; // `userData: { … }` — a record literal
+      const outside = header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, "");
+      // a `(` the strip above could not close is an argument list still open: `loftGeometry(sections, { …`
+      if (outside.includes("(")) return { name: ":record", brace: i };
+      return { name: /([a-zA-Z_]\w*)\s*$/.exec(outside)?.[1], brace: i };
     }
   }
   return undefined;
@@ -234,7 +244,8 @@ connection.onCompletion((params) => {
   const block = enclosingBlock(text, offset);
   // `@bakery { … }` is not three's namespace: its keys are a fixed table, and no three name belongs in it
   if (block?.name === "@bakery") return bakeryCompletions(bakeryPosition(text, block.brace), head);
-  if (block?.name === ":record") return []; // nothing to offer inside a record literal — any key goes
+  // an options bag: its keys are the fields the slot declares. A record in an `any` slot (userData) has none
+  if (block?.name === ":record") return recordCompletions(recordAt(text, block.brace), head);
 
   const owner = block?.name;
   const cls = owner ? schema.classes[className(owner)] : undefined;
@@ -415,6 +426,40 @@ function bakeryCompletions(position: keyof typeof BAKERY, head: string) {
   }));
 }
 
+/** the options bag a `{` at `brace` is filling in — the property it is assigned to, or the argument it sits in */
+function recordAt(text: string, brace: number): Extract<TypeRef, { kind: "record" }> | undefined {
+  const head = text.slice(0, brace);
+  const assigned = /([A-Za-z_]\w*)\s*:\s*$/.exec(head);
+  if (assigned) {
+    const owner = enclosingBlock(text, brace)?.name;
+    const cls = owner ? schema.classes[className(owner)] : undefined;
+    return recordType(cls?.props[assigned[1]!]?.type);
+  }
+  const call = activeCall(head);
+  return recordType(call?.info.ctor[call.activeParameter]?.type);
+}
+
+const recordType = (t: TypeRef | undefined): Extract<TypeRef, { kind: "record" }> | undefined => {
+  if (t?.kind === "record") return t;
+  if (t?.kind === "union") for (const part of t.of) { const r = recordType(part); if (r) return r; }
+  return undefined;
+};
+
+/** the fields of one options bag, or — right after `key:` — the values that field accepts */
+function recordCompletions(shape: Extract<TypeRef, { kind: "record" }> | undefined, head: string) {
+  if (!shape) return [];
+  const key = /([A-Za-z_]\w*)\s*:\s*[\w-]*$/.exec(head)?.[1];
+  const field = key ? shape.fields[key] : undefined;
+  if (field) return valueCompletions(field.type);
+  if (key) return [];
+  return Object.entries(shape.fields).map(([name, f]) => ({
+    label: name,
+    kind: CompletionItemKind.Property,
+    detail: show(f.type) + (f.optional ? " (optional)" : ""),
+    insertText: `${name}: `,
+  }));
+}
+
 const objectCompletions = () => [
   ...Object.entries(BUILTINS).map(([name, b]) => ({ label: name, kind: CompletionItemKind.Keyword, detail: b.signature })),
   ...Object.entries(schema.classes)
@@ -500,6 +545,15 @@ connection.onHover(async (params) => {
     const position = bakeryPosition(text, bakery.brace);
     const knob = BAKERY[position][word];
     return knob ? { contents: md("```scene", `@bakery ${word}: ${knobType(knob)}`, "```", `${position} setting`), range: here } : null;
+  }
+  // an options-bag key — `loftGeometry(sections, { capStart: true })`. A record in an `any` slot has no fields
+  if (word && bakery?.name === ":record") {
+    const shape = recordAt(text, bakery.brace);
+    const field = shape?.fields[word];
+    if (field) {
+      const owner = shape!.name ? `${shape!.name}.` : "";
+      return { contents: md("```ts", `${owner}${word}${field.optional ? "?" : ""}: ${show(field.type)}`, "```"), range: here };
+    }
   }
 
   const sheet = tryParse(doc);

@@ -1,0 +1,170 @@
+/*
+ * three's `webgpu_geometry_loft` example, as a sheet.
+ *
+ * Every surface here is a `loftGeometry()` — LoftGeometry from `three/addons/geometries/LoftGeometry.js`,
+ * named the way any other three class is named. The vite plugin traces it back to that module and imports
+ * it by name, so the bundle carries one addon and not the barrel.
+ *
+ * What a sheet cannot say, it asks the registry for (`src/registry.ts`, declared in `declared.ts`):
+ *   - the cross sections each loft is skinned through — thousands of vertices of trigonometry
+ *   - the TSL node materials, which are shader graphs
+ *   - `barrier()`, a ring of fourteen posts placed by sine and cosine
+ * Everything else — the graph, the sizes, the placements, the caps, the shadows — is here.
+ */
+
+/* the exhibition casts and receives; the two flat discs opt back out below */
+@template mesh.exhibit {
+  castShadow: true;
+  receiveShadow: true;
+}
+
+/* a plinth: one profile at three sizes, turned so the marbling differs from pedestal to pedestal */
+@template mesh.pedestal {
+  geometry: loftGeometry(var(--sections), { capStart: true, capEnd: true });
+  material: marbleMaterial;
+  position: vec3(var(--x), -5, var(--z));
+  rotation.y: calc(var(--x) * 0.7 + var(--z) * 1.3);
+}
+
+directionalLight #sun(#ffffff, 3) {
+  position: vec3(18, 30, 12);
+  castShadow: true;
+  shadow.mapSize: vec2(4096, 4096);
+  shadow.bias: -0.0005;
+  /* the whole exhibition has to fit in one orthographic shadow frustum */
+  shadow.camera.left: -60;
+  shadow.camera.right: 60;
+  shadow.camera.top: 60;
+  shadow.camera.bottom: -60;
+  shadow.camera.far: 110;
+}
+
+/* everything stands on a rotating floor — main.ts spins this group and nothing else */
+group #turntable {
+  mesh #floor {
+    /* not a loft: a disc laid flat, running under the curtain so its edge is never seen */
+    geometry: circleGeometry(58, 64) { rotateX(-90deg); };
+    material: floorMaterial;
+    position: vec3(0, -5.01, 0);
+    receiveShadow: true;
+  }
+
+  /* pleated rings hanging from above: 31 sections of 480 points, closed and uncapped */
+  mesh.exhibit #curtain {
+    geometry: loftGeometry(curtainSections);
+    material: curtainMaterial;
+  }
+
+  mesh.exhibit.pedestal #coffeePlinth { --x: 0; --z: 0; --sections: pedestalLargeSections; }
+  mesh.exhibit.pedestal #vasePlinth { --x: -10.5; --z: -10.5; --sections: pedestalMediumSections; }
+  mesh.exhibit.pedestal #shellPlinth { --x: 10.5; --z: -10.5; --sections: pedestalMediumSections; }
+  mesh.exhibit.pedestal #starPlinth { --x: -10.5; --z: 10.5; --sections: pedestalMediumSections; }
+  mesh.exhibit.pedestal #ribbonPlinth { --x: 10.5; --z: 10.5; --sections: pedestalMediumSections; }
+  mesh.exhibit.pedestal #tubePlinth { --x: 7.8; --z: 0; --sections: pedestalSmallSections; }
+  mesh.exhibit.pedestal #pumpkinPlinth { --x: 0; --z: 7.8; --sections: pedestalSmallSections; }
+  mesh.exhibit.pedestal #mushroomPlinth { --x: -7.8; --z: 0; --sections: pedestalSmallSections; }
+  mesh.exhibit.pedestal #gobletPlinth { --x: 0; --z: -7.8; --sections: pedestalSmallSections; }
+
+  /*
+   * A coffee set. The cup is lofted from the bottom center, up one side of the wall and back down the
+   * inside, and the handle is swept along a spline — one surface each, no boolean anything.
+   */
+  group #coffee {
+    position: vec3(0, -2.8, 0);
+    scale: vec3(0.75, 0.75, 0.75);
+    mesh.exhibit #saucer {
+      geometry: loftGeometry(saucerSections, { capStart: true, capEnd: true });
+      material: porcelainMaterial;
+    }
+    mesh.exhibit #cup {
+      geometry: loftGeometry(cupSections, { capStart: true, capEnd: true });
+      material: porcelainMaterial;
+      position: vec3(0, 0.3, 0);
+    }
+    mesh.exhibit #handle {
+      geometry: loftGeometry(handleSections);
+      material: porcelainMaterial;
+      position: vec3(0, 0.3, 0);
+      rotation.y: 0.15rad;
+    }
+    mesh #liquid {
+      geometry: circleGeometry(2, 48) { rotateX(-90deg); };
+      material: liquidMaterial;
+      position: vec3(0, 3.6, 0);
+      receiveShadow: true;
+    }
+  }
+
+  /* circular sections with a varying radius */
+  mesh.exhibit #vase {
+    geometry: loftGeometry(vaseSections, { capStart: true });
+    material: vaseMaterial;
+    position: vec3(-10.5, -3.9, -10.5);
+  }
+
+  /* circular sections that grow while sweeping along a logarithmic spiral */
+  mesh.exhibit #shell {
+    geometry: loftGeometry(shellSections);
+    material: shellMaterial;
+    position: vec3(10.5, -1.98, -10.5);
+    rotation.y: -90deg;
+    scale: vec3(0.8, 0.8, 0.8);
+  }
+
+  /* non-circular sections that rotate and scale along the loft */
+  mesh.exhibit #star {
+    geometry: loftGeometry(starSections, { capStart: true, capEnd: true });
+    material: starMaterial;
+    position: vec3(-10.5, -3.9, 10.5);
+    scale: vec3(0.8, 0.8, 0.8);
+  }
+
+  /* open two-point sections — what `closed: false` is for */
+  mesh.exhibit #ribbon {
+    geometry: loftGeometry(ribbonSections, { closed: false });
+    material: ribbonMaterial;
+    position: vec3(10.5, -3.9, 10.5);
+  }
+
+  /* circular sections that morph into a flat crimped seam */
+  mesh.exhibit #toothpaste {
+    geometry: loftGeometry(toothpasteSections, { capStart: true, capEnd: true });
+    material: toothpasteMaterial;
+    position: vec3(7.8, -3.4, 0);
+    rotation.y: 0.5rad;
+  }
+
+  /* lobed sections around a squashed profile, and a stalk out of the hollow at the top */
+  mesh.exhibit #pumpkin {
+    geometry: loftGeometry(pumpkinSections, { capStart: true, capEnd: true });
+    material: pumpkinMaterial;
+    position: vec3(0, -3.4, 7.8);
+  }
+  mesh.exhibit #pumpkinStem {
+    geometry: loftGeometry(pumpkinStemSections, { capEnd: true });
+    material: pumpkinStemMaterial;
+    position: vec3(0, -3.4, 7.8);
+  }
+
+  /* a cap that folds under its own rim, over a tapered stem */
+  mesh.exhibit #mushroomCap {
+    geometry: loftGeometry(mushroomCapSections, { capEnd: true });
+    material: mushroomCapMaterial;
+    position: vec3(-7.8, -3.4, 0);
+  }
+  mesh.exhibit #mushroomStem {
+    geometry: loftGeometry(mushroomStemSections, { capStart: true, capEnd: true });
+    material: mushroomStemMaterial;
+    position: vec3(-7.8, -3.4, 0);
+  }
+
+  /* a foot, a thin stem and a bowl with folded back walls */
+  mesh.exhibit #goblet {
+    geometry: loftGeometry(gobletSections, { capStart: true, capEnd: true });
+    material: gobletMaterial;
+    position: vec3(0, -3.4, -7.8);
+  }
+
+  /* a node out of the registry: fourteen stanchions and the cord sagging between them */
+  barrier();
+}

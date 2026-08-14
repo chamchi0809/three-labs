@@ -37,6 +37,10 @@
       "types": "./dist/three.d.ts",
       "import": "./dist/three.js"
     },
+    "./addons": {
+      "types": "./dist/addons.d.ts",
+      "import": "./dist/addons.js"
+    },
     "./bakery": {
       "types": "./dist/bakery/index.d.ts",
       "import": "./dist/bakery/index.js"

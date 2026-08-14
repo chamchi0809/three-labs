@@ -259,6 +259,26 @@ test("schema reflects the installed three typings", () => {
   assert.equal(schema.constants.DoubleSide!.kind, "number");
 });
 
+test("three/addons is reflected too, each name keyed to the module it lives in", () => {
+  assert.ok(schema.classes.LoftGeometry, "an addon geometry should be a class like any other");
+  assert.deepEqual(schema.classes.LoftGeometry!.bases, ["BufferGeometry"]);
+  // the barrel re-exports 270 modules, so what the plugin needs is the one file the class is declared in
+  assert.equal(schema.sources.LoftGeometry, "three/addons/geometries/LoftGeometry.js");
+  assert.equal(schema.sources.RoomEnvironment, "three/addons/environments/RoomEnvironment.js");
+  assert.equal(schema.sources.Mesh, undefined); // three's own — the entry is the plugin's default
+});
+
+test("an options bag is checked against the fields the slot declares", async () => {
+  const loft = (options: string) => checkText(`mesh { geometry: loftGeometry([], ${options}); }`);
+  assert.deepEqual(await loft(`{ capStart: true, capEnd: true, closed: false }`), []);
+  assert.match((await loft(`{ capStrat: true }`))[0]!, /LoftGeometryOptions has no setting "capStrat"; did you mean capStart\?/);
+  assert.match((await loft(`{ capStart: 1 }`))[0]!, /LoftGeometryOptions.capStart expects boolean, got number/);
+  // a required field left out is the one thing an optional-only bag cannot show
+  assert.match((await checkText(`mesh { geometry: textGeometry("hi", { size: 1 }); }`))[0]!, /TextGeometryParameters is missing font/);
+  // userData is `any`, so its keys stay the user's own
+  assert.deepEqual(await checkText(`mesh { userData: { anything: 1; nested: { deeper: true } }; }`), []);
+});
+
 test("accepts a valid scene", async () => {
   assert.deepEqual(
     await checkText(`
@@ -378,13 +398,16 @@ test("checks dotted paths, method calls and ref()", async () => {
 });
 
 test("registry names declared by the host are accepted unchecked", async () => {
-  const withWater = { ...schema, declared: ["water"] };
+  const withProxy = { ...schema, declared: ["proxyMesh"] };
   const run = async (text: string) => {
     const { nodes, templates } = await expand(parse(text, "t.tscene"), noImports);
-    return check(nodes, withWater, templates).map((d) => d.message);
+    return check(nodes, withProxy, templates).map((d) => d.message);
   };
-  assert.deepEqual(await run(`group { water(1, 2) { visible: true; } }`), []);
-  assert.match((await checkText(`group { water { } }`))[0]!, /unknown three class "Water"/);
+  assert.deepEqual(await run(`group { proxyMesh(1, 2) { visible: true; } }`), []);
+  // a declared name is also a value: the registry may hold a material or a section table, not just a node
+  assert.deepEqual(await run(`mesh { material: proxyMesh; geometry: proxyMesh(); }`), []);
+  assert.match((await run(`mesh { material: proxyMaterial; }`))[0]!, /unknown constant "proxyMaterial"/);
+  assert.match((await checkText(`group { proxyMesh { } }`))[0]!, /unknown three class "ProxyMesh"/);
 });
 
 test("autofixer fixes casing and formatting only", async () => {
@@ -453,6 +476,18 @@ gltf("./m.glb") { find(mesh, "body") { } play("Idle") { } }`;
   // repeat/find/play are the language's own, and `lookAt` is a method — none of them is a three export
   for (const absent of ["Repeat", "Find", "Play", "LookAt", "Scene", "WebGPURenderer"]) assert.ok(!named.includes(absent), absent);
   assert.match(code, /registry: \{ BoxGeometry, Color, DoubleSide, Group, Mesh, MeshStandardMaterial, PointLight \}/);
+});
+
+test("the vite plugin imports an addon from its own module, never from the barrel", async () => {
+  // the checker is on, because the schema is the thing that knows which module a name lives in
+  const plugin = (await import("./vite.ts")).default() as any;
+  plugin.configResolved({ command: "build" });
+  const src = `mesh { geometry: loftGeometry([], { capStart: true }); material: meshStandardMaterial(); }`;
+  const { code } = await plugin.transform(src, path.resolve("/p/main.tscene").split(path.sep).join("/"));
+  assert.match(code, /^import \{ LoftGeometry \} from "three\/addons\/geometries\/LoftGeometry\.js";$/m);
+  assert.match(code, /^import \{ Mesh, MeshStandardMaterial \} from "three\/webgpu";$/m);
+  assert.doesNotMatch(code, /from "three\/addons";/); // the barrel would pin all 270 addon modules
+  assert.match(code, /registry: \{ LoftGeometry, Mesh, MeshStandardMaterial \}/);
 });
 
 // ---------------------------------------------------------------- runtime

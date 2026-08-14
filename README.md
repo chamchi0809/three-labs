@@ -17,7 +17,7 @@ a `lib/` that ships and a `demo/` that exercises it.
 
 ```sh
 pnpm install
-pnpm dev:scene      # a demo per project: dev:scene, dev:bakery, dev:rc25d, dev:sdfgi
+pnpm dev:scene      # a demo per project: dev:scene, dev:loft, dev:bakery, dev:rc25d, dev:sdfgi
 pnpm bake:bakery    # bake the bakery demo's atlas (needs a GPU; :pica and :sponza for the two big ones)
 pnpm typecheck
 pnpm test           # unit tests
