@@ -1,7 +1,7 @@
 // What the sheet gets handed that three cannot supply: the procedural node, the TSL materials, and the
 // cross-section tables. `Record<Declared, unknown>` ties this to `declared.ts`, so the list the checker
 // is given and the values the runtime is given cannot drift apart.
-import type { Declared } from "../declared.ts";
+import type { Declared } from "./declared.ts";
 import { Barrier } from "./barrier.ts";
 import * as materials from "./materials.ts";
 import * as sections from "./sections.ts";

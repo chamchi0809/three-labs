@@ -4,8 +4,13 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
   canvas { display: block; }
-  #msg { position: fixed; inset: 0; display: grid; place-items: center;
+  /* inset: 0 puts this over the canvas, so it has to be transparent to the orbit controls' drags */
+  #msg { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
          color: #eee; font: 14px system-ui; text-align: center; white-space: pre-wrap; }
+  #about { position: fixed; left: 12px; bottom: 12px; max-width: 46ch; color: #eee;
+           font: 12px/1.6 system-ui; background: #0009; padding: 8px 10px; border-radius: 6px;
+           pointer-events: none; }
 </style>
 <div id="msg">initializing WebGPU…</div>
+<div id="about"></div>
 <script type="module" src="/src/main.ts"></script>

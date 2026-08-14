@@ -1,7 +1,0 @@
-{
-  "extends": "../tsconfig.base.json",
-  "include": ["src", "declared.ts", "scenes.check.ts", "vite.config.ts"],
-  "compilerOptions": {
-    "types": ["@webgpu/types", "node"]
-  }
-}

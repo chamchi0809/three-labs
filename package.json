@@ -11,7 +11,6 @@
     "test": "pnpm -r test",
     "check": "pnpm --filter tscene build && pnpm -r check",
     "dev:scene": "pnpm --filter tscene build && pnpm --filter scene-demo dev",
-    "dev:loft": "pnpm --filter tscene build && pnpm --filter loft-demo dev",
     "dev:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo dev",
     "bake:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo bake",
     "bake:bakery:sponza": "pnpm --filter tscene build && pnpm --filter bakery-demo bake:sponza",

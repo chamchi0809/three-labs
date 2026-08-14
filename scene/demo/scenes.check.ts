@@ -1,13 +1,14 @@
-// Two checks over this demo's sheet, both without a GPU:
-//   1. `tscene check`, told about the names the registry supplies
-//   2. the sheet actually builds — the addon geometry, the registry materials and `barrier()` included
+// Two checks over this demo's sheets, both without a GPU:
+//   1. `tscene check`, told about the names loft.tscene gets from the registry
+//   2. loft.tscene actually builds — the addon geometry, the registry materials and `barrier()` included
+//      (main.tscene is left to the checker: building it would fetch a glTF)
 // node --experimental-strip-types scenes.check.ts
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DECLARED } from "./declared.ts";
+import { DECLARED } from "./src/loft/declared.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sheet = path.join(here, "scenes", "loft.tscene");
@@ -27,7 +28,7 @@ if (status) process.exit(status);
 const { loadScene } = await import("tscene");
 const { threeRegistry } = await import("tscene/three");
 const { LoftGeometry } = await import("three/addons/geometries/LoftGeometry.js");
-const { registry } = await import("./src/registry.ts");
+const { registry } = await import("./src/loft/registry.ts");
 
 const root = await loadScene(fs.readFileSync(sheet, "utf8"), {
   base: pathToFileURL(sheet).href,

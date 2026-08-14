@@ -8,7 +8,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "assets": "node tools/make-assets.mjs",
-    "check": "node ../lib/dist/cli.js check scenes && node assets.check.mjs"
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning scenes.check.ts && node assets.check.mjs"
   },
   "dependencies": {
     "tscene": "workspace:*"
