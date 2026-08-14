@@ -55,9 +55,12 @@ export const MATH: Record<string, { arity: number; summary: string }> = {
   smoothstep: { arity: 3, summary: "smoothstep(x, edge0, edge1) — 0 below edge0, 1 above edge1, an S curve between" },
 };
 
-/** The one implementation of {@link MATH}, shared by the constant folder and the runtime. */
-export const math = (name: string, args: number[]): number => {
-  const [a = 0, b = 0, c = 0] = args;
+/**
+ * The one implementation of {@link MATH}, shared by the constant folder and the runtime. Positional rather
+ * than variadic: the runtime calls this millions of times over an `each()`, and an array per call is a
+ * measurable part of building a sheet's geometry.
+ */
+export const math = (name: string, a = 0, b = 0, c = 0): number => {
   switch (name) {
     case "pi": return Math.PI;
     case "abs": return Math.abs(a);

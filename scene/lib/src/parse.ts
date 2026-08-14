@@ -820,8 +820,8 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
       err(`${v.name}() works on numbers only`, v);
       return { kind: "number", value: 0, unit: "", start: v.start, end: v.end, file: v.file };
     }
-    const numbers = args.map((a) => (a.kind === "number" && a.unit === "deg" ? (a.value * Math.PI) / 180 : (a as { value: number }).value));
-    return { kind: "number", value: math(v.name, numbers), unit: "", start: v.start, end: v.end, file: v.file };
+    const [a, b, c] = args.map((n) => (n.kind === "number" && n.unit === "deg" ? (n.value * Math.PI) / 180 : (n as { value: number }).value));
+    return { kind: "number", value: math(v.name, a, b, c), unit: "", start: v.start, end: v.end, file: v.file };
   }
 
   /** `each(--j, 48, expr)` — the binding is the loop's, so the body is substituted with it left standing */

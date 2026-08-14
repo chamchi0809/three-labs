@@ -6,7 +6,7 @@
 import { AnimationClip, AnimationMixer, Group, SRGBColorSpace, TextureLoader } from "three/webgpu";
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
-import { className, math } from "./names.ts";
+import { className, LOADERS, math } from "./names.ts";
 
 /** What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet, one module. */
 export type SceneModule = {
@@ -102,6 +102,8 @@ type Ctx = {
   registry: Record<string, any>;
   /** what the enclosing `each()` calls bind right now — the only variables left by the time we get here */
   loop: Map<string, unknown>;
+  /** node name → what the registry resolved it to, so a name is only spelled out once */
+  classes: Map<string, unknown>;
   /** after the tree is built an unknown #id is a real error, not a forward reference */
   settled?: boolean;
 };
@@ -119,7 +121,7 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
 
   const ctx: Ctx = {
     opts: { ...opts, base }, sheet: { text: sheet.text, file: sheet.file }, mixers: [],
-    made: new WeakMap(), ids: new Map(), deferred: [], loop: new Map(),
+    made: new WeakMap(), ids: new Map(), deferred: [], loop: new Map(), classes: new Map(),
     // the caller's registry wins, so `{ water: Water }` can also shadow a three export
     registry: { ...moduleRegistry(mod), ...opts.registry },
   };
@@ -353,8 +355,15 @@ function moduleRegistry(root: SceneModule | undefined): Record<string, any> {
   return out;
 }
 
-/** `meshStandardMaterial` and `MeshStandardMaterial` are the same entry; so are `vec3` and `Vector3`. */
-const lookup = (name: string, ctx: Ctx) => ctx.registry[name] ?? ctx.registry[className(name)];
+/**
+ * `meshStandardMaterial` and `MeshStandardMaterial` are the same entry; so are `vec3` and `Vector3`.
+ * Memoised per load: an `each()` looks the same class up once per point otherwise.
+ */
+function lookup(name: string, ctx: Ctx): any {
+  let found = ctx.classes.get(name);
+  if (found === undefined) ctx.classes.set(name, (found = ctx.registry[name] ?? ctx.registry[className(name)]));
+  return found;
+}
 
 // a sheet parsed from a string was never seen by the plugin, so nothing imported three on its behalf
 const HINT =
@@ -412,7 +421,8 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   for (const a of o.args) {
     // constructor arguments are needed before the node exists, so they cannot wait for a later ref()
     if (!ctx.settled && forwardRef(a, ctx)) fail("ref() in a constructor argument only sees nodes built before it", a, ctx);
-    args.push(await evaluate(a, ctx));
+    const fast = quick(a, ctx);
+    args.push(fast === PENDING ? await evaluate(a, ctx) : fast);
   }
   // an asset is relative to the sheet it was written in — the bundler already resolved those for us
   const url = () => {
@@ -587,17 +597,120 @@ async function applyPlay(target: any, o: ObjectValue, ctx: Ctx): Promise<void> {
   action.play();
   if (!ctx.mixers.includes(mixer)) ctx.mixers.push(mixer);
 }
+/**
+ * A value the synchronous path could not finish. Almost nothing an `each()` body is made of has to wait —
+ * numbers, loop bindings, arithmetic, property reads, the `vec3()`s built out of them — and a sheet that
+ * writes its own geometry evaluates millions of them, where one promise each *is* the build time. So the
+ * evaluator runs synchronously and hands over only when it meets something that genuinely blocks: a
+ * loader, a node with a body, an instance another node shares.
+ */
+const PENDING: unique symbol = Symbol("pending");
 
-async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
+/** the three links of a value chain, so the two paths cannot disagree about what they mean */
+const readOf = (target: unknown, v: Value & { kind: "read" }, ctx: Ctx): unknown => {
+  if (target == null) fail(`cannot read ${v.name} of ${String(target)}`, v, ctx);
+  return (target as Record<string, unknown>)[v.name];
+};
+const indexOf = (target: unknown, at: unknown, v: Value & { kind: "index" }, ctx: Ctx): unknown => {
+  if (!Array.isArray(target)) fail(`cannot index a ${typeof target}`, v, ctx);
+  return (target as unknown[])[Number(at)];
+};
+const callOf = (target: unknown, args: unknown[], v: Value & { kind: "call" }, ctx: Ctx): unknown => {
+  const method = (target as Record<string, unknown> | null)?.[v.name];
+  if (typeof method !== "function") fail(`${v.name} is not a method of this value`, v, ctx);
+  return (method as (...a: unknown[]) => unknown).apply(target, args);
+};
+
+const constant = (v: Value & { kind: "ident" }, ctx: Ctx): unknown => {
+  if (v.name === "true") return true;
+  if (v.name === "false") return false;
+  if (v.name === "null") return null;
+  const found = lookup(v.name, ctx);
+  if (found !== undefined) return found;
+  return fail(`unknown constant ${JSON.stringify(v.name)}${HINT}`, v, ctx);
+};
+
+/**
+ * Can this node be built without awaiting anything? A loader has a file to fetch, a body may hold one, and
+ * a memoised node hands its instance out through a promise — none of which the synchronous path owns. The
+ * node inside an `each()` that reads the binding is the case that matters, and it is exactly the one that
+ * is `dynamic`, bodyless and unnamed.
+ */
+const plainNode = (o: ObjectValue) => o.dynamic === true && !o.hasBody && !o.body.length && !o.id && !LOADERS[o.name];
+
+/** {@link evaluate} minus the promises. {@link PENDING} when a value has to go the asynchronous way. */
+function quick(v: Value, ctx: Ctx): unknown {
   switch (v.kind) {
     case "number": return v.unit === "deg" ? (v.value * Math.PI) / 180 : v.value;
     case "hex": return v.value;
     case "string": return v.value;
-    case "object": return construct(v, ctx);
+    case "ident": return constant(v, ctx);
     case "ref": {
       if (!ctx.ids.has(v.name)) fail(`unknown node #${v.name}`, v, ctx);
       return ctx.ids.get(v.name);
     }
+    case "var": return ctx.loop.has(v.name) ? ctx.loop.get(v.name) : fail(`unresolved variable --${v.name}`, v, ctx);
+    case "calc": case "fn": {
+      const value = arith(v, ctx);
+      return typeof value === "number" ? value : PENDING;
+    }
+    case "read": {
+      const target = quick(v.target, ctx);
+      return target === PENDING ? PENDING : readOf(target, v, ctx);
+    }
+    case "index": {
+      const target = quick(v.target, ctx);
+      if (target === PENDING) return PENDING;
+      const at = quick(v.at, ctx);
+      return at === PENDING ? PENDING : indexOf(target, at, v, ctx);
+    }
+    case "call": {
+      const target = quick(v.target, ctx);
+      if (target === PENDING) return PENDING;
+      const args = quickAll(v.args, ctx);
+      return args === PENDING ? PENDING : callOf(target, args, v, ctx);
+    }
+    case "array": return quickAll(v.items, ctx);
+    case "record": {
+      const out: Record<string, unknown> = {};
+      for (const e of v.entries) {
+        const value = quick(e.value, ctx);
+        if (value === PENDING) return PENDING;
+        out[e.name] = value;
+      }
+      return out;
+    }
+    case "each": return iterate(v, ctx);
+    case "object": {
+      if (!plainNode(v)) return PENDING;
+      const args = quickAll(v.args, ctx);
+      if (args === PENDING) return PENDING;
+      const cls = lookup(v.name, ctx);
+      if (typeof cls !== "function") return PENDING; // let the asynchronous path report it
+      return new (cls as new (...a: unknown[]) => unknown)(...args);
+    }
+  }
+  // every kind above returns or fails; a new one lands here and takes the asynchronous path until it
+  // decides it can be built without awaiting
+  return PENDING;
+}
+
+/** every one of them, or PENDING if any single one has to wait */
+function quickAll(values: Value[], ctx: Ctx): unknown[] | typeof PENDING {
+  const out: unknown[] = [];
+  for (const v of values) {
+    const value = quick(v, ctx);
+    if (value === PENDING) return PENDING;
+    out.push(value);
+  }
+  return out;
+}
+
+async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
+  const fast = quick(v, ctx);
+  if (fast !== PENDING) return fast;
+  switch (v.kind) {
+    case "object": return construct(v, ctx);
     case "array": {
       const out = [];
       for (const item of v.items) out.push(await evaluate(item, ctx));
@@ -610,83 +723,108 @@ async function evaluate(v: Value, ctx: Ctx): Promise<unknown> {
     }
     // expand() folds the arithmetic it can; what is left reads an each() binding, so it lands here
     case "calc": case "fn": return arith(v, ctx);
-    case "each": return iterate(v, ctx);
-    case "read": {
-      const target = await evaluate(v.target, ctx);
-      if (target == null) fail(`cannot read ${v.name} of ${String(target)}`, v, ctx);
-      return (target as Record<string, unknown>)[v.name];
-    }
-    case "index": {
-      const target = await evaluate(v.target, ctx);
-      if (!Array.isArray(target)) fail(`cannot index a ${typeof target}`, v, ctx);
-      return (target as unknown[])[Number(await evaluate(v.at, ctx))];
-    }
+    case "each": return slowly(v, ctx);
+    case "read": return readOf(await evaluate(v.target, ctx), v, ctx);
+    case "index": return indexOf(await evaluate(v.target, ctx), await evaluate(v.at, ctx), v, ctx);
     case "call": {
       const target = await evaluate(v.target, ctx);
-      const method = (target as Record<string, unknown> | null)?.[v.name];
-      if (typeof method !== "function") fail(`${v.name} is not a method of this value`, v, ctx);
       const args: unknown[] = [];
       for (const a of v.args) args.push(await evaluate(a, ctx));
-      return (method as (...a: unknown[]) => unknown).apply(target, args);
+      return callOf(target, args, v, ctx);
     }
-    case "var": {
-      if (ctx.loop.has(v.name)) return ctx.loop.get(v.name);
-      return fail(`unresolved variable --${v.name}`, v, ctx);
-    }
-    case "ident":
-      if (v.name === "true") return true;
-      if (v.name === "false") return false;
-      if (v.name === "null") return null;
-      const constant = lookup(v.name, ctx);
-      if (constant !== undefined) return constant;
-      return fail(`unknown constant ${JSON.stringify(v.name)}${HINT}`, v, ctx);
+    // quick() settles or fails on every other kind, so reaching this is a gap and not a slow path
+    default: return fail(`cannot evaluate a ${v.kind}`, v, ctx);
   }
 }
 
-/**
- * `each(--j, 48, expr)` — the body once per index, or once per item of a list.
- *
- * The binding is restored rather than dropped, so a nested each() that shadows `--index` hands the outer
- * one back on the way out.
- */
-async function iterate(v: Value & { kind: "each" }, ctx: Ctx): Promise<unknown[]> {
-  const over = await evaluate(v.over, ctx);
+/** the bindings an `each()` puts in scope, and the undo that hands a shadowed outer one back */
+function bindings(v: Value & { kind: "each" }, ctx: Ctx, over: unknown) {
   const items = Array.isArray(over) ? over : undefined;
   const count = items ? items.length : Number(over);
   if (!Number.isInteger(count) || count < 0) fail(`each() counts to a whole number or walks a list, got ${String(over)}`, v.over, ctx);
-
   const saved = [v.name, "index", "count"].map((name) => [name, ctx.loop.has(name), ctx.loop.get(name)] as const);
-  const out: unknown[] = [];
-  try {
-    ctx.loop.set("count", count);
-    for (let i = 0; i < count; i++) {
+  ctx.loop.set("count", count);
+  return {
+    count,
+    bind: (i: number) => {
       ctx.loop.set(v.name, items ? items[i] : i);
       ctx.loop.set("index", i);
-      out.push(await evaluate(v.body, ctx));
+    },
+    restore: () => { for (const [name, had, was] of saved) had ? ctx.loop.set(name, was) : ctx.loop.delete(name); },
+  };
+}
+
+/**
+ * `each(--j, 48, expr)` — the body once per index, or once per item of a list, without awaiting anything.
+ * PENDING if any iteration has to wait, which {@link slowly} then redoes: one wasted iteration on the
+ * bodies that need it, and none at all on the geometry this is here for.
+ */
+function iterate(v: Value & { kind: "each" }, ctx: Ctx): unknown[] | typeof PENDING {
+  const over = quick(v.over, ctx);
+  if (over === PENDING) return PENDING;
+  const { count, bind, restore } = bindings(v, ctx, over);
+  const out: unknown[] = [];
+  try {
+    for (let i = 0; i < count; i++) {
+      bind(i);
+      const value = quick(v.body, ctx);
+      if (value === PENDING) return PENDING;
+      out.push(value);
     }
   } finally {
-    for (const [name, had, was] of saved) had ? ctx.loop.set(name, was) : ctx.loop.delete(name);
+    restore();
   }
   return out;
 }
 
-/** the arithmetic expand() could not fold, over the loop bindings it was waiting for */
-async function arith(v: Value, ctx: Ctx): Promise<number> {
-  if (v.kind === "calc") {
-    const [left, right] = [await arith(v.left, ctx), await arith(v.right, ctx)];
-    switch (v.op) {
-      case "+": return left + right;
-      case "-": return left - right;
-      case "*": return left * right;
-      case "/": return right === 0 ? fail("calc() divides by zero", v, ctx) : left / right;
+/** the same loop, for a body that builds something it has to wait for */
+async function slowly(v: Value & { kind: "each" }, ctx: Ctx): Promise<unknown[]> {
+  const { count, bind, restore } = bindings(v, ctx, await evaluate(v.over, ctx));
+  const out: unknown[] = [];
+  try {
+    for (let i = 0; i < count; i++) {
+      bind(i);
+      out.push(await evaluate(v.body, ctx));
     }
+  } finally {
+    restore();
+  }
+  return out;
+}
+
+/**
+ * The arithmetic expand() could not fold, over the loop bindings it was waiting for. Synchronous while it
+ * can be, which is nearly always — a promise per operator would cost more than everything else together.
+ */
+function arith(v: Value, ctx: Ctx): number | Promise<number> {
+  if (v.kind === "calc") {
+    const left = arith(v.left, ctx);
+    const right = arith(v.right, ctx);
+    if (typeof left === "number" && typeof right === "number") return operate(v, left, right, ctx);
+    return Promise.all([left, right]).then(([l, r]) => operate(v, l, r, ctx));
   }
   if (v.kind === "fn") {
-    const args: number[] = [];
-    for (const a of v.args) args.push(await arith(a, ctx));
-    return math(v.name, args);
+    // MATH tops out at three arguments, so the sync path can name them and allocate nothing
+    const a = v.args[0] === undefined ? 0 : arith(v.args[0], ctx);
+    const b = v.args[1] === undefined ? 0 : arith(v.args[1], ctx);
+    const c = v.args[2] === undefined ? 0 : arith(v.args[2], ctx);
+    if (typeof a === "number" && typeof b === "number" && typeof c === "number") return math(v.name, a, b, c);
+    return Promise.all([a, b, c]).then(([x, y, z]) => math(v.name, x, y, z));
   }
-  const value = await evaluate(v, ctx);
+  const value = quick(v, ctx);
+  return value === PENDING ? evaluate(v, ctx).then((x) => number(x, v, ctx)) : number(value, v, ctx);
+}
+
+function operate(v: Value & { kind: "calc" }, left: number, right: number, ctx: Ctx): number {
+  switch (v.op) {
+    case "+": return left + right;
+    case "-": return left - right;
+    case "*": return left * right;
+    case "/": return right === 0 ? fail("calc() divides by zero", v, ctx) : left / right;
+  }
+}
+
+function number(value: unknown, v: Value, ctx: Ctx): number {
   if (typeof value !== "number" || !Number.isFinite(value)) fail(`calc() works on numbers, got ${JSON.stringify(value)}`, v, ctx);
   return value as number;
 }

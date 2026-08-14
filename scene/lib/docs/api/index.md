@@ -949,17 +949,25 @@ Convenience: fetch a .tscene file and build it.
 ### math()
 
 ```ts
-function math(name, args): number;
+function math(
+   name, 
+   a?, 
+   b?, 
+   c?): number;
 ```
 
-The one implementation of [MATH](#math), shared by the constant folder and the runtime.
+The one implementation of [MATH](#math), shared by the constant folder and the runtime. Positional rather
+than variadic: the runtime calls this millions of times over an `each()`, and an array per call is a
+measurable part of building a sheet's geometry.
 
 #### Parameters
 
-| Parameter | Type |
-| ------ | ------ |
-| `name` | `string` |
-| `args` | `number`[] |
+| Parameter | Type | Default value |
+| ------ | ------ | ------ |
+| `name` | `string` | `undefined` |
+| `a` | `number` | `0` |
+| `b` | `number` | `0` |
+| `c` | `number` | `0` |
 
 #### Returns
 

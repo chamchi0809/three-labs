@@ -654,6 +654,22 @@ test("each() evaluates its body per iteration, and shares only what does not var
   assert.equal((pot as { material?: unknown }).material, (root.getObjectByName("other") as { material?: unknown }).material);
 });
 
+test("each() falls back to the awaiting path for a body that cannot be built synchronously", async () => {
+  // a node with a body is exactly what the synchronous evaluator hands over, so this walks the other path
+  const root = await load(`
+    mesh #box {
+      userData: {
+        mats: each(--i, 3, meshStandardMaterial { roughness: calc(var(--i) / 4); });
+        nested: each(--i, 2, each(--j, 2, calc(var(--i) * 10 + var(--j))));
+      };
+    }
+  `);
+  const mats = root.getObjectByName("box")!.userData.mats as { roughness: number }[];
+  assert.deepEqual(mats.map((m) => m.roughness), [0, 0.25, 0.5]);
+  assert.equal(new Set(mats).size, 3); // one instance per iteration, not one shared three times
+  assert.deepEqual(root.getObjectByName("box")!.userData.nested, [[0, 1], [10, 11]]);
+});
+
 test("repeat() unrolls with --index and --count", async () => {
   const root = await load(`group #row { repeat(3) { mesh #tile { position.x: calc(var(--index) * 2); renderOrder: var(--count); } } }`);
   const row = root.getObjectByName("row")!;
