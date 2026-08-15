@@ -2,7 +2,7 @@
   "name": "tscene-vscode",
   "displayName": "tscene",
   "description": "Syntax highlighting, type checking, completion and formatting for .tscene files",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "publisher": "chamchi",
   "icon": "icon.png",
