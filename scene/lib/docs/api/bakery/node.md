@@ -157,6 +157,8 @@ type BakeMaterial = {
   emissiveScale?: [number, number, number];
   map?: THREE.Texture;
   mapScale?: [number, number, number];
+  normalMap?: THREE.Texture;
+  normalScale?: [number, number];
   oneSided?: boolean;
 };
 ```
@@ -172,6 +174,8 @@ type BakeMaterial = {
 | <a id="emissivescale"></a> `emissiveScale?` | \[`number`, `number`, `number`\] | what one texel of [emissiveMap](#emissivemap) is multiplied by. `emissive` already holds its mean. |
 | <a id="map"></a> `map?` | `THREE.Texture` | the albedo map, sampled per texel when the bake builds an albedo atlas |
 | <a id="mapscale"></a> `mapScale?` | \[`number`, `number`, `number`\] | what one texel of [map](#map) is multiplied by — colour × (1 - metalness). `albedo` is its mean. |
+| <a id="normalmap"></a> `normalMap?` | `THREE.Texture` | the tangent-space normal map, sampled per texel so the trace sees the bumps the shader does. Object-space maps are left out — a texel knows no object it belongs to by the time this is read. |
+| <a id="normalscale"></a> `normalScale?` | \[`number`, `number`\] | `normalScale`, what the map's x and y are multiplied by before the frame is rebuilt |
 | <a id="onesided"></a> `oneSided?` | `boolean` | emits from the +normal side only (a RectAreaLight quad). A mesh material emits both ways. |
 
 ***
@@ -206,6 +210,7 @@ type BakeOptions = Omit<UnwrapOptions, "onProgress"> & Omit<TraceOptions, "onPro
   denoiseRadius?: number;
   dilateRadius?: number;
   exposure?: number;
+  fireflyThreshold?: number;
   jobs?: number;
   only?: string[];
   onProgress?: (stage, fraction) => void;
@@ -228,6 +233,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 | `denoiseRadius?` | `number` | 0 disables the edge-aware blur; 1 is a 3x3 kernel |
 | `dilateRadius?` | `number` | texels of lit-region growth past the chart edges. The atlas padding follows this by default. |
 | `exposure?` | `number` | The divisor that maps irradiance into the 8-bit PNG, and the `lightMapIntensity` that undoes it. Absent, it is the atlas' 95th percentile. Fixing it makes two bakes of one scene quantize alike. |
+| `fireflyThreshold?` | `number` | How far above the median of its neighbours a texel may sit before it is clamped back to it. Runs before the blur, which would otherwise smear the spike rather than remove it. 0 disables. |
 | `jobs?` | `number` | worker threads to rasterize with (Node only). 1 keeps the rasterizer on the calling thread. |
 | `only?` | `string`[] | with [previous](#bakeoptions), the `nodeKey()`s to re-trace. Everything else is copied over. |
 | `onProgress()?` | (`stage`, `fraction`) => `void` | - |
@@ -243,6 +249,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 
 ```ts
 type BakeProbe = {
+  influence: number;
   key: string;
   position: [number, number, number];
   size: number;
@@ -255,6 +262,7 @@ type BakeProbe = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="influence"></a> `influence` | `number` | world-space radius the probe reaches; 0 is "everywhere". See `probeWeights()`. |
 | <a id="key"></a> `key` | `string` | `nodeKey()` of the node that declared it |
 | <a id="position-1"></a> `position` | \[`number`, `number`, `number`\] | - |
 | <a id="size"></a> `size` | `number` | equirect width in texels; the height is half of it |
@@ -430,6 +438,7 @@ type PrepareOptions = Pick<TraceOptions, "lightmapUV" | "albedo"> & {
 type ProbeImage = {
   height: number;
   image: Float32Array;
+  influence: number;
   key: string;
   position: [number, number, number];
   width: number;
@@ -444,9 +453,28 @@ One baked reflection probe: radiance in every direction, equirect, bottom row fi
 | ------ | ------ | ------ |
 | <a id="height-2"></a> `height` | `number` | - |
 | <a id="image-1"></a> `image` | `Float32Array` | linear radiance, RGBA, `width * height * 4`. Alpha is 1 — every texel of a probe is covered. |
+| <a id="influence-1"></a> `influence` | `number` | the placing node's `@bakery { influence }`, carried through to the manifest. 0 is unbounded. |
 | <a id="key-1"></a> `key` | `string` | - |
 | <a id="position-2"></a> `position` | \[`number`, `number`, `number`\] | - |
 | <a id="width-2"></a> `width` | `number` | - |
+
+***
+
+### RasterOptions
+
+```ts
+type RasterOptions = {
+  jobs?: number;
+  onProgress?: (fraction) => void;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="jobs"></a> `jobs?` | `number` | worker threads to rasterize with. 1 stays on the calling thread, 0 or absent asks for one per core. Node only; everywhere else the rasterizer is single-threaded. |
+| <a id="onprogress"></a> `onProgress?` | (`fraction`) => `void` | - |
 
 ***
 
@@ -562,7 +590,7 @@ type TraceOptions = {
 | <a id="context"></a> `context?` | [`TraceContext`](#tracecontext) | a [TraceContext](#tracecontext) to trace against instead of building one. A bake builds a single context and hands it to both the atlas trace and the probes; called on their own, each builds and frees its own. |
 | <a id="indirect"></a> `indirect?` | `number` | gain on everything past the first bounce — 1 is physical, >1 the usual cheat for a flat-looking interior. Direct light and the sky seen straight from a texel are untouched. |
 | <a id="lightmapuv"></a> `lightmapUV?` | `Float32Array`[] | per bake mesh, the atlas uv the unwrap produced — what a bounce is looked up in `albedo` with |
-| <a id="onprogress"></a> `onProgress?` | (`fraction`) => `void` | - |
+| <a id="onprogress-1"></a> `onProgress?` | (`fraction`) => `void` | - |
 | <a id="samples"></a> `samples?` | `number` | total paths per texel. This is the only real quality knob. |
 | <a id="signal"></a> `signal?` | `AbortSignal` | aborts between dispatches. The GPU work already queued still finishes. |
 
@@ -583,7 +611,7 @@ type UnwrapOptions = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="onprogress-1"></a> `onProgress?` | (`fraction`) => `void` | 0..1 — how far the unwrap has got, straight out of xatlas' own phases |
+| <a id="onprogress-2"></a> `onProgress?` | (`fraction`) => `void` | 0..1 — how far the unwrap has got, straight out of xatlas' own phases |
 | <a id="padding"></a> `padding?` | `number` | texels of empty space around every chart. Keep it at or above the bake's `dilateRadius`: dilation grows the lit region outwards, and anything it grows past the padding bleeds into the next chart. |
 | <a id="size-1"></a> `size?` | `number` | target atlas edge length in texels. xatlas picks the chart scale from this and then packs, so the atlas it returns is around this size rather than exactly it — read `Atlas.width` for the truth. |
 | <a id="texelsperunit"></a> `texelsPerUnit?` | `number` | texels per world unit. 0 (the default) lets xatlas pick the scale that fills `size`, which is what you want unless you are baking several scenes to a shared density. |
@@ -777,11 +805,15 @@ function dilate(
    mask, 
    width, 
    height, 
-   radius?): Uint8Array;
+   radius?): void;
 ```
 
 Grows the lit region outward by `radius` texels, averaging whatever is already lit. Without this a
 bilinear tap just outside a chart reads black and every chart gets a dark rim.
+
+A grown texel is given alpha 1 like any other: alpha in the written atlas means "this texel holds a
+colour worth reading", and the rim is exactly that — it is there to be sampled. It is not the chart
+coverage the rasterizer produced, and the manifest's uv layout is where that lives.
 
 #### Parameters
 
@@ -795,7 +827,22 @@ bilinear tap just outside a chart reads black and every chart gets a dark rim.
 
 #### Returns
 
-`Uint8Array`
+`void`
+
+***
+
+### hasWebGPU()
+
+```ts
+function hasWebGPU(): Promise<boolean>;
+```
+
+Whether this machine can actually run a bake. A CI runner has Dawn but no driver behind it, so the
+binding loads and then hands back no adapter — which is a skip, not a failure.
+
+#### Returns
+
+`Promise`\<`boolean`\>
 
 ***
 
@@ -895,6 +942,33 @@ costs the PNG/EXR writers one row flip.
 
 ***
 
+### rasterizeParallel()
+
+```ts
+function rasterizeParallel(
+   meshes, 
+   atlas, 
+opts?): Promise<Texels>;
+```
+
+The same rasterization, spread over worker threads. A wall of 200k triangles is a second of one
+core per mesh and there is nothing to share between meshes, so this is close to linear.
+Node only: no `worker_threads`, one mesh, or `jobs: 1` all fall through to [rasterize](#rasterize).
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `meshes` | [`BakeMesh`](#bakemesh)[] |
+| `atlas` | [`Atlas`](#atlas) |
+| `opts` | [`RasterOptions`](#rasteroptions) |
+
+#### Returns
+
+`Promise`\<[`Texels`](#texels)\>
+
+***
+
 ### trace()
 
 ```ts
@@ -952,6 +1026,25 @@ and 120k texels in flight saturate a GPU that 8k left mostly idle.
 #### Returns
 
 `Promise`\<[`ProbeImage`](#probeimage)[]\>
+
+***
+
+### uninstallNodeLoaders()
+
+```ts
+function uninstallNodeLoaders(): void;
+```
+
+Puts `fetch` and `ImageLoader` back the way [installNodeLoaders](#installnodeloaders) found them — for a process
+that bakes and then goes on to do something else with a `fetch` it expects to be its own. Idempotent,
+and a no-op if the shims were never installed.
+
+`self` and `ProgressEvent` stay. Both are `??=` additions that nothing can tell apart from the real
+thing, and a loader still in flight reads them.
+
+#### Returns
+
+`void`
 
 ***
 
@@ -1070,12 +1163,6 @@ Re-exports [MaterialBakery](../index.md#materialbakery)
 
 ***
 
-### nearestProbe
-
-Re-exports [nearestProbe](../bakery.md#nearestprobe)
-
-***
-
 ### NodeBakery
 
 Re-exports [NodeBakery](../index.md#nodebakery)
@@ -1088,9 +1175,27 @@ Re-exports [nodeKey](../bakery.md#nodekey)
 
 ***
 
+### PlacedProbe
+
+Re-exports [PlacedProbe](../bakery.md#placedprobe)
+
+***
+
 ### probeDirection
 
 Re-exports [probeDirection](../bakery.md#probedirection)
+
+***
+
+### ProbeWeight
+
+Re-exports [ProbeWeight](../bakery.md#probeweight)
+
+***
+
+### probeWeights
+
+Re-exports [probeWeights](../bakery.md#probeweights)
 
 ***
 

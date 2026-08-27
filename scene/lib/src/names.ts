@@ -6,7 +6,7 @@ import type { TypeRef } from "./schema.ts";
 export const ALIASES: Record<string, string> = {
   vec2: "Vector2", vec3: "Vector3", vec4: "Vector4",
   color: "Color", euler: "Euler", quat: "Quaternion", matrix4: "Matrix4",
-  texture: "Texture", gltf: "Group",
+  texture: "Texture", gltf: "Group", hdr: "DataTexture", exr: "DataTexture", ktx2: "CompressedTexture",
 };
 
 /**
@@ -20,9 +20,17 @@ export const BUILTINS: Record<string, { signature: string; summary: string; topL
   play: { signature: 'play("clip") { … }', summary: "plays an animation clip of the model it sits in; the body configures the AnimationAction", topLevel: false },
 };
 
-export const LOADERS: Record<string, { class: string; args: TypeRef[] }> = {
-  texture: { class: "Texture", args: [{ kind: "string" }] },
-  gltf: { class: "Group", args: [{ kind: "string" }] },
+/**
+ * Calls that fetch something instead of constructing it. `args` is the call's own signature — a
+ * loader's arguments are nothing like the constructor of the class it hands back, and both the
+ * checker and the editor have to say so.
+ */
+export const LOADERS: Record<string, { class: string; args: TypeRef[]; summary: string }> = {
+  texture: { class: "Texture", args: [{ kind: "string" }], summary: "loads an image as a Texture" },
+  gltf: { class: "Group", args: [{ kind: "string" }], summary: "loads a .gltf/.glb; the body configures the Group it arrives in" },
+  hdr: { class: "DataTexture", args: [{ kind: "string" }], summary: "loads a Radiance .hdr as a float DataTexture, mapped equirectangular — an environment, not a colour map" },
+  exr: { class: "DataTexture", args: [{ kind: "string" }], summary: "loads an OpenEXR .exr the same way hdr() does" },
+  ktx2: { class: "CompressedTexture", args: [{ kind: "string" }], summary: "loads a .ktx2, transcoded to whatever the GPU compresses; needs loadScene's `ktx2` option" },
 };
 
 /**
@@ -107,6 +115,11 @@ export type SceneBakery = {
   texelsPerUnit?: number;
   denoiseRadius?: number;
   dilateRadius?: number;
+  /**
+   * How many times its neighbours' median a texel may be before the bake clamps it back to that —
+   * the stray bright dots a path tracer leaves. 0 keeps them.
+   */
+  fireflyThreshold?: number;
   /** ray origin offset along the normal; 0 (the default) picks 1e-4 of the scene diagonal */
   bias?: number;
   /** reflectance of a material with no `color` at all */
@@ -157,6 +170,12 @@ export type NodeBakery = {
    * the atlas to light, so this is what it reflects instead. 256 is plenty for anything but a mirror.
    */
   probe?: number;
+  /**
+   * How far this probe reaches, in world units. A mesh outside every probe's influence reflects none
+   * of them; inside two, it reflects a blend that fades to nothing at each one's edge. 0 — the default
+   * — is unbounded, and a scene of unbounded probes is the plain "nearest two, by distance" it was.
+   */
+  influence?: number;
 };
 
 /** A material's own `@bakery { … }`. */
@@ -165,30 +184,52 @@ export type MaterialBakery = {
   albedo?: [number, number, number];
 };
 
-export type Knob = { type: "number" | "string" | "boolean" | "numbers"; length?: number; values?: string[] };
+export type Knob = {
+  type: "number" | "string" | "boolean" | "numbers";
+  length?: number;
+  values?: string[];
+  /** inclusive bounds for a number knob, or for every entry of a `numbers` one */
+  min?: number;
+  max?: number;
+  /** a count, not a measurement — `size: 1024.5` is a typo and `probe: 2` bakes nothing */
+  int?: boolean;
+};
 
 /**
  * `@bakery { … }` is settings for the baker, not for three, so the schema cannot type it — this table
  * is what the checker validates against, per position. Adding a knob to {@link SceneBakery} and friends
  * without a row here means the checker rejects it.
+ *
+ * The bounds are the range the bake is actually defined over, not taste: outside them a knob is either
+ * dropped with a warning (`probe: 2`), clamped to something else entirely (`indirect: -1`), or asks for
+ * an allocation no machine has (`size: 65536`). The checker says so in the editor rather than the baker
+ * saying so an hour in.
  */
 export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>> = {
   scene: {
     include: { type: "string", values: ["all", "none"] },
-    size: { type: "number" },
-    samples: { type: "number" },
-    bounces: { type: "number" },
-    indirect: { type: "number" },
-    batch: { type: "number" },
-    padding: { type: "number" },
-    texelsPerUnit: { type: "number" },
-    denoiseRadius: { type: "number" },
-    dilateRadius: { type: "number" },
-    bias: { type: "number" },
-    defaultAlbedo: { type: "number" },
+    // xatlas packs into a square of about this edge; 8192² of RGBA float is already 1 GB of rasterizer
+    size: { type: "number", int: true, min: 8, max: 16384 },
+    samples: { type: "number", int: true, min: 1, max: 1_000_000 },
+    bounces: { type: "number", int: true, min: 0, max: 64 },
+    // a gain, not a count: 0 kills the bounce, 1 is physical
+    indirect: { type: "number", min: 0, max: 100 },
+    batch: { type: "number", int: true, min: 1, max: 1_000_000 },
+    padding: { type: "number", int: true, min: 0, max: 256 },
+    // 0 means "let xatlas pick the scale that fills `size`"
+    texelsPerUnit: { type: "number", min: 0, max: 4096 },
+    denoiseRadius: { type: "number", int: true, min: 0, max: 16 },
+    dilateRadius: { type: "number", int: true, min: 0, max: 256 },
+    // a multiple of the neighbourhood median, so 1 clamps every texel above it and 0 disables the pass
+    fireflyThreshold: { type: "number", min: 0, max: 1000 },
+    // 0 means "1e-4 of the scene diagonal"
+    bias: { type: "number", min: 0 },
+    defaultAlbedo: { type: "number", min: 0, max: 1 },
     ao: { type: "boolean" },
-    aoDistance: { type: "number" },
-    exposure: { type: "number" },
+    // 0 means "5% of the scene diagonal"
+    aoDistance: { type: "number", min: 0 },
+    // 0 means "the 95th percentile of the atlas"
+    exposure: { type: "number", min: 0 },
     out: { type: "string" },
     name: { type: "string" },
     exr: { type: "boolean" },
@@ -196,12 +237,17 @@ export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>
   },
   node: {
     enabled: { type: "boolean", values: ["true", "false", "occluder"] },
-    radius: { type: "number" },
-    density: { type: "number" },
-    probe: { type: "number" },
+    radius: { type: "number", min: 0 },
+    // 0 means "the scene's own texel density"
+    density: { type: "number", min: 0 },
+    // an equirect narrower than 4 texels is smaller than a mip and the scene walk drops it
+    probe: { type: "number", int: true, min: 4, max: 8192 },
+    // 0 means "no limit" — the probe reaches wherever it is one of the two nearest
+    influence: { type: "number", min: 0 },
   },
   material: {
-    albedo: { type: "numbers", length: 3 },
+    // a linear reflectance: above 1 a surface returns more light than it received and the bake diverges
+    albedo: { type: "numbers", length: 3, min: 0, max: 1 },
   },
 };
 

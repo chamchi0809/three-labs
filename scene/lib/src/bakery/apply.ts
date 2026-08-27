@@ -1,7 +1,7 @@
 // The runtime half: what a bake writes out, and how a loaded scene picks it up. Browser safe — no
 // node imports in this file.
 import * as THREE from "three/webgpu";
-import { nearestProbe } from "./probe.ts";
+import { probeWeights, type ProbeWeight } from "./probe.ts";
 import { bakeEnabled, bakeGeometry, nodeKey } from "./scene.ts";
 
 export type LightmapManifest = {
@@ -25,6 +25,8 @@ export type LightmapManifest = {
     /** `nodeKey()` of the node that declared it */
     key: string;
     position: [number, number, number];
+    /** world-space radius it reaches, from `@bakery { influence }`. Absent is unbounded. */
+    influence?: number;
     /** equirect EXR file name, relative to the manifest */
     texture: string;
   }[];
@@ -42,7 +44,7 @@ export type LightmapManifest = {
  * The manifest format this build produces. A stale `*.lightmap.json` on disk is the most likely thing
  * a project has lying around, and it used to be read as if it were current.
  */
-export const MANIFEST_VERSION = 1;
+export const MANIFEST_VERSION = 2;
 
 /** A bake that is on a scene. Handed back by {@link applyLightmap}; there is nothing to construct. */
 export type Lightmap = {
@@ -174,12 +176,9 @@ export async function applyLightmap(
       on = false;
       writeAtlas();
       writeLights();
-      for (const m of materials) {
-        m.lightMap = null;
-        if (ao && m.aoMap === ao) m.aoMap = null;
-        m.needsUpdate = true;
-      }
-      // `restore()` puts back the envMap and its intensity, so a probe leaves no trace either
+      // `restore()` puts every slot back the way it found it — the lightMap and its intensity, the
+      // aoMap, the envMap and its intensity, and any geometry or material this swapped — so both the
+      // atlas and the probes leave no trace, including on a model that arrived with maps of its own
       restore();
       if (owned) {
         texture.dispose();
@@ -209,12 +208,6 @@ function attach(
   restore: () => void;
 } {
   const byKey = new Map(manifest.meshes.map((m) => [m.key, m]));
-  // three reads the lightmap from the uv1 attribute only when the texture says so. `flipY` is left
-  // alone on purpose: the atlas is stored bottom up, which is the default for both a loaded image
-  // (flipY true) and a DataTexture (flipY false).
-  texture.channel = 1;
-  if (ao) ao.channel = 1;
-
   const all: THREE.Mesh[] = [];
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) all.push(o as THREE.Mesh);
@@ -224,29 +217,48 @@ function attach(
     for (const m of ([] as THREE.Material[]).concat(mesh.material)) users.set(m, [...(users.get(m) ?? []), mesh]);
   }
 
-  // Which probe each mesh reflects, decided before any material is touched: `envMap` is a per-material
-  // slot, so a material used on both sides of a Voronoi boundary has to be cloned per probe the same way
-  // an unbaked user forces a clone.
+  // Which probes each mesh reflects, decided before any material is touched: `envMap` is a per-material
+  // slot, so a material used on both sides of a probe boundary has to be cloned per blend the same way
+  // an unbaked user forces a clone. The weights are rounded first — a blend is a texture, and two meshes
+  // a hair apart must not each get one.
   const placed = probes.length ? (manifest.probes ?? []) : [];
   if (placed.length) root.updateMatrixWorld(true);
-  const probeOf = new Map<THREE.Mesh, number>(
-    all.map((mesh) => [mesh, placed.length ? nearestProbe(centre(mesh), placed) : -1]),
+  const blendOf = new Map<THREE.Mesh, ProbeWeight[]>(
+    all.map((mesh) => [mesh, placed.length ? quantize(probeWeights(centre(mesh), placed)) : []]),
   );
+  const probeKey = (mesh: THREE.Mesh) =>
+    (blendOf.get(mesh) ?? []).map((p) => `${p.index}:${p.weight.toFixed(3)}`).join("+");
 
-  // everything is checked before anything is touched: a half-applied atlas is worse than none
-  const targets = all.flatMap((mesh) => {
+  // Everything is checked before anything is touched: a half-applied atlas is worse than none. Which
+  // also means leaving nothing behind when the check fails — `bakeGeometry()` allocates a fresh
+  // non-indexed geometry per mesh, and throwing out of the middle of the walk used to drop every one
+  // built so far on the floor, unreferenced and never disposed.
+  const targets: { mesh: THREE.Mesh; entry: LightmapManifest["meshes"][number]; geometry: THREE.BufferGeometry }[] = [];
+  const built = () => targets.filter((t) => t.geometry !== t.mesh.geometry).map((t) => t.geometry);
+  for (const mesh of all) {
     const entry = byKey.get(nodeKey(root, mesh));
-    if (!entry) return [];
+    if (!entry) continue;
     const geometry = bakeGeometry(mesh);
-    const count = geometry.getAttribute("position").count;
+    // a mesh that lost its position attribute since the bake reads as 0 vertices, which is the same
+    // "this is not what was baked" the count mismatch is
+    const count = geometry.getAttribute("position")?.count ?? 0;
     if (count !== entry.vertices) {
+      if (geometry !== mesh.geometry) geometry.dispose();
+      for (const g of built()) g.dispose();
       throw new Error(
         `tscene/bakery: "${entry.key}" has ${count} vertices but the lightmap was baked from ${entry.vertices} — rebake`,
       );
     }
-    return [{ mesh, entry, geometry }];
-  });
+    targets.push({ mesh, entry, geometry });
+  }
   const baked = new Set(targets.map((t) => t.mesh));
+
+  // past the last throw, so the textures the caller handed in are only mutated once this will finish.
+  // three reads the lightmap from the uv1 attribute only when the texture says so. `flipY` is left
+  // alone on purpose: the atlas is stored bottom up, which is the default for both a loaded image
+  // (flipY true) and a DataTexture (flipY false).
+  texture.channel = 1;
+  if (ao) ao.channel = 1;
 
   const materials = new Set<THREE.MeshStandardMaterial>();
   const envs = new Map<THREE.MeshStandardMaterial, number>();
@@ -259,9 +271,9 @@ function attach(
    * different probes. Only meshes under this root are counted; one shared with a second scene is beyond
    * what a traversal can see.
    */
-  const litMaterial = (material: THREE.Material, probe: number): THREE.MeshStandardMaterial => {
+  const litMaterial = (material: THREE.Material, probe: string): THREE.MeshStandardMaterial => {
     const shared = users.get(material) ?? [];
-    const split = shared.some((m) => baked.has(m) && probeOf.get(m) !== probe);
+    const split = shared.some((m) => baked.has(m) && probeKey(m) !== probe);
     if (shared.every((m) => baked.has(m)) && !split) return material as THREE.MeshStandardMaterial;
     const id = `${material.uuid}:${probe}`;
     let clone = clones.get(id);
@@ -271,6 +283,28 @@ function attach(
       undo.push(() => clone!.dispose());
     }
     return clone;
+  };
+
+  /**
+   * The `envMap` a mesh gets. One probe is that probe's own texture, shared; two is a lerp of them,
+   * built once per rounded blend and disposed with everything else. three has one `envMap` slot and no
+   * mixing between two, so the mixing is here, on the pixels, and PMREM sees a single map either way.
+   */
+  const blends = new Map<string, THREE.Texture | undefined>();
+  const probeMap = (mesh: THREE.Mesh): THREE.Texture | undefined => {
+    const weights = blendOf.get(mesh) ?? [];
+    if (!weights.length) return undefined;
+    const near = probes[weights[0]!.index];
+    if (weights.length === 1) return near;
+    const key = probeKey(mesh);
+    if (!blends.has(key)) {
+      const blend = blendProbes(near, probes[weights[1]!.index], weights[1]!.weight);
+      if (blend) undo.push(() => blend.dispose());
+      blends.set(key, blend);
+    }
+    // a probe whose pixels are not readable — a compressed texture, a GPU-only render target — cannot
+    // be lerped; the nearer one on its own is what the Voronoi cells always gave
+    return blends.get(key) ?? near;
   };
 
   for (const { mesh, entry, geometry } of targets) {
@@ -285,9 +319,9 @@ function attach(
     geometry.setAttribute("uv1", new THREE.BufferAttribute(decodeFloats(entry.uv), 2));
     mesh.geometry = geometry;
 
-    const probe = probeOf.get(mesh) ?? -1;
+    const env = probeMap(mesh);
     const list = ([] as THREE.Material[]).concat(mesh.material);
-    const lit = list.map((m) => litMaterial(m, probe));
+    const lit = list.map((m) => litMaterial(m, probeKey(mesh)));
     if (lit.some((m, i) => m !== list[i])) {
       const original = mesh.material;
       undo.push(() => (mesh.material = original));
@@ -301,17 +335,26 @@ function attach(
         console.warn(`tscene/bakery: "${entry.key}" uses a ${m.type}, which has no lightMap — the atlas cannot show`);
         continue;
       }
+      // through the undo stack, exactly as envMap goes: these slots are not necessarily empty. A glTF
+      // routinely arrives with its own aoMap, and `dispose()` used to null the slot rather than put
+      // that map back — so turning a lightmap off cost the model an occlusion texture for good.
+      // `lightMapIntensity` rides along because the handle's writers zero it and never restore it.
+      if (!materials.has(m)) {
+        const before: Partial<THREE.MeshStandardMaterial> = { lightMap: m.lightMap, lightMapIntensity: m.lightMapIntensity };
+        if ("aoMap" in m) before.aoMap = m.aoMap;
+        undo.push(() => Object.assign(m, before, { needsUpdate: true }));
+      }
       m.lightMap = texture;
       if (ao && "aoMap" in m) m.aoMap = ao;
 
       // The specular half of the bake. Only a metal needs it: a dielectric's diffuse response to the
       // same light is already in the atlas, and an env map would add it a second time — so the gain is
       // scaled by metalness, which leaves a partial metal double counting that fraction of it.
-      if (probe >= 0 && "envMap" in m && m.metalness > 0 && !envs.has(m)) {
+      if (env && "envMap" in m && m.metalness > 0 && !envs.has(m)) {
         const before = { envMap: m.envMap, envMapIntensity: m.envMapIntensity };
         undo.push(() => Object.assign(m, before));
         envs.set(m, m.metalness * (m.envMapIntensity ?? 1));
-        m.envMap = probes[probe]!;
+        m.envMap = env;
       }
 
       m.needsUpdate = true;
@@ -322,7 +365,90 @@ function attach(
   return { meshes: targets.length, materials, envs, restore: () => undo.forEach((f) => f()) };
 }
 
-/** The world-space middle of a mesh — what decides which probe's cell it is in. */
+/**
+ * Weights rounded to sixteenths and renormalized. Every distinct blend costs a texture and a PMREM,
+ * so two meshes whose weights differ in the third decimal have to come out identical here — and a
+ * contribution under a thirty-second rounds to nothing, which drops the second probe entirely.
+ */
+function quantize(weights: ProbeWeight[]): ProbeWeight[] {
+  const rounded = weights
+    .map((p) => ({ index: p.index, weight: Math.round(p.weight * 16) }))
+    .filter((p) => p.weight > 0);
+  const total = rounded.reduce((sum, p) => sum + p.weight, 0);
+  return total > 0 ? rounded.map((p) => ({ index: p.index, weight: p.weight / total })) : [];
+}
+
+/** An equirect's pixels as floats, whatever the loader stored them as. */
+type Pixels = { width: number; height: number; read: (x: number, y: number, channel: number) => number };
+
+function pixels(texture: THREE.Texture | undefined): Pixels | undefined {
+  const image = texture?.image as { width?: number; height?: number; data?: ArrayLike<number> } | undefined;
+  const { width, height, data } = image ?? {};
+  if (!width || !height || !data) return undefined;
+  const stride = Math.floor(data.length / (width * height));
+  if (stride < 3) return undefined;
+  // EXRLoader's default is half floats, which are a Uint16Array of bit patterns and not numbers
+  const half = texture!.type === THREE.HalfFloatType;
+  return {
+    width,
+    height,
+    read: (x, y, channel) => {
+      const v = data[(y * width + x) * stride + channel] ?? 0;
+      return half ? THREE.DataUtils.fromHalfFloat(v) : v;
+    },
+  };
+}
+
+/** Bilinear, in the equirect's own uv: `u` wraps around the horizon, `v` clamps at the poles. */
+function sample(p: Pixels, u: number, v: number, channel: number): number {
+  const x = u * p.width - 0.5;
+  const y = v * p.height - 0.5;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const wrap = (i: number) => ((i % p.width) + p.width) % p.width;
+  const clamp = (i: number) => Math.min(p.height - 1, Math.max(0, i));
+  const [xa, xb] = [wrap(x0), wrap(x0 + 1)];
+  const [ya, yb] = [clamp(y0), clamp(y0 + 1)];
+  return (
+    (p.read(xa, ya, channel) * (1 - fx) + p.read(xb, ya, channel) * fx) * (1 - fy) +
+    (p.read(xa, yb, channel) * (1 - fx) + p.read(xb, yb, channel) * fx) * fy
+  );
+}
+
+/**
+ * Two probes lerped into one equirect, `t` of the way from `a` to `b`. Resampled onto whichever of the
+ * two is larger, so probes of different sizes blend as happily as matching ones. Float, always: what a
+ * probe holds is a reflection of a lamp, and half of the range that makes it a reflection is above 1.
+ */
+function blendProbes(a: THREE.Texture | undefined, b: THREE.Texture | undefined, t: number): THREE.DataTexture | undefined {
+  const pa = pixels(a);
+  const pb = pixels(b);
+  if (!pa || !pb) return undefined;
+  const width = Math.max(pa.width, pb.width);
+  const height = Math.max(pa.height, pb.height);
+  const data = new Float32Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const v = (y + 0.5) / height;
+    for (let x = 0; x < width; x++) {
+      const u = (x + 0.5) / width;
+      const at = (y * width + x) * 4;
+      for (let c = 0; c < 3; c++) data[at + c] = sample(pa, u, v, c) * (1 - t) + sample(pb, u, v, c) * t;
+      data[at + 3] = 1;
+    }
+  }
+  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  // the same slot the probes themselves were loaded into, so PMREM treats it identically
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/** The world-space middle of a mesh — what decides which probes reach it. */
 function centre(mesh: THREE.Mesh): [number, number, number] {
   if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
   const v = mesh.geometry.boundingBox!.getCenter(new THREE.Vector3()).applyMatrix4(mesh.matrixWorld);

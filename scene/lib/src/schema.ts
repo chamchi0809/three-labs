@@ -22,8 +22,12 @@ export type Method = { params: Param[]; returns: TypeRef };
 export type PropInfo = { type: TypeRef; readonly: boolean; doc?: string };
 export type ClassInfo = {
   bases: string[];
-  /** first construct signature, in order */
-  ctor: Param[];
+  /**
+   * Every construct signature, in declaration order — `color(#fff)` and `color(1, .5, 0)` are two
+   * different ones, and reflecting only the first made the second an error the language never had.
+   * Always at least one entry: a class with no constructor of its own reflects as `[[]]`.
+   */
+  ctors: Param[][];
   props: Record<string, PropInfo>;
   /** call signatures of each public method — `lookAt(x, y, z);` is checked against these */
   methods: Record<string, Method[]>;
@@ -71,7 +75,7 @@ export type Schema = {
   declared?: string[];
 };
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /** the modules to reflect, in the order a later one shadows an earlier one: addons first, entry over them */
 const specifiers = (entry: string, modules: string[], addons: boolean | undefined) =>
@@ -187,7 +191,8 @@ const paramsOf = (checker: ts.TypeChecker, sig: ts.Signature | undefined, ref: t
 function classInfo(checker: ts.TypeChecker, symbol: ts.Symbol, instance: ts.Type, ref: ts.Node): ClassInfo {
   const decl = symbol.declarations?.find(ts.isClassDeclaration);
   const staticType = checker.getTypeOfSymbolAtLocation(symbol, ref);
-  const ctor = paramsOf(checker, staticType.getConstructSignatures()[0], ref);
+  const signatures = staticType.getConstructSignatures();
+  const ctors = signatures.length ? signatures.map((s) => paramsOf(checker, s, ref)) : [[]];
 
   const props: Record<string, PropInfo> = {};
   const methods: Record<string, Method[]> = {};
@@ -212,7 +217,7 @@ function classInfo(checker: ts.TypeChecker, symbol: ts.Symbol, instance: ts.Type
 
   return {
     bases: (instance.getBaseTypes() ?? []).map((b) => b.getSymbol()?.getName()).filter((n): n is string => !!n),
-    ctor,
+    ctors,
     props,
     methods,
     copyable,

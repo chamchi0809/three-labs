@@ -28,7 +28,7 @@ group #stage {
 
 | | |
 |---|---|
-| [docs/language.md](./docs/language.md) | `.tscene` language reference — nodes, properties, values, variables, templates, imports, builtins, diagnostics |
+| [docs/language.md](./docs/language.md) | `.tscene` language reference — nodes, properties, values, variables, templates, overrides, imports, builtins, diagnostics |
 | [docs/api](./docs/api/index.md) | runtime and tooling API reference, generated from the source by typedoc |
 | [docs/bakery.md](./docs/bakery.md) | `tscene/bakery` — path-traced lightmaps, baked on a headless WebGPU device in Node |
 
@@ -43,10 +43,11 @@ group #stage {
 | `{ ... }` | **instance properties only**. Constructor-only settings like `BoxGeometry.widthSegments` go in `boxGeometry(1,1,1,2,2,2)` |
 | property names | three's own camelCase (`castShadow`), plus dotted paths (`material.opacity`) and method calls (`lookAt(0,1,0);`) |
 | node and value names | the three class name with a lowercase first letter (`meshStandardMaterial`) — `three/addons` included (`loftGeometry`, `roomEnvironment`) |
-| values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ capStart: true }` |
+| values | `vec3(...)` `color(#ff8000)` `euler(45deg, 1rad, 0)` `texture(url)` `hdr(url)` `exr(url)` `ktx2(url)` `gltf(url)` `DoubleSide` `[0, 1]` `{ capStart: true }` |
 | value chains | `.name` and `.name(...)` after a value that is already closed, `[i]` to index a list — `splineCurve(pts).getPoints(120)` |
 | language functions | `var(--x, fallback)` `calc(...)` `each(--i, n, value)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
 | `calc()` | `+ - * /` and parens, plus `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sqrt` `exp` `log` `pow` `abs` `sign` `min` `max` `mod` `clamp` `smoothstep` `floor` `ceil` `round` `pi` |
+| `@override sel { ... }` | a body appended to every node a selector reaches — `@override #arena mesh.enemy { castShadow: true; }` |
 | `@bakery { ... }` | settings for a tool rather than for three — the [lightmap baker](./docs/bakery.md)'s, on the sheet, a node or a material |
 
 ## Runtime
@@ -89,9 +90,10 @@ disposeScene(root);        // disposes geometries/materials/textures and unparen
 (swap it out with the `load` option); a module reads the sheets bundled alongside it — no runtime fetch.
 `loadSceneFromURL(url)` fetches the file and uses that URL as the base.
 
-Loader options: `{ manager, draco, ktx2 }` — a shared `LoadingManager`, the draco decoder path, the ktx2
-transcoder path. A sheet that names a baked lightmap in `@bakery { lightmap }` gets it applied on load,
-with the handle on `root.userData.lightmap`; `{ lightmap: false }` skips that.
+Loader options: `{ manager, draco, ktx2 }` — a shared `LoadingManager`, the draco decoder path, and the
+ktx2 transcoder path plus the renderer whose support it probes (`ktx2()` needs it; so does a `gltf()`
+whose textures are ktx2). A sheet that names a baked lightmap in `@bakery { lightmap }` gets it applied
+on load, with the handle on `root.userData.lightmap`; `{ lightmap: false }` skips that.
 
 Runtime errors carry their location: `main.tscene:12:5: ...`.
 
@@ -210,20 +212,27 @@ Editors talk to the LSP server: `tscene-lsp --stdio`. It supports:
 | Feature | Details |
 | --- | --- |
 | diagnostics | refreshed while typing, no save needed, following `@import`s |
-| completion | position sensitive — properties of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths and the node_modules packages that ship sheets inside `@import "`, the at-rules legal at the cursor after `@`, the settings of the position inside `@bakery {`, and the fields of the options bag inside a `{ }` whose slot has a type (each of the last two: its keys, then that key's values) |
-| hover | class signature, base chain and three's own TSDoc; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys; options-bag fields |
-| signature help | highlights the current argument inside `boxGeometry(` |
+| completion | position sensitive — properties **and methods** of the class plus node names and builtins in a body, constructors/constants of the type after `property:`, templates after `.`, the parameter's type inside an argument, the variables visible at that point inside `var(` (before the cursor, enclosing blocks, top level of imported files), sibling paths and the node_modules packages that ship sheets inside `@import "`, the at-rules legal at the cursor after `@`, the settings of the position inside `@bakery {`, and the fields of the options bag inside a `{ }` whose slot has a type (each of the last two: its keys, then that key's values) |
+| hover | every constructor three declares (`color(#fff)` and `color(1, .5, 0)` are two of them), base chain and three's own TSDoc; every overload of a bare method call; a loader's own signature, not the class it hands back; property types (to the end of a dotted path, including the note that a read-only field is assigned through `copy()`); `--var` values; template declarations; three constants; `@bakery` keys; options-bag fields |
+| signature help | highlights the current argument inside `boxGeometry(`, `lookAt(` or `texture(` — and picks the overload with a slot for the argument being typed |
 | go to definition | templates (`.glow`), variables (`var(--x)`), `#id` (`ref(#a)`), `@import` paths (also ctrl-clickable as document links) |
 | find references / rename | `--var`, `#id`, `.template` — across every `.tscene` in the workspace, multi-root included. Rename validates the cursor position and the new name first (prepareRename). It follows the declaration↔use pairs `expand()` actually resolved, so a shadowed variable of the same name is left alone and a `var()` passed in as a template parameter is renamed along with it |
 | symbol outline | the scene graph as-is |
 | formatting | reprints the whole document (casing included) |
 | quick fixes | casing typos |
-| colour swatches | hex literals (`color(#ff8000)`), edited back as `#rrggbb[aa]` — an `#id` is left alone |
+| colour swatches | every colour a sheet can write — `#ff8000`, `color("red")` and `color(1, .5, 0)` — each edited back in the form it replaces (quotes kept, an exact colour name offered first, three numbers written back as three numbers in the working colour space). An `#id` is left alone |
 | semantic tokens | classified from the token stream, so a half-typed sheet still highlights |
 | folding | every `{ }` block and every `/* */` comment |
 
 VS Code picks this server up through the `scene/vscode/` extension (which adds highlighting, snippets and
-workspace check/fix commands).
+workspace check/fix commands, and bundles a copy of the server for workspaces that never installed tscene).
+
+The server itself is the one part of tscene with dependencies of its own, and they are optional peers so
+that an app importing `loadScene` never installs them:
+
+```bash
+npm i -D vscode-languageserver vscode-languageserver-textdocument   # only to run tscene-lsp yourself
+```
 
 ```ts
 // from a program
@@ -238,9 +247,17 @@ export default defineConfig({ plugins: [threeScene()] });
 ```
 
 One sheet is one module (`SceneModule`). An `@import` becomes an import of that module, and the relative
-paths a `texture()`/`gltf()` can be handed — a literal or a `var(--x)` this sheet declares — become `?url` imports, so the bundler handles hashing and copying. Every
-build and hot update runs the checker; failures show up in the overlay. Options:
+paths a `texture()`/`gltf()` can be handed — a literal, or a `var(--x)` declared in this sheet or in any
+sheet it imports — become `?url` imports, so the bundler handles hashing and copying. A url from an
+imported sheet is resolved against *that* sheet's directory, which is what it was written relative to.
+Every build and hot update runs the checker; failures show up in the overlay. Options:
 `{ entry, modules, addons, declare, check, hmr }`.
+
+The generated module carries a source map for the two kinds of line that can fail in the bundler rather
+than at runtime — the `import` an `@import` becomes and the `?url` import a `texture()` becomes — so
+"cannot resolve ./w.png" points at the line of the sheet that asked for it. Nothing else is mapped: the
+sheet's source reaches the runtime verbatim, and the runtime reports its own errors at real sheet
+positions already.
 
 Saving rebuilds the scene and nothing else. `mountScene` already listens; `onSceneChange` is the raw
 signal behind it (passing the module object you imported is fine, the current source is looked up for
@@ -281,5 +298,7 @@ from the `NPM_PAT` repository secret (an npm automation token with publish right
 
 ## Not included
 
-- Selector-based overrides (post-hoc rules like `.enemy { ... }`) — the nesting tree covers enough.
-- Loaders other than GLTF; colour swatches on anything but a hex literal.
+- Anything a selector does beyond descendants: no `>`, `+`, `~`, `:nth-child()`, no specificity ranking.
+  `@override` rules apply in source order and the last one wins.
+- Loaders beyond `texture` / `hdr` / `exr` / `ktx2` / `gltf` — anything else is a `registry` entry.
+- Colour swatches on anything but a hex literal.

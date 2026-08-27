@@ -10,15 +10,20 @@ import { threeRegistry } from "../three.ts";
 import { resolveSheet } from "../tools.ts";
 import sharp from "sharp";
 
-let shimmed = false;
+let uninstall: (() => void) | undefined;
 
 /** Teaches `fetch` about `file:` urls and swaps three's ImageLoader for sharp. Idempotent. */
 export function installNodeLoaders(): void {
-  if (shimmed) return;
-  shimmed = true;
+  if (uninstall) return;
 
   // undici has no file: handler, and GLTFLoader/FileLoader both go through fetch
   const upstream = globalThis.fetch;
+  const imageLoad = THREE.ImageLoader.prototype.load;
+  uninstall = () => {
+    globalThis.fetch = upstream;
+    THREE.ImageLoader.prototype.load = imageLoad;
+    uninstall = undefined;
+  };
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (!url.startsWith("file:")) return upstream(input as RequestInfo, init);
@@ -51,6 +56,18 @@ export function installNodeLoaders(): void {
       .catch(onError ?? (() => {}));
     return {} as HTMLImageElement;
   } as typeof THREE.ImageLoader.prototype.load;
+}
+
+/**
+ * Puts `fetch` and `ImageLoader` back the way {@link installNodeLoaders} found them — for a process
+ * that bakes and then goes on to do something else with a `fetch` it expects to be its own. Idempotent,
+ * and a no-op if the shims were never installed.
+ *
+ * `self` and `ProgressEvent` stay. Both are `??=` additions that nothing can tell apart from the real
+ * thing, and a loader still in flight reads them.
+ */
+export function uninstallNodeLoaders(): void {
+  uninstall?.();
 }
 
 /** The bytes behind a texture url: off disk, off the network when a sheet points at a CDN, or out of

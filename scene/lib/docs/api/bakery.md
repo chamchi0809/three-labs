@@ -75,6 +75,7 @@ type LightmapManifest = {
      vertices: number;
   }[];
   probes?: {
+     influence?: number;
      key: string;
      position: [number, number, number];
      texture: string;
@@ -115,17 +116,57 @@ const { files } = await bakeSceneFile("room.tscene", { out: "public/lightmaps", 
 | <a id="height-1"></a> `height` | `number` | - |
 | <a id="intensity-1"></a> `intensity` | `number` | `lightMapIntensity` that undoes the exposure baked into an 8-bit texture |
 | <a id="meshes-1"></a> `meshes` | \{ `key`: `string`; `uv`: `string`; `vertices`: `number`; \}[] | - |
-| <a id="probes-1"></a> `probes?` | \{ `key`: `string`; `position`: \[`number`, `number`, `number`\]; `texture`: `string`; \}[] | The reflection probes, in the order the bake walked them: an equirect EXR each, plus the world position it was captured at, which is what picks the one a mesh reflects. |
+| <a id="probes-1"></a> `probes?` | \{ `influence?`: `number`; `key`: `string`; `position`: \[`number`, `number`, `number`\]; `texture`: `string`; \}[] | The reflection probes, in the order the bake walked them: an equirect EXR each, plus the world position it was captured at, which is what picks the one a mesh reflects. |
 | <a id="texture-1"></a> `texture` | `string` | texture file name, relative to the manifest |
 | <a id="version"></a> `version` | `number` | manifest format. This build writes and reads [MANIFEST\_VERSION](#manifest_version). |
 | <a id="width-1"></a> `width` | `number` | - |
+
+***
+
+### PlacedProbe
+
+```ts
+type PlacedProbe = {
+  influence?: number;
+  position: readonly number[];
+};
+```
+
+A placed probe as [probeWeights](#probeweights) needs it. `influence` 0 or absent means unbounded.
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="influence"></a> `influence?` | `number` |
+| <a id="position"></a> `position` | readonly `number`[] |
+
+***
+
+### ProbeWeight
+
+```ts
+type ProbeWeight = {
+  index: number;
+  weight: number;
+};
+```
+
+A probe and how much of `position`'s reflection is its. The weights of a blend sum to 1.
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="index"></a> `index` | `number` |
+| <a id="weight"></a> `weight` | `number` |
 
 ## Variables
 
 ### MANIFEST\_VERSION
 
 ```ts
-const MANIFEST_VERSION: 1 = 1;
+const MANIFEST_VERSION: 2 = 2;
 ```
 
 The manifest format this build produces. A stale `*.lightmap.json` on disk is the most likely thing
@@ -357,32 +398,6 @@ Browser-side convenience — the baker writes both files with matching names.
 
 ***
 
-### nearestProbe()
-
-```ts
-function nearestProbe(position, probes): number;
-```
-
-Which probe `position` reflects: the nearest one, or -1 when there are none.
-
-ponytail: nearest centre, so the probes partition the scene into Voronoi cells with no say from the
-author beyond where they put them. An influence volume per probe (Unity's box, Unreal's sphere) and a
-blend between the two nearest are the upgrade; both need a second field in the manifest, not a
-different shape here.
-
-#### Parameters
-
-| Parameter | Type |
-| ------ | ------ |
-| `position` | readonly `number`[] |
-| `probes` | readonly \{ `position`: readonly `number`[]; \}[] |
-
-#### Returns
-
-`number`
-
-***
-
 ### nodeKey()
 
 ```ts
@@ -435,6 +450,35 @@ last scanline is the one under the probe.
 #### Returns
 
 \[`number`, `number`, `number`\]
+
+***
+
+### probeWeights()
+
+```ts
+function probeWeights(position, probes): ProbeWeight[];
+```
+
+The probes `position` reflects: the two nearest that reach it, weighted, nearest first. Empty when
+every probe's influence volume excludes it — which is what an author who sets `influence` at all is
+asking for, and why the default is unbounded.
+
+The weight is inverse distance times a linear falloff to each probe's own edge. Distance alone is
+what makes a mesh sitting on a probe reflect that probe and not half of its neighbour; the falloff
+is what stops a probe from vanishing abruptly at the boundary of its volume. With no influence set
+anywhere the falloffs are all 1, so the two nearest split the reflection as `d1/(d0+d1)` — the
+Voronoi cells this used to hand out, with the seam between two cells softened into a gradient.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `position` | readonly `number`[] |
+| `probes` | readonly [`PlacedProbe`](#placedprobe)[] |
+
+#### Returns
+
+[`ProbeWeight`](#probeweight)[]
 
 ## References
 

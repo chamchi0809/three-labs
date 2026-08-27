@@ -17,6 +17,8 @@ Every option below can also live in the scene's own \`@bakery { … }\` block; a
   --bias <units>       ray origin offset along the normal; 0 picks 1e-4 of the scene diagonal
   --padding <texels>   space around each chart (default: --dilate)
   --texels-per-unit <n>  fixed lightmap density; 0 fits the atlas (default 0)
+  --fireflies <n>      clamp a texel more than n times its neighbours' median, 0 to keep them
+                       (default 4)
   --denoise <radius>   edge-aware blur, 0 to disable (default 1)
   --dilate <texels>    lit-region growth past chart edges (default 4)
   --default-albedo <n>   reflectance of a material with no colour at all (default 0.8)
@@ -28,6 +30,8 @@ Every option below can also live in the scene's own \`@bakery { … }\` block; a
   --exr                also write 32-bit float irradiance
   --only <keys>        re-trace only these meshes (comma separated), keeping the rest of the
                        atlas that is already there. Needs a previous bake made with --exr.
+
+Ctrl-C stops at the next dispatch and writes nothing; a second one quits immediately.
 `;
 
 const { values, positionals } = parseArgs({
@@ -43,6 +47,7 @@ const { values, positionals } = parseArgs({
     bias: { type: "string" },
     padding: { type: "string" },
     "texels-per-unit": { type: "string" },
+    fireflies: { type: "string" },
     denoise: { type: "string" },
     dilate: { type: "string" },
     "default-albedo": { type: "string" },
@@ -112,7 +117,20 @@ const flush = () => {
 const ticker = tty ? setInterval(paint, 1000) : undefined;
 ticker?.unref();
 
+// Ctrl-C between two dispatches, rather than whenever the OS gets round to killing the process: a bake
+// holds a GPU device and a pool of worker threads, and node's default SIGINT leaves both to the driver.
+// The second one is the escape hatch for a stage that is inside a call the signal cannot reach.
+const stop = new AbortController();
+let interrupted = false;
+process.on("SIGINT", () => {
+  if (interrupted) process.exit(130);
+  interrupted = true;
+  stop.abort(new Error("interrupted"));
+  process.stderr.write(`${tty ? "\r" : ""}${"tscene-bake: stopping — Ctrl-C again to quit now".padEnd(48)}\n`);
+});
+
 const result = await bakeSceneFile(positionals[0]!, {
+  signal: stop.signal,
   out: values.out,
   name: values.name,
   exr: values.exr,
@@ -125,6 +143,7 @@ const result = await bakeSceneFile(positionals[0]!, {
   bias: num("bias", values.bias),
   padding: num("padding", values.padding),
   texelsPerUnit: num("texels-per-unit", values["texels-per-unit"]),
+  fireflyThreshold: num("fireflies", values.fireflies),
   denoiseRadius: num("denoise", values.denoise),
   dilateRadius: num("dilate", values.dilate),
   defaultAlbedo: num("default-albedo", values["default-albedo"]),
@@ -144,6 +163,15 @@ const result = await bakeSceneFile(positionals[0]!, {
     fraction = done;
     if (tty) paint();
   },
+  // a bake fails for reasons that are the user's to fix — no adapter, a mesh that moved since the last
+  // bake, a sheet that does not parse. A top-level await turns all of them into an unhandled rejection:
+  // a stack trace through the tracer, and an exit code node only started setting in v15.
+}).catch((e: unknown) => {
+  clearInterval(ticker);
+  // an interrupt is not a failure to report twice — the handler already said what happened
+  if (interrupted) process.exit(130);
+  process.stderr.write(`${tty ? "\r" : ""}${`tscene-bake: ${e instanceof Error ? e.message : String(e)}`.padEnd(48)}\n`);
+  process.exit(1);
 });
 
 clearInterval(ticker);

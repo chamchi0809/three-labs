@@ -27,8 +27,10 @@ export async function writeBake(
   const written: string[] = [];
 
   const png = join(dir, `${name}.png`);
-  // RGBA, not RGB: the alpha channel is the coverage mask, which is what a rebake and any tool
-  // reading the atlas back needs to tell "black because unlit" from "black because nothing is here"
+  // RGBA, not RGB: alpha marks the texels that hold a colour worth reading — the charts plus the rim
+  // dilate() grew around them — so a tool reading the atlas back can tell "black because unlit" from
+  // "black because nothing is here". It is not the rasterizer's chart coverage, which is a strict
+  // subset of it; the manifest's uv layout is what says where a chart actually is.
   await sharp(encodeSRGB(result), { raw: { width: result.width, height: result.height, channels: 4 } })
     .png({ compressionLevel: 9 })
     .toFile(png);
@@ -66,7 +68,14 @@ export async function writeBake(
     ...(opts.exr ? { hdr: `${name}.exr` } : {}),
     ...(result.ao ? { ao: `${name}.ao.png` } : {}),
     ...(result.probes.length
-      ? { probes: result.probes.map((p, at) => ({ key: p.key, position: p.position, texture: probeFile(name, at) })) }
+      ? {
+          probes: result.probes.map((p, at) => ({
+            key: p.key,
+            position: p.position,
+            ...(p.influence > 0 ? { influence: p.influence } : {}),
+            texture: probeFile(name, at),
+          })),
+        }
       : {}),
   };
   const json = join(dir, `${name}.lightmap.json`);

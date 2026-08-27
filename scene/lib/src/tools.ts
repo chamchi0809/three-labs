@@ -4,7 +4,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { applyFixes, expand, lineCol, parse, print, SceneSyntaxError, type Diagnostic, type Loader } from "./parse.ts";
 import { check } from "./check.ts";
-import { loadSchema, type Schema } from "./schema.ts";
+import { type Schema } from "./schema.ts";
 
 export * from "./schema.ts";
 export { check } from "./check.ts";
@@ -36,8 +36,8 @@ export const fsLoader: Loader = async (p, from) => {
 /** Parse + expand + type check one source. The parser recovers, so a typo still yields the rest. */
 export async function checkSource(text: string, file: string, schema: Schema, load: Loader = fsLoader): Promise<Diagnostic[]> {
   const sheet = parse(text, file);
-  const { nodes, diagnostics, templates } = await expand(sheet, load);
-  return [...sheet.errors, ...diagnostics, ...check(nodes, schema, templates)];
+  const { nodes, diagnostics, templates, overrides } = await expand(sheet, load);
+  return [...sheet.errors, ...diagnostics, ...check(nodes, schema, templates, overrides)];
 }
 
 /** Autofixer: identifier casing (from the checker) + canonical formatting. */
@@ -45,8 +45,11 @@ export async function fixSource(text: string, file: string, schema: Schema, load
   const sheet = parse(text, file);
   // re-printing a half-parsed sheet would silently delete whatever the parser skipped
   if (sheet.errors.length) throw new SceneSyntaxError(sheet.errors[0]!.message, sheet.errors[0]!);
-  const diagnostics = (await checkSource(text, file, schema, load)).filter((d) => d.fix && (d.file ?? file) === file);
-  return print(parse(applyFixes(text, diagnostics), file));
+  // the sheet already in hand, not checkSource(), which would parse the same text over again — and
+  // `tscene fix` runs this across every file it matched before checking any of them
+  const { nodes, diagnostics, templates, overrides } = await expand(sheet, load);
+  const fixes = [...diagnostics, ...check(nodes, schema, templates, overrides)].filter((d) => d.fix && (d.file ?? file) === file);
+  return print(parse(applyFixes(text, fixes), file));
 }
 
 export function formatDiagnostic(d: Diagnostic, sources: Map<string, string>): string {

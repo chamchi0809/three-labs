@@ -34,6 +34,17 @@
             "3": { "name": "entity.name.type.template.scene" }
           }
         },
+        {
+          "begin": "(@override)\\b",
+          "end": "(?=\\{)",
+          "beginCaptures": { "1": { "name": "keyword.control.override.scene" } },
+          "patterns": [
+            { "include": "#comment" },
+            { "name": "entity.other.attribute-name.id.scene", "match": "#[A-Za-z_][\\w-]*" },
+            { "name": "entity.other.attribute-name.class.scene", "match": "\\.[A-Za-z_][\\w-]*" },
+            { "name": "entity.name.tag.scene", "match": "[a-z][A-Za-z0-9]*" }
+          ]
+        },
         { "name": "keyword.control.bakery.scene", "match": "@bakery\\b" },
         { "name": "invalid.illegal.unknown-at-rule.scene", "match": "@[A-Za-z-]+" }
       ]

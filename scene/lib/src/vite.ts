@@ -1,8 +1,8 @@
 // Vite plugin: `import scene from './main.tscene'` gives a SceneModule, checked at build time.
 import path from "node:path";
-import { parse, type Member, type ObjectValue, type Statement, type Value } from "./parse.ts";
+import { lineCol, parse, type Member, type ObjectValue, type Statement, type Value } from "./parse.ts";
 import { BUILTINS, className, LOADERS } from "./names.ts";
-import { checkSource, formatDiagnostic, loadSchema, resolveSheet } from "./tools.ts";
+import { checkSource, formatDiagnostic, fsLoader, loadSchema, resolveSheet } from "./tools.ts";
 import type { Schema, SchemaOptions } from "./schema.ts";
 
 export type PluginOptions = Pick<SchemaOptions, "entry" | "modules" | "addons" | "cache" | "declare"> & { check?: boolean; hmr?: boolean };
@@ -52,8 +52,8 @@ function threeNames(statements: Statement[]): Set<string> {
   };
   const member = (m: Member): void => (m.kind === "node" ? object(m.object) : value(m.value));
   for (const s of statements) {
-    // a @template body is expanded into whichever node applies it, so its names count too
-    if (s.kind === "template") s.body.forEach(member);
+    // a @template or @override body is expanded into whichever node it lands on, so its names count too
+    if (s.kind === "template" || s.kind === "override") s.body.forEach(member);
     else if (s.kind !== "import") member(s);
   }
   return out;
@@ -99,54 +99,148 @@ async function byModule(names: string[], entry: string, sources: () => Record<st
 
 const ABSOLUTE = /^(\w+:|\/|data:)/;
 
+/** A url and the sheet the string was written in — which is what a relative url is relative to. */
+type Declared = { url: string; from: string };
+/** {@link Declared} plus the offset, in *this* sheet, of the loader argument that wants it. */
+type Asset = Declared & { start: number };
+
+/** Every value in a sheet, each object handed to `visit`, collecting `--name: "string"` on the way. */
+function walkSheet(statements: Statement[], visit: (o: ObjectValue) => void, vars?: Map<string, string[]>): void {
+  const value = (v: Value): void => {
+    switch (v.kind) {
+      case "object": visit(v); v.args.forEach(value); return v.body.forEach(member);
+      case "array": return v.items.forEach(value);
+      case "record": return v.entries.forEach((e) => value(e.value));
+      case "calc": value(v.left); return value(v.right);
+      case "var": return void (v.fallback && value(v.fallback));
+      case "fn": return v.args.forEach(value);
+      case "each": value(v.over); return value(v.body);
+      case "read": return value(v.target);
+      case "index": value(v.target); return value(v.at);
+      case "call": value(v.target); return v.args.forEach(value);
+    }
+  };
+  const member = (m: Member): void => {
+    if (m.kind === "node") return value(m.object);
+    if (vars && m.kind === "var" && m.value.kind === "string") vars.set(m.name, [...(vars.get(m.name) ?? []), m.value.value]);
+    value(m.value);
+  };
+  for (const s of statements) {
+    if (s.kind === "import") continue;
+    if (s.kind === "template" || s.kind === "override") s.body.forEach(member);
+    else member(s);
+  }
+}
+
+/** Every `--name: "…"` a sheet declares, at any depth. A name declared in several scopes keeps all of them. */
+function stringVars(statements: Statement[]): Map<string, string[]> {
+  const vars = new Map<string, string[]>();
+  walkSheet(statements, () => {}, vars);
+  return vars;
+}
+
+/**
+ * The same, for the sheets this one `@import`s, transitively — each url with the file that declared it.
+ * `texture(var(--wall))` here and `--wall: "./w.png"` in an imported theme is the case that needs it:
+ * the url used to stay runtime-resolved, so vite never hashed the file and a production build 404'd.
+ */
+async function importedVars(statements: Statement[], file: string): Promise<Map<string, Declared[]>> {
+  const out = new Map<string, Declared[]>();
+  const seen = new Set([file]);
+  const walk = async (stmts: Statement[], from: string): Promise<void> => {
+    for (const s of stmts) {
+      if (s.kind !== "import") continue;
+      let dep: { text: string; file: string };
+      try {
+        dep = await fsLoader(s.path, from);
+      } catch {
+        continue; // an unreadable import is the checker's to report; the bundle keeps the runtime url
+      }
+      if (seen.has(dep.file)) continue;
+      seen.add(dep.file);
+      const sheet = parse(dep.text, dep.file);
+      for (const [name, urls] of stringVars(sheet.statements)) {
+        out.set(name, [...(out.get(name) ?? []), ...urls.map((url) => ({ url, from: dep.file }))]);
+      }
+      await walk(sheet.statements, dep.file);
+    }
+  };
+  await walk(statements, file);
+  return out;
+}
+
 /**
  * Every url a `texture()` or `gltf()` in this sheet could be handed, so vite can resolve and hash the
- * file instead of the runtime guessing a url at load time. Variables are followed: `--wall: "./w.png"`
- * with `texture(var(--wall))` has to bundle `w.png` too, and a var declared in several scopes
- * contributes all of its values — a spare import costs a hash, a missing one costs the texture.
- * ponytail: this sheet's own variables only. A var an `@import`ed sheet declares stays runtime-resolved,
- * which works when the asset is already a url; expand() the imports here if that stops being enough.
+ * file instead of the runtime guessing a url at load time. Variables are followed — this sheet's own
+ * first, then the ones its imports declare — and a var declared in several scopes contributes all of
+ * its values: a spare import costs a hash, a missing one costs the texture.
  */
-function assetUrls(statements: Statement[]): string[] {
-  const vars = new Map<string, string[]>();
-  const urls: string[] = [];
-
-  const value = (v: Value, visit: (o: ObjectValue) => void): void => {
-    switch (v.kind) {
-      case "object": visit(v); v.args.forEach((a) => value(a, visit)); return v.body.forEach((m) => member(m, visit));
-      case "array": return v.items.forEach((i) => value(i, visit));
-      case "record": return v.entries.forEach((e) => value(e.value, visit));
-      case "calc": value(v.left, visit); return value(v.right, visit);
-      case "var": return void (v.fallback && value(v.fallback, visit));
-      case "fn": return v.args.forEach((a) => value(a, visit));
-      case "each": value(v.over, visit); return value(v.body, visit);
-      case "read": return value(v.target, visit);
-      case "index": value(v.target, visit); return value(v.at, visit);
-      case "call": value(v.target, visit); return v.args.forEach((a) => value(a, visit));
-    }
-  };
-  const member = (m: Member, visit: (o: ObjectValue) => void): void => {
-    if (m.kind === "node") return value(m.object, visit);
-    if (m.kind === "var" && m.value.kind === "string") vars.set(m.name, [...(vars.get(m.name) ?? []), m.value.value]);
-    value(m.value, visit);
-  };
-  const sheet = (visit: (o: ObjectValue) => void) => {
-    for (const s of statements) {
-      if (s.kind === "import") continue;
-      if (s.kind === "template") s.body.forEach((m) => member(m, visit));
-      else member(s, visit);
-    }
-  };
-
-  sheet(() => {}); // the declaration may come after the use, so the variables are collected first
-  sheet((o) => {
+function assetUrls(statements: Statement[], file: string, inherited: Map<string, Declared[]>): Asset[] {
+  // the declaration may come after the use, so the variables are collected in a pass of their own first
+  const vars = stringVars(statements);
+  const urls: Asset[] = [];
+  walkSheet(statements, (o) => {
     if (!LOADERS[o.name]) return;
     for (const a of o.args) {
-      if (a.kind === "string") urls.push(a.value);
-      else if (a.kind === "var") urls.push(...(vars.get(a.name) ?? []));
+      if (a.kind === "string") urls.push({ url: a.value, from: file, start: a.start });
+      else if (a.kind === "var") {
+        // this sheet's own declaration wins over an imported one, the same order the runtime resolves in
+        const own = vars.get(a.name);
+        const found = own ? own.map((url) => ({ url, from: file })) : (inherited.get(a.name) ?? []);
+        urls.push(...found.map((d) => ({ ...d, start: a.start })));
+      }
     }
   });
   return urls;
+}
+
+// ---------------------------------------------------------------- source map
+//
+// Most of the generated module is not a transform of the sheet's syntax: `__sceneRegister` is handed the
+// source as a string, and the runtime reports its own failures with real sheet positions already. Two
+// kinds of line *are* transforms, and they are exactly the two that fail in the bundler rather than at
+// runtime — the `import` an `@import` becomes and the `import … ?url` a `texture()` becomes. Mapping
+// those turns "cannot resolve ./w.png" into the line of the sheet that asked for it. Every other line
+// stays unmapped, which is the truth, and is why `map: null` is still wrong: null makes vite treat the
+// generated module as its own source and point a stack frame at whatever sheet line shares the number.
+//
+// The encoder is inline rather than a dependency: base64 VLQ is frozen by the source map v3 spec, this
+// only ever emits one segment per line, and the alternative is shipping a package to every consumer of
+// tscene for a plugin most of them never load.
+
+/** A zero-based position in the sheet — what a source map segment points at. */
+type Mark = { line: number; column: number };
+
+const mark = (text: string, offset: number): Mark => {
+  const { line, col } = lineCol(text, offset);
+  return { line: line - 1, column: col - 1 };
+};
+
+const BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function vlq(value: number): string {
+  let bits = value < 0 ? (-value << 1) | 1 : value << 1;
+  let out = "";
+  do {
+    const digit = bits & 31;
+    bits >>>= 5;
+    out += BASE64[bits > 0 ? digit | 32 : digit];
+  } while (bits > 0);
+  return out;
+}
+
+/** One segment per mapped generated line, always at column 0 of source 0. Unmapped lines stay empty. */
+function mappings(marks: (Mark | undefined)[]): string {
+  let line = 0;
+  let column = 0;
+  return marks
+    .map((at) => {
+      if (!at) return "";
+      const segment = vlq(0) + vlq(0) + vlq(at.line - line) + vlq(at.column - column);
+      ({ line, column } = at);
+      return segment;
+    })
+    .join(";");
 }
 
 export default function threeScene(options: PluginOptions = {}) {
@@ -185,12 +279,19 @@ export default function threeScene(options: PluginOptions = {}) {
 
       // one module per sheet: positions, relative asset paths and per-file HMR all stay honest
       const sheet = parse(code, file);
-      const lines = [`import { __sceneRegister, __sceneChanged } from "tscene";`];
+      const lines: string[] = [];
+      const marks: (Mark | undefined)[] = [];
+      /** one generated line, with the sheet offset it is a transform of when it is one */
+      const emit = (text: string, at?: number) => {
+        lines.push(text);
+        marks.push(at === undefined ? undefined : mark(code, at));
+      };
+      emit(`import { __sceneRegister, __sceneChanged } from "tscene";`);
 
       // the sheet's slice of three, named so the bundler can keep exactly it
       const modules = await byModule([...threeNames(sheet.statements)], options.entry ?? "three/webgpu", sources);
       const registry = [...modules.values()].flat();
-      for (const [spec, names] of modules) lines.push(`import { ${names.join(", ")} } from ${JSON.stringify(spec)};`);
+      for (const [spec, names] of modules) emit(`import { ${names.join(", ")} } from ${JSON.stringify(spec)};`);
 
       const imports: Record<string, string> = {};
       for (const s of sheet.statements) {
@@ -199,34 +300,37 @@ export default function threeScene(options: PluginOptions = {}) {
         const dep = posix(resolveSheet(s.path, file));
         imports[s.path] = dep;
         // registers the dep and gives vite the edge; a bare specifier stays bare so vite resolves it
-        lines.push(`import ${JSON.stringify(bare ? s.path : relative(file, dep))};`);
+        emit(`import ${JSON.stringify(bare ? s.path : relative(file, dep))};`, s.start);
       }
 
       // let vite resolve/hash the assets instead of guessing urls at runtime
       const assets = new Map<string, string>();
-      for (const url of assetUrls(sheet.statements)) {
+      const inherited: Map<string, Declared[]> = Object.keys(imports).length
+        ? await importedVars(sheet.statements, file)
+        : new Map();
+      for (const { url, from, start } of assetUrls(sheet.statements, file, inherited)) {
+        // the runtime looks an asset up by the raw string, so two sheets declaring the same relative url
+        // cannot both be kept — the first the sheet reaches wins, which is its own declaration if it has one
         if (ABSOLUTE.test(url) || assets.has(url)) continue;
+        // relative to the sheet that declared the string, but written relative to this one: the import
+        // lands in *this* sheet's generated module, and vite resolves it against that
+        const spec =
+          from === file ? (url.startsWith(".") ? url : `./${url}`) : relative(file, path.resolve(path.dirname(from), url));
         const name = `__asset${assets.size}`;
-        lines.push(`import ${name} from ${JSON.stringify(`${url.startsWith(".") ? url : `./${url}`}?url`)};`);
+        emit(`import ${name} from ${JSON.stringify(`${spec}?url`)};`, start);
         assets.set(url, name);
       }
 
       const hot = serve && options.hmr !== false;
-      lines.push(
-        `const mod = __sceneRegister({ source: ${JSON.stringify(code)}, file: ${JSON.stringify(file)},`,
-        `  imports: ${JSON.stringify(imports)}, assets: { ${[...assets].map(([url, name]) => `${JSON.stringify(url)}: ${name}`).join(", ")} },`,
-        `  registry: { ${registry.join(", ")} } });`,
-        `export default mod;`,
-      );
+      emit(`const mod = __sceneRegister({ source: ${JSON.stringify(code)}, file: ${JSON.stringify(file)},`);
+      emit(`  imports: ${JSON.stringify(imports)}, assets: { ${[...assets].map(([url, name]) => `${JSON.stringify(url)}: ${name}`).join(", ")} },`);
+      emit(`  registry: { ${registry.join(", ")} } });`);
+      emit(`export default mod;`);
       // an edited sheet re-runs this module, re-registers itself, and pokes every listener
-      if (hot) lines.push(`if (import.meta.hot) import.meta.hot.accept((m) => m && __sceneChanged(m.default));`);
-      // an empty mappings list, not `map: null`: null makes vite fall back to treating the generated
-      // module as its own source, so a stack frame from it pointed at whatever line of the sheet
-      // happened to share the number. This says "no line of the output maps to the sheet" instead,
-      // which is the truth — the generated module is not a transform of the sheet's syntax.
+      if (hot) emit(`if (import.meta.hot) import.meta.hot.accept((m) => m && __sceneChanged(m.default));`);
       return {
         code: lines.join("\n"),
-        map: { version: 3, file, sources: [file], sourcesContent: [code], names: [], mappings: "" },
+        map: { version: 3, file, sources: [file], sourcesContent: [code], names: [], mappings: mappings(marks) },
       };
     },
   };

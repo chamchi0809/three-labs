@@ -39,13 +39,24 @@ function canvasStub() {
   };
 }
 
+let adapter: Promise<GPUAdapter | null> | undefined;
+
+/**
+ * One adapter for the process. Dawn hands back a distinct object per request, each holding the driver
+ * open, and the usual opening move — `hasWebGPU()` and then `createHeadlessRenderer()` — asked twice
+ * for the same GPU. Only ever null on a machine that cannot bake, so caching the answer is safe.
+ */
+function requestAdapter(): Promise<GPUAdapter | null> {
+  installWebGPU();
+  return (adapter ??= navigator.gpu.requestAdapter({ powerPreference: "high-performance" }));
+}
+
 /**
  * Whether this machine can actually run a bake. A CI runner has Dawn but no driver behind it, so the
  * binding loads and then hands back no adapter — which is a skip, not a failure.
  */
 export async function hasWebGPU(): Promise<boolean> {
-  installWebGPU();
-  return (await navigator.gpu.requestAdapter({ powerPreference: "high-performance" })) !== null;
+  return (await requestAdapter()) !== null;
 }
 
 /** A `WebGPURenderer` that runs compute in Node. Only `computeAsync` / `getArrayBufferAsync` are usable. */
@@ -66,12 +77,12 @@ export async function createHeadlessRenderer(): Promise<THREE.WebGPURenderer> {
  * instead of a list that goes stale.
  */
 async function adapterLimits(): Promise<Record<string, number>> {
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-  if (!adapter) throw new Error("tscene/bakery: no WebGPU adapter — is there a GPU on this machine?");
+  const gpu = await requestAdapter();
+  if (!gpu) throw new Error("tscene/bakery: no WebGPU adapter — is there a GPU on this machine?");
   const limits: Record<string, number> = {};
   // GPUSupportedLimits keeps its values in prototype getters, so for-in is the way in
-  for (const key in adapter.limits) {
-    const value = (adapter.limits as unknown as Record<string, unknown>)[key];
+  for (const key in gpu.limits) {
+    const value = (gpu.limits as unknown as Record<string, unknown>)[key];
     if (typeof value === "number") limits[key] = value;
   }
   return limits;

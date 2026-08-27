@@ -167,10 +167,14 @@ is not in `lightmap.lights`.
 `@bakery { density }` on a node scales the atlas density its subtree is unwrapped at — 2 for the mesh a
 camera stands next to, 0.5 for a wall nobody reads. `texelsPerUnit` (or the automatic fit) sets the base.
 
-A mesh the bake cannot represent — skinned, instanced, batched — warns and is skipped rather than baked
-from a pose or a transform it will not be drawn with: a lightmap is one `uv1` per vertex of one geometry,
-which none of the three has. `@bakery { enabled: false }` is how to say the omission is intended and take
-the warning with it.
+A mesh the bake cannot represent — skinned, instanced, batched — warns and carries no lightmap rather than
+being baked from a pose or a transform it will not be drawn with: a lightmap is one `uv1` per vertex of one
+geometry, which none of the three has. `@bakery { enabled: false }` is how to say the omission is intended
+and take the warning with it.
+
+An `instancedMesh` is the one of those the bake still puts in the trace, because its transforms *are*
+known: every instance goes in as an occluder and emitter, exactly as `enabled: occluder` would. A forest of
+instanced trees shades and greens the ground it stands on; the trees themselves stay realtime-lit.
 
 ### Reflection probes
 
@@ -182,15 +186,30 @@ atlas leaves out: the emission of what it is looking at, because a reflection of
 
 That is the specular half of a bake, and it exists because the diffuse half cannot cover a metal: three's
 diffuse colour is `albedo * (1 - metalness)`, so a `metalness: 1` material renders the atlas as black no
-matter how good the trace was. `applyLightmap` gives each mesh the probe whose position is nearest its
-centre and puts it on that material's `envMap`, scaled by `metalness` — a dielectric's diffuse response to
-the same light is already in the atlas, and an env map would add it twice. Place probes the way every other
-baker's are placed: in the open space a viewer moves through, one per room or per visually distinct volume,
-never inside geometry.
+matter how good the trace was. `applyLightmap` puts a probe on each metallic material's `envMap`, scaled by
+`metalness` — a dielectric's diffuse response to the same light is already in the atlas, and an env map
+would add it twice. Place probes the way every other baker's are placed: in the open space a viewer moves
+through, one per room or per visually distinct volume, never inside geometry.
 
 ```scene
 object3D #probe { position: vec3(0, 1.2, 0); @bakery { probe: 256 }; }
 ```
+
+Which probe a mesh reflects is decided from its centre: the two nearest, mixed by inverse distance, so
+crossing between two of them is a gradient rather than a switch. `@bakery { influence: <units> }` bounds
+one — a mesh further off than that reflects it not at all, and one near the edge reflects it only faintly,
+so a probe fades out instead of ending. Left off, a probe is unbounded and reaches wherever it is one of the
+two nearest, which is what a scene of two or three probes wants.
+
+```scene
+object3D #kitchen { position: vec3(-4, 1.2, 0); @bakery { probe: 256; influence: 5 }; }
+object3D #hall    { position: vec3( 4, 1.2, 0); @bakery { probe: 256; influence: 5 }; }
+```
+
+A blend of two probes is one texture built on the CPU as the bake is applied, resampled onto the larger of
+the pair, so probes of different widths mix as happily as matching ones. The weights are rounded to
+sixteenths first: a texture and a PMREM per distinct blend is the cost, and two meshes a hair apart must not
+each pay it. A mesh outside every `influence` gets no `envMap` at all, which is what setting one asks for.
 
 `lightmap.environment` is the gain on them at runtime, independent of `lightmap.enabled` — a metal reflects
 whether or not the diffuse atlas is showing.
@@ -211,16 +230,17 @@ tscene-bake scenes/room.tscene --size 512 --samples 1024 --exr
 ```
 
 `--help` lists the rest (`--out`, `--name`, `--bounces`, `--indirect`, `--batch`, `--bias`, `--padding`,
-`--texels-per-unit`, `--denoise`, `--dilate`, `--default-albedo`, `--include`, `--jobs`, `--only`). Unwrap,
-rasterize and trace each print a percentage and a running estimate of what is left.
+`--texels-per-unit`, `--fireflies`, `--denoise`, `--dilate`, `--default-albedo`, `--include`, `--jobs`,
+`--only`). Unwrap, rasterize and trace each print a percentage and a running estimate of what is left.
 
-Three worth knowing:
+Four worth knowing:
 
 | | |
 | --- | --- |
 | `--indirect <gain>` | the one knob that is not physical: a gain on everything gathered past the first bounce, so an interior that bakes flat can be pushed without touching the direct light. 1 is the truth |
 | `--ao` `--ao-distance` | also write `<name>.ao.png` and put it on the materials' `aoMap`. The occlusion rides the first bounce ray, so it is free; `--ao-distance 0` picks 5% of the scene diagonal, which is a room-scale guess and the thing to set when the scene is not room-scale |
 | `--bias <units>` | ray origin offset along the normal, against self-intersection. 0 picks 1e-4 of the scene diagonal; raise it if the atlas shows shadow acne, lower it if contact shadows detach |
+| `--fireflies <n>` | how many times its neighbours' median a texel may be before the bake scales it back to that. A path tracer leaves stray bright dots — one texel that found a light nobody else did — and the denoise smears them rather than removing them. 4 by default, 0 to keep them |
 | `--exposure <n>` | the divisor that packs the atlas into the 8-bit png, undone at runtime by `lightMapIntensity` — so it decides quantization, not brightness. Left alone it is the atlas' 95th percentile, which wanders a little between bakes of a noisy scene; fix it to get the same png twice |
 
 `--jobs` is the rasterizer's worker count (one per core by default) — `--jobs 1` to rasterize on the main
@@ -250,10 +270,10 @@ layout it no longer speaks: the fix is always a re-bake.
 | collect | [`scene.ts`](../src/bakery/scene.ts) | scene → world-space triangle soup, materials, lights, sky, emissive triangle list |
 | unwrap | [`atlas.ts`](../src/bakery/atlas.ts) | lightmap uvs from xatlas (wasm), one atlas for the whole scene |
 | rasterize | [`raster.ts`](../src/bakery/raster.ts) | atlas texel → the world position and normal to shade, across `--jobs` worker threads writing into one `SharedArrayBuffer` |
-| prepare | [`tracer.ts`](../src/bakery/tracer.ts) | the BVH, the record buffer and the albedo atlas — one `TraceContext` both GPU stages run off |
+| prepare | [`bake.ts`](../src/bakery/bake.ts) + [`tracer.ts`](../src/bakery/tracer.ts) | normal maps into the texels, then the BVH, the record buffer and the albedo atlas — one `TraceContext` both GPU stages run off |
 | trace | [`tracer.ts`](../src/bakery/tracer.ts) | the estimator, as WGSL, over three-mesh-bvh's `BVHComputeData` |
 | probe | [`probe.ts`](../src/bakery/probe.ts) + `tracer.ts` | one equirect of radiance per placed probe, from the same estimator and the same context |
-| filter | [`filter.ts`](../src/bakery/filter.ts) | edge-aware denoise, then dilation past the chart edges so bilinear taps never read black |
+| filter | [`filter.ts`](../src/bakery/filter.ts) | firefly clamp, edge-aware denoise, then dilation past the chart edges so bilinear taps never read black |
 | pack | [`io.ts`](../src/bakery/io.ts) | PNG / EXR / manifest |
 
 The CLI prints one line per stage, and a stage is timed from its own first report to the next one's —
@@ -264,8 +284,17 @@ already reported itself finished and printed `0s`.
 The estimator is the part worth reading twice. It integrates **irradiance**, so bounces are
 cosine-sampled and the π from the estimator cancels the 1/π from the Lambert BRDF — every bounce is just
 a multiply by the hit surface's albedo. Direct lighting is next-event estimation only (analytic for delta
-lights, area sampling for emissive triangles) and emission is never added on a bounce hit, so nothing is
-counted twice and there is no MIS weight to get wrong.
+lights, **solid-angle** sampling for emissive triangles) and emission is never added on a bounce hit, so
+nothing is counted twice and there is no MIS weight to get wrong.
+
+Emissive triangles are drawn by Arvo's spherical-triangle method (pbrt-v4's `SampleSphericalTriangle`),
+uniformly over the solid angle the triangle subtends at the shading point. That is what makes the emitter
+term bounded: sampling the triangle by *area* instead carries a `cosLight / distance²`, which runs away as
+a shading point approaches a panel, and the ceiling it needed only ever removed energy — pica's
+near-emitter texels came out 9% dark and its brightest 0.1% came out 55% dark, bias that no sample count
+moved. It also entangled the pick weights with the clamp, since a power-weighted pick hands a dim emitter
+a larger `1/pdf` and so met the ceiling sooner. Uniform over solid angle has no distance in it at all, and
+`bake.check.ts` now measures a probe a millimetre under a 4 m emitter against the closed-form view factor.
 
 **Every** bounce walks the same stratified Hammersley set, each from its own Cranley-Patterson rotation —
 a padded replication — and that is what keeps the sample counts low. Only bounce 0 used to be stratified,
@@ -293,6 +322,26 @@ Five things keep it fast, and each one is a constant factor rather than a heuris
 - **The whole bake shares one `TraceContext`** — the BVH, the record buffer and the albedo atlas — and
   every probe in the scene runs in a single dispatch of a single compiled kernel, with its origin in the
   surface buffer beside the texel's direction.
+
+### Normal maps
+
+Three adds a lightmap to the diffuse term with no normal factor in front of it, so anything a normal map
+would have contributed to indirect shading has to be baked in — otherwise a brick wall's mortar reads flat
+under bounce light no matter how sharp the map is. The `prepare` stage bends each covered texel's normal by
+its material's `normalMap` before the BVH is built, and the trace's hemisphere follows.
+
+The tangent frame comes out of the atlas rather than out of per-vertex tangents. Two texels apart in the
+atlas are two points whose world position and uv0 the rasterizer already wrote, so the 2×2 system relating
+one delta to the other **is** `[∂P/∂u, ∂P/∂v]` — no tangent attribute to compute, none to thread through
+the rasterizer's worker threads, and the frame lands at exactly the resolution the bake shades at. It needs
+two same-mesh neighbours, which every chart's interior has and its one-texel rim does not; the rim keeps the
+geometry's own normal and the dilation covers it regardless.
+
+A bump that would tip the normal under the surface — a large negative `normalScale`, a map that is not a
+normal map — is dropped rather than applied, because the trace offsets its ray origins along that normal and
+a flipped one starts every ray inside the mesh. Object-space maps (`normalMapType: ObjectSpaceNormalMap`)
+are left out entirely: a texel belongs to an atlas shared by the whole scene and no longer knows which
+object's normal matrix would undo the encoding.
 
 ### Why the roulette waits
 
@@ -384,13 +433,12 @@ ones worth knowing about:
 - **AO is a single distance-limited openness term**, not a directional bent normal: it multiplies what the
   material already gets from three's `aoMap`, and stacking it on a bake that already contains the
   occlusion is double-darkening by taste rather than by physics.
-- **Reflection probes are points, with no volume and no blending.** A mesh reflects the probe nearest its
-  centre, which partitions the scene into Voronoi cells: the reflection changes in one step across a
-  boundary, and a mesh spanning two cells picks the one its centre is in. Influence volumes (Unity's box,
-  Unreal's sphere) and a blend between the two nearest are the upgrade, and both are a field in the
-  manifest rather than a different shape. There is no parallax correction either — a probe is sampled as
-  if infinitely far away, so a box-projected room reflects at the wrong angle up close. The bake warns
-  when a scene has metals and no probe at all.
+- **A probe is picked from a mesh's centre, and its influence volume is a sphere.** The two nearest reach
+  a mesh and their blend fades between them, so there is no step across a boundary any more — but a mesh
+  spanning two of them still takes one blend for all of it, and a box volume (Unity's) is not on offer.
+  There is no parallax correction either — a probe is sampled as if infinitely far away, so a
+  box-projected room reflects at the wrong angle up close. The bake warns when a scene has metals and no
+  probe at all.
 - **A probe reaches baked meshes only**, and its gain is scaled by `metalness`, so a partial metal
   (`metalness: 0.5`) double counts half of the environment's diffuse contribution — the atlas already has
   that half. Splitting the probe into its specular and diffuse parts is the fix, which means two textures
@@ -398,19 +446,15 @@ ones worth knowing about:
 - **A probe fires one ray per texel, down its centre, with no jitter inside it**, so the primary hit
   aliases where a silhouette crosses a texel. Everything a probe is read through — PMREM, then a
   roughness lobe — blurs far wider than one texel, so it has never shown.
-- **The area-light estimator clamps its solid angle**, and it is the largest error in the bake. It is
-  what stops a shading point a millimetre from a panel from returning millions and spraying fireflies
-  across the atlas, but it only ever removes energy: measured against a 2048-sample reference, pica's
-  near-emitter texels come out 9% dark, and its brightest 0.1% come out 55% dark. That is bias, not
-  noise — four times the samples does not move it. Two further things ride on it. The product it bounds
-  is only "the emitter set's solid angle" when the pick is area-proportional; weighted by power, a dim
-  emitter carries a larger `1/pdf`, meets the ceiling sooner and bakes darker for it — which is why
-  power weighting *raised* pica's mean by 2.9%, all of it in the texels the clamp had been eating. And
-  bounding the picked triangle's own solid angle instead, which is the physically right quantity, is far
-  too loose a bound: it was tried, and pica came back with texels at 300 against a peak of 7. Sampling
-  the triangle by solid angle (Arvo) removes the singularity outright and is the only real fix. Texels
-  *on* an emissive surface are still noisy — harmless, since their own albedo is what the lightmap gets
-  multiplied by.
+- **One emissive triangle is sampled per shading point**, not one per emitter and no MIS against the
+  bounce ray. The estimator is unbiased whatever the pick, but a scene whose light comes from many small
+  emitters at once converges on the count of them; the alias table's `area × luminance` weighting is what
+  keeps that from mattering in practice. Texels *on* an emissive surface stay noisy — harmless, since
+  their own albedo is what the lightmap gets multiplied by.
+- **Normal maps are sampled once per texel, nearest**, at the lightmap's resolution — the same tap the
+  albedo atlas takes. A map far finer than the atlas is therefore aliased down to it rather than averaged,
+  which is what a lightmap does to every high frequency it is handed. Chart-rim texels get no frame and keep
+  the geometry's normal, and object-space maps are skipped outright.
 - **No seam fixing.** Charts meet exactly, but a bilinear tap across a seam does not solve for
   continuity; dilation hides the worst of it.
 - `three-mesh-bvh`'s WebGPU API is documented as unstable, and [one small `.d.ts`](../src/bakery/three-mesh-bvh-webgpu.d.ts)

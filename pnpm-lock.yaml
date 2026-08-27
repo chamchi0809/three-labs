@@ -65,12 +65,6 @@ importers:
       typescript:
         specifier: '>=5.5.0'
         version: 6.0.3
-      vscode-languageserver:
-        specifier: ^9.0.1
-        version: 9.0.1
-      vscode-languageserver-textdocument:
-        specifier: ^1.0.12
-        version: 1.0.12
     devDependencies:
       sharp:
         specifier: ^0.35.3
@@ -78,6 +72,12 @@ importers:
       three-mesh-bvh:
         specifier: ^0.9.14
         version: 0.9.14(three@0.185.1)
+      vscode-languageserver:
+        specifier: ^9.0.1
+        version: 9.0.1
+      vscode-languageserver-textdocument:
+        specifier: ^1.0.12
+        version: 1.0.12
       webgpu:
         specifier: ^0.4.0
         version: 0.4.0

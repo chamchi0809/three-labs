@@ -215,6 +215,8 @@ export async function trace(
 export type ProbeImage = {
   key: string;
   position: [number, number, number];
+  /** the placing node's `@bakery { influence }`, carried through to the manifest. 0 is unbounded. */
+  influence: number;
   width: number;
   height: number;
   /** linear radiance, RGBA, `width * height * 4`. Alpha is 1 — every texel of a probe is covered. */
@@ -251,7 +253,7 @@ export async function traceProbes(
   const layout = scene.probes.map((probe) => {
     const width = Math.max(4, Math.floor(probe.size));
     const height = Math.max(2, width >> 1);
-    const at = { key: probe.key, position: probe.position, width, height, offset: total };
+    const at = { key: probe.key, position: probe.position, influence: probe.influence, width, height, offset: total };
     total += width * height;
     return at;
   });
@@ -303,13 +305,13 @@ export async function traceProbes(
       opts.onProgress?.(Math.min(1, (offset + batch) / samples));
     }
     const raw = new Float32Array(await renderer.getArrayBufferAsync(accumAttribute));
-    return layout.map(({ key, position, width, height, offset }) => {
+    return layout.map(({ key, position, influence, width, height, offset }) => {
       const image = new Float32Array(width * height * 4);
       for (let i = 0; i < width * height; i++) {
         for (let k = 0; k < 3; k++) image[i * 4 + k] = raw[(offset + i) * 4 + k]! / samples;
         image[i * 4 + 3] = 1;
       }
-      return { key, position, width, height, image };
+      return { key, position, influence, width, height, image };
     });
   } finally {
     if (!opts.context) context.dispose();
@@ -446,6 +448,95 @@ const sphereSample = wgslTagFn/* wgsl */ `
 		let phi = ${TAU} * ${rand}( state );
 		let r = sqrt( max( 0.0, 1.0 - z * z ) );
 		return vec3f( r * cos( phi ), r * sin( phi ), z );
+
+	}
+`;
+
+/** pbrt's stable angle between two unit vectors: `acos(dot)` loses most of its digits near 0 and π. */
+const angleBetween = wgslTagFn/* wgsl */ `
+	fn lm_angle( a: vec3f, b: vec3f ) -> f32 {
+
+		if ( dot( a, b ) < 0.0 ) {
+
+			return ${f(Math.PI)} - 2.0 * asin( clamp( length( a + b ) * 0.5, -1.0, 1.0 ) );
+
+		}
+		return 2.0 * asin( clamp( length( b - a ) * 0.5, -1.0, 1.0 ) );
+
+	}
+`;
+
+/**
+ * Arvo's spherical-triangle sampling, as pbrt-v4's `SampleSphericalTriangle`: `a`, `b` and `c` are unit
+ * directions to a triangle's corners, and the result is a direction drawn uniformly over the solid angle
+ * they span, with that solid angle in `.w`. A zero `.w` means there is nothing to sample — a degenerate
+ * triangle, or a shading point in its plane — and the caller should contribute nothing.
+ *
+ * Uniform over solid angle is the whole point: the area-measure estimator it replaced carried a
+ * `cosLight / distance²`, which is unbounded as a shading point approaches an emitter and used to need a
+ * clamp that quietly ate 9% of pica's near-emitter energy. Sampling this way, the distance never appears.
+ */
+const solidAngleSample = wgslTagFn/* wgsl */ `
+	fn lm_spherical( a: vec3f, b: vec3f, c: vec3f, u: vec2f ) -> vec4f {
+
+		var nAB = cross( a, b );
+		var nBC = cross( b, c );
+		var nCA = cross( c, a );
+		if ( dot( nAB, nAB ) < 1e-20 || dot( nBC, nBC ) < 1e-20 || dot( nCA, nCA ) < 1e-20 ) {
+
+			return vec4f( 0.0 );
+
+		}
+		nAB = normalize( nAB );
+		nBC = normalize( nBC );
+		nCA = normalize( nCA );
+
+		// the three dihedral angles. Girard: their excess over π is the solid angle, exactly
+		let alpha = ${angleBetween}( nAB, -nCA );
+		let beta = ${angleBetween}( nBC, -nAB );
+		let gamma = ${angleBetween}( nCA, -nBC );
+		let omega = alpha + beta + gamma - ${f(Math.PI)};
+		if ( omega < 1e-7 ) {
+
+			return vec4f( 0.0 );
+
+		}
+
+		// cut off a sub-triangle of area u.x * omega at the corner a, which fixes one new vertex c' ...
+		let phi = ${f(Math.PI)} + u.x * omega;
+		let cosAlpha = cos( alpha );
+		let sinAlpha = sin( alpha );
+		let sinPhi = sin( phi ) * cosAlpha - cos( phi ) * sinAlpha;
+		let cosPhi = cos( phi ) * cosAlpha + sin( phi ) * sinAlpha;
+		let k1 = cosPhi + cosAlpha;
+		let k2 = sinPhi - sinAlpha * dot( a, b );
+		let denom = ( k2 * sinPhi + k1 * cosPhi ) * sinAlpha;
+		if ( abs( denom ) < 1e-20 ) {
+
+			return vec4f( 0.0 );
+
+		}
+		let cosBp = clamp( ( k2 + ( k2 * cosPhi - k1 * sinPhi ) * cosAlpha ) / denom, -1.0, 1.0 );
+		let sinBp = sqrt( max( 0.0, 1.0 - cosBp * cosBp ) );
+
+		let alongA = c - dot( c, a ) * a;
+		if ( dot( alongA, alongA ) < 1e-20 ) {
+
+			return vec4f( 0.0 );
+
+		}
+		let cp = cosBp * a + sinBp * normalize( alongA );
+
+		// ... and the sample is a point on the arc from b through c', placed by the second variate
+		let cosTheta = 1.0 - u.y * ( 1.0 - dot( cp, b ) );
+		let sinTheta = sqrt( max( 0.0, 1.0 - cosTheta * cosTheta ) );
+		let alongB = cp - dot( cp, b ) * b;
+		if ( dot( alongB, alongB ) < 1e-20 ) {
+
+			return vec4f( b, omega );
+
+		}
+		return vec4f( cosTheta * b + sinTheta * normalize( alongB ), omega );
 
 	}
 `;
@@ -960,34 +1051,52 @@ function emissiveNEE(args: TraceFnArgs, visibility: unknown) {
 			let e2 = ${records}[ ${emitter(2)} ];
 			let e3 = ${records}[ ${emitter(3)} ];
 
-			var s = ${rand}( state );
-			var t = ${rand}( state );
-			if ( s + t > 1.0 ) {
-
-				s = 1.0 - s;
-				t = 1.0 - t;
-
-			}
-
 			let edge0 = e1.xyz - e0.xyz;
 			let edge1 = e2.xyz - e0.xyz;
-			let samplePoint = e0.xyz + edge0 * s + edge1 * t;
-			let delta = samplePoint - origin;
-			let distSq = dot( delta, delta );
-			let dist = sqrt( distSq );
-			if ( dist < 1e-6 ) {
+			let crossed = cross( edge0, edge1 );
+			let twiceArea = length( crossed );
+			if ( twiceArea < 1e-12 ) {
+
+				return vec3f( 0.0 );
+
+			}
+			let planeNormal = crossed / twiceArea;
+
+			// the triangle as seen from the shading point: three unit directions spanning a spherical
+			// triangle, which is what gets sampled uniformly
+			let da = e0.xyz - origin;
+			let db = e1.xyz - origin;
+			let dc = e2.xyz - origin;
+			if ( dot( da, da ) < 1e-12 || dot( db, db ) < 1e-12 || dot( dc, dc ) < 1e-12 ) {
+
+				return vec3f( 0.0 );
+
+			}
+			let u = vec2f( ${rand}( state ), ${rand}( state ) );
+			let sampled = ${solidAngleSample}( normalize( da ), normalize( db ), normalize( dc ), u );
+			let solidAngle = sampled.w;
+			if ( solidAngle <= 0.0 ) {
 
 				return vec3f( 0.0 );
 
 			}
 
-			let toLight = delta / dist;
+			let toLight = sampled.xyz;
 			let cosSurface = dot( nrm, toLight );
 			// an emissive mesh material emits both ways, like an unculled MeshStandardMaterial; a
 			// RectAreaLight's quad only shines out of its front face, and says so in emissive.w
-			let facing = -dot( normalize( cross( edge0, edge1 ) ), toLight );
+			let facing = -dot( planeNormal, toLight );
 			let cosLight = select( abs( facing ), max( facing, 0.0 ), e2.w > 0.5 );
 			if ( cosSurface <= 0.0 || cosLight <= 0.0 ) {
+
+				return vec3f( 0.0 );
+
+			}
+
+			// where the shadow ray stops. The sampled direction is inside the spherical triangle by
+			// construction, so it crosses the plane inside the triangle and no intersection test is owed
+			let dist = dot( da, planeNormal ) / dot( toLight, planeNormal );
+			if ( !( dist > 1e-6 ) ) {
 
 				return vec3f( 0.0 );
 
@@ -1000,22 +1109,15 @@ function emissiveNEE(args: TraceFnArgs, visibility: unknown) {
 
 			}
 
-			// e3.w is 1/pdf in area measure — totalWeight/luminance for the triangle that was picked,
-			// which with one radiance across the set is exactly the total area the old area-proportional
-			// pick divided by. The product estimates the emitter set's solid angle, which cannot exceed a
-			// sphere: without that bound a shading point a millimetre from a panel returns millions, one
-			// path poisons the texel, and every bounce that lands there sprays fireflies across the atlas.
-			// ponytail: two things ride on this clamp. It darkens the first centimetre around an emitter,
-			// and "the set's solid angle" is only what the product is when the pick is area-proportional —
-			// weighted by power, a dim emitter carries a larger 1/pdf and so meets the ceiling sooner and
-			// bakes darker for it. Both go away together if the triangle is sampled by solid angle instead
-			// (Arvo): no singularity, so no clamp, so nothing left for the weights to interact with.
-			// Clamping the triangle's own solid angle rather than the set's is not the fix — it is the
-			// right quantity but far too loose a bound, and pica comes back with fireflies at 300x.
-			let solidAngle = min( cosLight / distSq * e3.w, 2.0 * ${TAU} );
+			// e3.w is 1/pdf in area measure — totalWeight/luminance for the triangle that was picked — so
+			// dividing out that triangle's own area leaves 1/P(pick), which is all of the discrete pick and
+			// none of the within-triangle density. Uniform-over-solid-angle supplies the rest, and there is
+			// nothing left to clamp: the cosLight/distance² that used to blow up a millimetre from a panel
+			// and spray fireflies across the atlas is not in this estimator at all.
+			let pickWeight = e3.w * 2.0 / twiceArea;
 			// the picked triangle's own radiance — a textured emissive panel is a different light per
 			// triangle, and the record carries the texel it was sampled at
-			return e3.xyz * ( cosSurface * solidAngle * shadow );
+			return e3.xyz * ( cosSurface * solidAngle * pickWeight * shadow );
 
 		}
 	`;

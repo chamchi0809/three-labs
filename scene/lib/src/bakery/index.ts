@@ -21,6 +21,6 @@
  * ```
  */
 export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, MANIFEST_VERSION, type Lightmap, type LightmapManifest } from "./apply.ts";
-export { nearestProbe, probeDirection } from "./probe.ts";
+export { probeDirection, probeWeights, type PlacedProbe, type ProbeWeight } from "./probe.ts";
 export { bakeEnabled, bakeGeometry, bakerySettings, nodeKey } from "./scene.ts";
 export type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";

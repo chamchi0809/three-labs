@@ -7,12 +7,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CodeAction, CodeActionKind, CompletionItemKind, createConnection, DiagnosticSeverity,
   ProposedFeatures, SymbolKind, TextDocumentSyncKind, TextDocuments, TextEdit,
+  type Color, type ColorInformation,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BUILTINS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BUILTINS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
-import type { ClassInfo, Schema, TypeRef } from "./schema.ts";
+import type { ClassInfo, Method, Param, Schema, TypeRef } from "./schema.ts";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -94,8 +95,10 @@ const show = (t: TypeRef): string =>
   t.kind === "class" || t.kind === "enum" ? t.name
     : t.kind === "record" ? (t.name ?? `{ ${Object.keys(t.fields).join(", ")} }`)
       : t.kind === "union" ? t.of.map(show).join(" | ") : t.kind === "array" ? `${show(t.of)}[]` : t.kind;
-const signature = (name: string, info: ClassInfo) =>
-  `${name}(${info.ctor.map((p) => `${p.name}${p.optional ? "?" : ""}: ${show(p.type)}`).join(", ")})`;
+const paramList = (params: Param[]) => params.map((p) => `${p.name}${p.optional ? "?" : ""}: ${show(p.type)}`).join(", ");
+const signature = (name: string, params: Param[]) => `${name}(${paramList(params)})`;
+const methodDetail = (m: Method) => `(${paramList(m.params)}) → ${show(m.returns)}`;
+const methodLabel = (name: string, m: Method) => `${name}${methodDetail(m)}`;
 
 const tryParse = (doc: TextDocument): Sheet | undefined => {
   try {
@@ -124,8 +127,24 @@ async function validate(doc: TextDocument) {
   });
 }
 
-// an edit to one sheet changes the diagnostics of every sheet that @imports it
-const revalidateAll = () => { for (const doc of documents.all()) void validate(doc); };
+/**
+ * Every open sheet, not just the edited one: an edit changes the diagnostics of everything that
+ * `@import`s it. But not on every keystroke — a pass parses the whole import graph and reflects it
+ * against three, and a fast typist used to have one of those in flight per character typed. Coalesced
+ * to one pass a beat, and the passes are chained so a slow one cannot publish over a newer one.
+ */
+const DEBOUNCE = 120;
+let pending: NodeJS.Timeout | undefined;
+let queue: Promise<unknown> = Promise.resolve();
+const revalidateAll = () => {
+  clearTimeout(pending);
+  pending = setTimeout(() => {
+    // a pass that throws — an @import naming a file that was just deleted — must not break the chain
+    queue = queue
+      .then(() => Promise.all(documents.all().map((doc) => validate(doc))))
+      .catch((e: unknown) => connection.console.error(`tscene: ${(e as Error).message}`));
+  }, DEBOUNCE);
+};
 documents.onDidChangeContent(revalidateAll);
 documents.onDidClose((e) => {
   connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
@@ -136,7 +155,8 @@ connection.onDidChangeWatchedFiles(revalidateAll);
 // ---------------------------------------------------------------- position lookup
 
 type Hit =
-  | { kind: "object"; object: ObjectValue }
+  /** `cls` is the class of the body it sits in, which is what makes a bare call a method */
+  | { kind: "object"; object: ObjectValue; cls: string | undefined }
   | { kind: "prop"; name: string; cls: string | undefined; member: Member };
 
 /** deepest AST hit at `offset` — the object whose name is under the cursor, or the property name */
@@ -144,19 +164,20 @@ function locate(sheet: Sheet, offset: number): Hit | undefined {
   let hit: Hit | undefined;
   const inside = (p: Pos) => offset >= p.start && offset <= p.end;
 
-  const visitObject = (o: ObjectValue) => {
+  const visitObject = (o: ObjectValue, owner: string | undefined) => {
     if (!inside(o)) return;
-    if (offset <= o.start + o.name.length) hit = { kind: "object", object: o };
-    for (const a of o.args) if (a.kind === "object") visitObject(a);
+    if (offset <= o.start + o.name.length) hit = { kind: "object", object: o, cls: owner };
+    // an argument is a value, never a statement — nothing in one is a method of the enclosing class
+    for (const a of o.args) if (a.kind === "object") visitObject(a, undefined);
     visitMembers(o.body, className(o.name));
   };
   const visitMembers = (members: Member[], cls: string | undefined) => {
     for (const m of members) {
       if (!inside(m)) continue;
-      if (m.kind === "node") visitObject(m.object);
+      if (m.kind === "node") visitObject(m.object, cls);
       else if (m.kind === "prop") {
         if (offset <= m.start + m.name.length) hit = { kind: "prop", name: m.name, cls, member: m };
-        if (m.value.kind === "object") visitObject(m.value);
+        if (m.value.kind === "object") visitObject(m.value, undefined);
       }
     }
   };
@@ -165,6 +186,8 @@ function locate(sheet: Sheet, offset: number): Hit | undefined {
     if (s.kind === "node" || s.kind === "prop" || s.kind === "var") visitMembers([s], undefined);
     // a template body is checked against the node type it declares, so hover follows the same rule
     else if (s.kind === "template" && inside(s)) visitMembers(s.body, className(s.node ?? "object3D"));
+    // …and an @override body against the type its last compound names
+    else if (s.kind === "override" && inside(s)) visitMembers(s.body, className(s.selector[s.selector.length - 1]!.type ?? "object3D"));
   }
   return hit;
 }
@@ -185,6 +208,9 @@ function enclosingBlock(text: string, offset: number): { name: string | undefine
       const header = text.slice(0, i).split(/[;{}]/).pop()!.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
       const template = /@template\s+([a-zA-Z_]\w*)?\s*\./.exec(header);
       if (template) return { name: template[1] ?? "object3D", brace: i };
+      // an @override body is checked against the type its last compound names, and nothing narrower
+      const override = /@override\s+(\S[^{]*)$/.exec(header);
+      if (override) return { name: /^([a-zA-Z_]\w*)/.exec(override[1]!.trim().split(/\s+/).pop()!)?.[1] ?? "object3D", brace: i };
       const at = /@([a-zA-Z_]\w*)\s*$/.exec(header);
       if (at) return { name: `@${at[1]}`, brace: i };
       if (/:\s*$/.test(header)) return { name: ":record", brace: i }; // `userData: { … }` — a record literal
@@ -269,14 +295,14 @@ connection.onCompletion((params) => {
   const prop = afterColon && cls?.props[afterColon[1]!];
   if (prop) return valueCompletions(prop.type);
 
-  // inside a constructor call — only what fits the parameter under the cursor
+  // inside a call — only what fits the parameter under the cursor
   const call = activeCall(head);
-  if (call) return valueCompletions(call.info.ctor[call.activeParameter]?.type ?? { kind: "any" });
+  if (call) return valueCompletions(call.params[call.activeParameter]?.type ?? { kind: "any" });
 
   return [...(cls ? propCompletions(cls) : []), ...objectCompletions()];
 });
 
-/** the at-rules legal here: a sheet takes all three, a body only takes `@bakery` */
+/** the at-rules legal here: a sheet takes all four, a body only takes `@bakery` */
 function atCompletions(doc: TextDocument, start: number, offset: number, block: string | undefined) {
   if (block === "@bakery" || block === ":record") return []; // no at-rule nests inside a block of values
   const rules: [string, string][] = block
@@ -284,6 +310,7 @@ function atCompletions(doc: TextDocument, start: number, offset: number, block: 
     : [
         ["@import", "splice in another sheet"],
         ["@template", "a body applied by .name"],
+        ["@override", "a body appended to every node a selector matches"],
         ["@bakery", "lightmap baker settings for the sheet"],
       ];
   // `@` is not a word character, so the typed sigil has to be replaced explicitly
@@ -409,10 +436,18 @@ function variablesAt(file: string, text: string, offset: number, seen = new Set<
 
 const settable = (t: TypeRef, readonly: boolean) => !readonly || (t.kind === "class" && !!schema.classes[t.name]?.copyable);
 
-const propCompletions = (cls: ClassInfo) =>
-  Object.entries(cls.props)
+/** what a node's body accepts: its settable properties, and its methods called bare — `lookAt(0, 1, 0);` */
+const propCompletions = (cls: ClassInfo) => [
+  ...Object.entries(cls.props)
     .filter(([, p]) => settable(p.type, p.readonly))
-    .map(([name, p]) => ({ label: name, kind: CompletionItemKind.Property, detail: show(p.type), insertText: `${name}: ` }));
+    .map(([name, p]) => ({ label: name, kind: CompletionItemKind.Property, detail: show(p.type), insertText: `${name}: ` })),
+  ...Object.entries(cls.methods).map(([name, m]) => ({
+    label: name,
+    kind: CompletionItemKind.Method,
+    detail: methodDetail(m[0]!),
+    insertText: `${name}(`,
+  })),
+];
 
 /** which of the three `@bakery` tables applies, decided by the block the `@bakery` block sits in */
 function bakeryPosition(text: string, brace: number): keyof typeof BAKERY {
@@ -487,7 +522,7 @@ function memberCompletions(type: TypeRef | undefined) {
     ...Object.entries(cls.methods).map(([label, m]) => ({
       label,
       kind: CompletionItemKind.Method,
-      detail: `(${m[0]!.params.map((p) => `${p.name}${p.optional ? "?" : ""}`).join(", ")}) → ${show(m[0]!.returns)}`,
+      detail: methodDetail(m[0]!),
       insertText: `${label}(`,
     })),
   ];
@@ -518,7 +553,7 @@ function recordAt(text: string, brace: number): Extract<TypeRef, { kind: "record
     return recordType(cls?.props[assigned[1]!]?.type);
   }
   const call = activeCall(head);
-  return recordType(call?.info.ctor[call.activeParameter]?.type);
+  return recordType(call?.params[call.activeParameter]?.type);
 }
 
 const recordType = (t: TypeRef | undefined): Extract<TypeRef, { kind: "record" }> | undefined => {
@@ -546,7 +581,8 @@ const objectCompletions = () => [
   ...Object.entries(BUILTINS).map(([name, b]) => ({ label: name, kind: CompletionItemKind.Keyword, detail: b.signature })),
   ...Object.entries(schema.classes)
     .filter(([, c]) => !c.abstract)
-    .map(([name, c]) => ({ label: nodeName(name), kind: CompletionItemKind.Class, detail: signature(nodeName(name), c) })),
+    // the first overload in a one-line detail; hover has room for the rest
+    .map(([name, c]) => ({ label: nodeName(name), kind: CompletionItemKind.Class, detail: signature(nodeName(name), c.ctors[0]!) })),
 ];
 
 function valueCompletions(type: TypeRef) {
@@ -564,7 +600,7 @@ function valueCompletions(type: TypeRef) {
         if (info.abstract) continue;
         if (name !== t.name && !(info.bases.includes(t.name) || isA(name, t.name))) continue;
         const label = name === t.name && alias ? alias : nodeName(name);
-        out.push({ label, kind: CompletionItemKind.Constructor, detail: signature(label, info), insertText: `${label}(` });
+        out.push({ label, kind: CompletionItemKind.Constructor, detail: signature(label, info.ctors[0]!), insertText: `${label}(` });
       }
     }
   }
@@ -653,12 +689,38 @@ connection.onHover(async (params) => {
   if (!hit) return null;
 
   if (hit.kind === "object") {
-    const cls = className(hit.object.name);
+    const name = hit.object.name;
+    const at = range(doc, { start: hit.object.start, end: hit.object.start + name.length });
+
+    // a loader is not its class: `texture("/x.png")` takes a url, and `Texture`'s constructor does not
+    const loader = LOADERS[name];
+    if (loader) {
+      return { contents: md("```ts", `${name}(url: string) → ${loader.class}`, "```", loader.summary), range: at };
+    }
+
+    const cls = className(name);
     const info = schema.classes[cls];
+    // a bare call in a body — `lookAt(0, 1, 0);` — is a method of the class whose body it is, and
+    // every overload is worth showing: which one it is depends on what was typed
+    const overloads = !info && hit.cls ? schema.classes[hit.cls]?.methods[name] : undefined;
+    if (overloads?.length) {
+      return {
+        contents: md("```ts", overloads.map((m) => `${hit.cls}.${methodLabel(name, m)}`).join("\n"), "```"),
+        range: at,
+      };
+    }
     if (!info) return null;
     return {
-      contents: md("```ts", signature(hit.object.name, info), "```", [cls, ...bases(cls)].join(" < "), ...(info.doc ? ["", info.doc] : [])),
-      range: range(doc, { start: hit.object.start, end: hit.object.start + hit.object.name.length }),
+      contents: md(
+        "```ts",
+        // every constructor, the way methods hover: `color(#fff)` and `color(1, .5, 0)` are both legal
+        // and a hover that showed only the first read as though the other were a mistake
+        info.ctors.map((params) => signature(name, params)).join("\n"),
+        "```",
+        [cls, ...bases(cls)].join(" < "),
+        ...(info.doc ? ["", info.doc] : []),
+      ),
+      range: at,
     };
   }
 
@@ -694,8 +756,12 @@ function bases(cls: string): string[] {
 
 // ---------------------------------------------------------------- signature help
 
-/** the call the cursor is inside, walking back to the unclosed `(` and counting top-level commas */
-function activeCall(head: string) {
+/**
+ * The call the cursor is inside, walking back to the unclosed `(` and counting top-level commas.
+ * Three kinds of name reach here: a loader, a class, and — inside a node body — a method of that
+ * node's class, because `lookAt(0, 1, 0);` is as much a call as `vec3(0, 1, 0)` is.
+ */
+function activeCall(head: string): { label: string; params: Param[]; activeParameter: number } | null {
   let depth = 0;
   let activeParameter = 0;
   let i = head.length - 1;
@@ -711,8 +777,32 @@ function activeCall(head: string) {
   if (i < 0) return null;
 
   const name = /([A-Za-z_][\w]*)\s*$/.exec(head.slice(0, i))?.[1];
-  const info = name ? schema.classes[className(name)] : undefined;
-  return name && info ? { name, info, activeParameter } : null;
+  if (!name) return null;
+
+  // a loader takes a url. Its class' constructor describes a call no sheet can write — `texture(…)`
+  // used to help with `Texture(mapping?, wrapS?, …)`, which is not what the parentheses hold
+  const loader = LOADERS[name];
+  if (loader) {
+    const params = loader.args.map((type) => ({ name: "url", type, optional: false }));
+    return { label: `${name}(${paramList(params)}) → ${loader.class}`, params, activeParameter };
+  }
+
+  const info = schema.classes[className(name)];
+  // same rule as a method below: the constructor overload that has a slot for the argument being typed
+  if (info) {
+    const best = info.ctors.find((p) => activeParameter < p.length) ?? info.ctors[0]!;
+    return { label: signature(name, best), params: best, activeParameter };
+  }
+
+  // the class of the block this call sits in, which is what a bare method call is a method of
+  const owner = enclosingBlock(head, head.length)?.name;
+  const cls = owner && !owner.startsWith("@") && owner !== ":record" ? className(owner) : undefined;
+  const overloads = cls ? schema.classes[cls]?.methods[name] : undefined;
+  if (!overloads?.length) return null;
+  // the overload that has a slot for the argument being typed — `lookAt(x, y, z)` is the second one,
+  // and the first (`lookAt(vector)`) would call every argument past the cursor a mistake
+  const best = overloads.find((o) => activeParameter < o.params.length) ?? overloads[0]!;
+  return { label: `${cls}.${methodLabel(name, best)}`, params: best.params, activeParameter };
 }
 
 connection.onSignatureHelp((params) => {
@@ -720,14 +810,10 @@ connection.onSignatureHelp((params) => {
   if (!doc) return null;
   const call = activeCall(doc.getText().slice(0, doc.offsetAt(params.position)));
   if (!call) return null;
-  const { name, info, activeParameter } = call;
   return {
-    signatures: [{
-      label: signature(name, info),
-      parameters: info.ctor.map((p) => ({ label: `${p.name}${p.optional ? "?" : ""}: ${show(p.type)}` })),
-    }],
+    signatures: [{ label: call.label, parameters: call.params.map((p) => ({ label: `${p.name}${p.optional ? "?" : ""}: ${show(p.type)}` })) }],
     activeSignature: 0,
-    activeParameter: Math.min(activeParameter, Math.max(0, info.ctor.length - 1)),
+    activeParameter: Math.min(call.activeParameter, Math.max(0, call.params.length - 1)),
   };
 });
 
@@ -991,6 +1077,14 @@ connection.onDocumentSymbol((params) => {
         selectionRange: range(doc, { start: s.start, end: s.start + "@template .".length + (s.node?.length ?? 0) + s.name.length }), children: [],
       }];
     }
+    if (s.kind === "override") {
+      const last = s.selector[s.selector.length - 1]!;
+      const head = { start: s.start, end: last.end };
+      return [{
+        name: `@override ${doc.getText(range(doc, head)).slice("@override".length).trim()}`,
+        kind: SymbolKind.Interface, range: range(doc, s), selectionRange: range(doc, head), children: [],
+      }];
+    }
     if (s.kind === "var") {
       return [{
         name: `--${s.name}`, kind: SymbolKind.Variable, range: range(doc, s),
@@ -1035,8 +1129,9 @@ function tokenType(toks: Tok[], i: number): string | undefined {
     case "number": return "number";
     case "at": return "keyword";
     case "var": return "variable";
-    // `#ff8000` is a colour, `#box` an id — a literal only ever sits in a value position
-    case "hash": return hexColor(t.value) && prev?.type === "punc" && "(,:".includes(prev.value) ? "number" : "decorator";
+    // `#ff8000` is a colour, `#box` an id — a literal only ever sits in a value position, which
+    // includes inside an array: `[#ff0000, #00ff00]` is two colours, not two ids
+    case "hash": return hexColor(t.value) && prev?.type === "punc" && "(,:[".includes(prev.value) ? "number" : "decorator";
     case "ident": break;
     default: return undefined;
   }
@@ -1103,36 +1198,114 @@ connection.onFoldingRanges((params) => {
   return out;
 });
 
-/** `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` as the client's 0..1 channels */
+/**
+ * `#rgb` or `#rrggbb` as the client's 0..1 channels.
+ *
+ * Three and six digits, and nothing else: a colour in a sheet has no alpha. `#ff800080` reaches three
+ * as the plain number 4286578816, which `new Color()` reads as 24 bits and turns into a colour with
+ * no relation to the one an editor would have shown — so an eight-digit literal gets no swatch rather
+ * than a wrong one. Four digits the parser rejects outright.
+ */
 function hexColor(digits: string): { red: number; green: number; blue: number; alpha: number } | undefined {
-  if (![3, 4, 6, 8].includes(digits.length) || !/^[0-9a-fA-F]+$/.test(digits)) return undefined;
-  const short = digits.length <= 4;
+  if (![3, 6].includes(digits.length) || !/^[0-9a-fA-F]+$/.test(digits)) return undefined;
+  const short = digits.length === 3;
   const channel = (n: number) => {
     const d = digits.slice(n * (short ? 1 : 2), (n + 1) * (short ? 1 : 2));
     return parseInt(short ? d + d : d, 16) / 255;
   };
-  return { red: channel(0), green: channel(1), blue: channel(2), alpha: digits.length % 4 === 0 ? channel(3) : 1 };
+  return { red: channel(0), green: channel(1), blue: channel(2), alpha: 1 };
 }
 
+// three writes the working colour space, which is linear, when it is handed three numbers, and
+// converts from sRGB when it is handed a hex or a name. So `color(1, .5, 0)` and `color(#ff8000)`
+// are different colours, and a picker that showed them as the same one would be lying about one.
+const linearToSRGB = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
+const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+
 /**
- * A swatch on every hex literal, so `color(#ff8000)` is picked, not guessed.
- * ponytail: hex only — `color("red")` and `color(1, .5, 0)` would each need their own writer back.
+ * `Color.NAMES`, read out of the three that is installed rather than copied in here — a list of 148
+ * constants is exactly the kind of thing that goes quietly wrong when it is transcribed. Loaded on
+ * the first swatch pass and kept; a three that will not import just means names get no swatch.
  */
-connection.onDocumentColor((params) => {
+let names: Record<string, number> | null | undefined;
+async function colorNames(): Promise<Record<string, number>> {
+  if (names === undefined) names = await import("three").then((m) => m.Color.NAMES as Record<string, number>, () => null);
+  return names ?? {};
+}
+
+const fromHex = (hex: number | undefined): Color | undefined =>
+  hex === undefined ? undefined : { red: ((hex >> 16) & 255) / 255, green: ((hex >> 8) & 255) / 255, blue: (hex & 255) / 255, alpha: 1 };
+
+/** the tokens between the `(` at `open` and the `)` that closes it, or undefined if it never closes */
+function callArgs(toks: Tok[], open: number): Tok[] | undefined {
+  let depth = 0;
+  for (let i = open; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t.type !== "punc") continue;
+    if (t.value === "(") depth++;
+    else if (t.value === ")" && --depth === 0) return toks.slice(open + 1, i);
+  }
+  return undefined;
+}
+
+/** A swatch on every colour a sheet can write: `#ff8000`, `color("red")` and `color(1, .5, 0)`. */
+connection.onDocumentColor(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
   const { toks } = tokenize(doc.getText(), pathOf(doc));
-  return toks.flatMap((t, i) => {
-    const color = t.type === "hash" && tokenType(toks, i) === "number" ? hexColor(t.value) : undefined;
-    return color ? [{ range: range(doc, t), color }] : [];
-  });
+  const named = await colorNames();
+  const out: ColorInformation[] = [];
+  for (const [i, t] of toks.entries()) {
+    if (t.type === "hash") {
+      const color = tokenType(toks, i) === "number" ? hexColor(t.value) : undefined;
+      if (color) out.push({ range: range(doc, t), color });
+      continue;
+    }
+    if (t.type !== "ident" || t.value !== "color" || toks[i + 1]?.value !== "(") continue;
+    // a lone `#ff8000` argument is the branch above — this is the rest of what `color()` accepts
+    const args = callArgs(toks, i + 1)?.filter((a) => a.type !== "punc");
+    if (!args?.length) continue;
+    if (args.length === 1 && args[0]!.type === "string") {
+      const text = args[0]!.value.trim();
+      const color = /^#[0-9a-fA-F]+$/.test(text) ? hexColor(text.slice(1)) : fromHex(named[text.toLowerCase()]);
+      if (color) out.push({ range: range(doc, args[0]!), color });
+      continue;
+    }
+    if (args.length === 3 && args.every((a) => a.type === "number" && !a.unit)) {
+      const [red, green, blue] = args.map((a) => linearToSRGB(Math.min(1, Math.max(0, Number(a.value)))));
+      out.push({
+        range: range(doc, { start: args[0]!.start, end: args[2]!.end }),
+        color: { red: red!, green: green!, blue: blue!, alpha: 1 },
+      });
+    }
+  }
+  return out;
 });
 
+/**
+ * Written back in the form it replaces: a picker must not turn `color(1, .5, 0)` into a hex literal
+ * that means a different colour, nor drop the quotes a string argument is written with.
+ * No alpha, ever — see {@link hexColor}.
+ */
 connection.onColorPresentation((params) => {
-  const { red, green, blue, alpha } = params.color;
+  const doc = documents.get(params.textDocument.uri);
+  const was = doc ? doc.getText(params.range) : "";
+  const { red, green, blue } = params.color;
   const byte = (v: number) => Math.round(v * 255).toString(16).padStart(2, "0");
-  const label = `#${byte(red)}${byte(green)}${byte(blue)}${alpha < 1 ? byte(alpha) : ""}`;
-  return [{ label, textEdit: TextEdit.replace(params.range, label) }];
+  const hex = `#${byte(red)}${byte(green)}${byte(blue)}`;
+  const edit = (label: string) => ({ label, textEdit: TextEdit.replace(params.range, label) });
+
+  if (/^["']/.test(was)) {
+    const quote = was[0]!;
+    // the name, when the picked colour is exactly one — `"red"` reads better than `"#ff0000"`
+    const exact = Object.entries(names ?? {}).find(([, v]) => v === parseInt(hex.slice(1), 16))?.[0];
+    return [...(exact ? [edit(`${quote}${exact}${quote}`)] : []), edit(`${quote}${hex}${quote}`)];
+  }
+  if (/^[-.\d]/.test(was)) {
+    const n = (v: number) => String(+srgbToLinear(v).toFixed(4));
+    return [edit(`${n(red)}, ${n(green)}, ${n(blue)}`)];
+  }
+  return [edit(hex)];
 });
 
 // ---------------------------------------------------------------- formatting & quick fixes
@@ -1141,8 +1314,15 @@ connection.onDocumentFormatting(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
   const text = doc.getText();
-  const formatted = await fixSource(text, pathOf(doc), schema, loader);
-  return formatted === text ? [] : [TextEdit.replace({ start: doc.positionAt(0), end: doc.positionAt(text.length) }, formatted)];
+  try {
+    const formatted = await fixSource(text, pathOf(doc), schema, loader);
+    return formatted === text ? [] : [TextEdit.replace({ start: doc.positionAt(0), end: doc.positionAt(text.length) }, formatted)];
+  } catch {
+    // fixSource refuses a sheet that does not parse, which is most of them most of the time. Format
+    // on save then answered with an error, and the editor put a toast on screen for every save —
+    // for something the squiggle already says. Nothing to format is an empty edit list.
+    return [];
+  }
 });
 
 connection.onCodeAction((params) => {

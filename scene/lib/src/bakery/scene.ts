@@ -33,6 +33,13 @@ export type BakeMaterial = {
   map?: THREE.Texture;
   /** what one texel of {@link map} is multiplied by — colour × (1 - metalness). `albedo` is its mean. */
   mapScale?: [number, number, number];
+  /**
+   * the tangent-space normal map, sampled per texel so the trace sees the bumps the shader does.
+   * Object-space maps are left out — a texel knows no object it belongs to by the time this is read.
+   */
+  normalMap?: THREE.Texture;
+  /** `normalScale`, what the map's x and y are multiplied by before the frame is rebuilt */
+  normalScale?: [number, number];
   /** the emissive map, sampled per triangle so a textured panel is not one flat colour */
   emissiveMap?: THREE.Texture;
   /** what one texel of {@link emissiveMap} is multiplied by. `emissive` already holds its mean. */
@@ -68,6 +75,8 @@ export type BakeProbe = {
   position: [number, number, number];
   /** equirect width in texels; the height is half of it */
   size: number;
+  /** world-space radius the probe reaches; 0 is "everywhere". See `probeWeights()`. */
+  influence: number;
 };
 
 /** Ambient + hemisphere lights collapse into a two-colour gradient that rays see when they escape. */
@@ -204,10 +213,12 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   root.traverseVisible((o) => {
     // a probe is a place, not a thing: its own `@bakery { probe }` only, never inherited, and whatever
     // else the node is (a group, an empty, a mesh) it still gets baked as itself
-    const size = bakerySettings<NodeBakery>(o)?.probe;
+    const settings = bakerySettings<NodeBakery>(o);
+    const size = settings?.probe;
     if (size !== undefined && size >= 4) {
       v.setFromMatrixPosition(o.matrixWorld);
-      probes.push({ key: nodeKey(root, o), position: [v.x, v.y, v.z], size: Math.floor(size) });
+      const influence = settings?.influence ?? 0;
+      probes.push({ key: nodeKey(root, o), position: [v.x, v.y, v.z], size: Math.floor(size), influence });
     } else if (size !== undefined) {
       warn(`"${nodeKey(root, o)}" asks for a ${size}-texel probe, which is smaller than a mip — skipped`);
     }
@@ -226,20 +237,48 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
 
-    // a lightmap is one uv1 per vertex of one geometry, which neither of these has: an instance has
-    // many transforms behind that geometry, a skinned mesh a pose the bake never sees. Silence here
-    // used to look like a bake that worked.
+    // a lightmap is one uv1 per vertex of one geometry, which none of these has: an instance has many
+    // transforms behind that geometry, a skinned mesh a pose the bake never sees, a batched mesh both.
+    // Silence here used to look like a bake that worked.
     const brand = mesh as unknown as Record<string, boolean | undefined>;
-    const unbakeable = brand.isSkinnedMesh ? "skinned" : brand.isInstancedMesh ? "instanced" : brand.isBatchedMesh ? "batched" : undefined;
+    const unbakeable = brand.isSkinnedMesh ? "skinned" : brand.isBatchedMesh ? "batched" : undefined;
     if (unbakeable) {
       warn(`"${nodeKey(root, mesh)}" is ${unbakeable} and cannot carry a lightmap — left out of the bake`);
+      return;
+    }
+    // …but an instance's transform *is* known, so a forest of trees can shade the ground it stands on
+    // even though no atlas can reach the trees themselves. One occluder per instance, same geometry.
+    if (brand.isInstancedMesh) {
+      const instanced = mesh as THREE.InstancedMesh;
+      const made = instanceEmitters(instanced, emitters, materials, matIds, opts.defaultAlbedo ?? 0.8, bounds);
+      warn(
+        made
+          ? `"${nodeKey(root, mesh)}" is instanced, so it cannot carry a lightmap — its ${made} instance(s) ` +
+            `are in the bake as occluders and emitters only`
+          : `"${nodeKey(root, mesh)}" is instanced and has no usable geometry — left out of the bake`,
+      );
+      return;
+    }
+    // `material: []` draws nothing, so as far as the renderer is concerned the mesh is not in the room.
+    // Baking it would cast the shadow of something nobody can see, and it used to crash the bake instead.
+    if (Array.isArray(mesh.material) && !mesh.material.length) {
+      warn(`"${nodeKey(root, mesh)}" has an empty material list and draws nothing — left out of the bake`);
       return;
     }
 
     const geometry = bakeGeometry(mesh);
     const position = geometry.getAttribute("position");
     const normal = geometry.getAttribute("normal");
-    if (!position || position.count % 3 !== 0) return;
+    // the skinned/instanced skip above says why it skipped; this one used to just leave the mesh out,
+    // and an unlit model with no message is the hardest kind of bake result to explain
+    if (!position) {
+      warn(`"${nodeKey(root, mesh)}" has no position attribute — left out of the bake`);
+      return;
+    }
+    if (position.count % 3 !== 0) {
+      warn(`"${nodeKey(root, mesh)}" has ${position.count} vertices, which is not whole triangles — left out of the bake`);
+      return;
+    }
 
     const count = position.count;
     const positions = new Float32Array(count * 3);
@@ -297,6 +336,72 @@ export function collectScene(root: THREE.Object3D, opts: CollectOptions = {}): B
   if (lightDir.lengthSq() < 1e-12) sky.axis = [0, 1, 0];
 
   return { meshes, emitters, materials, lights, probes, sky, bounds };
+}
+
+/**
+ * An InstancedMesh as one emitter: a world-space copy of its geometry per instance, concatenated. No
+ * atlas can reach them — a lightmap is one uv1 per vertex of one geometry, and an instance has many
+ * transforms behind it — but every instance still blocks light and bounces its own colour onto what
+ * can. One emitter rather than one per instance keeps the BVH proxy at a single geometry.
+ */
+function instanceEmitters(
+  mesh: THREE.InstancedMesh,
+  emitters: BakeEmitter[],
+  materials: BakeMaterial[],
+  matIds: Map<THREE.Material, number>,
+  defaultAlbedo: number,
+  bounds: THREE.Box3,
+): number {
+  const geometry = bakeGeometry(mesh);
+  const position = geometry.getAttribute("position");
+  const normal = geometry.getAttribute("normal");
+  if (!position || position.count % 3 !== 0) return 0;
+  // `count` is how many instances are drawn, which is what the buffer holds at most and often less
+  const instances = Math.max(0, Math.min(mesh.count, mesh.instanceMatrix.count));
+  if (!instances) return 0;
+
+  const count = position.count;
+  const positions = new Float32Array(count * instances * 3);
+  const normals = new Float32Array(count * instances * 3);
+  const uv0 = geometry.getAttribute("uv");
+  const uv = uv0 && uv0.count === count ? new Float32Array(count * instances * 2) : undefined;
+  // every instance draws the same triangles with the same materials, so the mapping is made once
+  const face = faceMaterials(mesh, geometry, count / 3, materials, matIds, defaultAlbedo);
+  const faceMaterial = new Uint32Array(face.length * instances);
+
+  const matrix = new THREE.Matrix4();
+  const normals3 = new THREE.Matrix3();
+  const v = new THREE.Vector3();
+  for (let n = 0; n < instances; n++) {
+    mesh.getMatrixAt(n, matrix);
+    matrix.premultiply(mesh.matrixWorld);
+    normals3.getNormalMatrix(matrix);
+    const base = n * count;
+    for (let i = 0; i < count; i++) {
+      const o = (base + i) * 3;
+      v.fromBufferAttribute(position, i).applyMatrix4(matrix);
+      positions[o] = v.x;
+      positions[o + 1] = v.y;
+      positions[o + 2] = v.z;
+      bounds.expandByPoint(v);
+      if (normal) v.fromBufferAttribute(normal, i).applyMatrix3(normals3).normalize();
+      else v.set(0, 0, 0);
+      normals[o] = v.x;
+      normals[o + 1] = v.y;
+      normals[o + 2] = v.z;
+      if (uv && uv0) {
+        uv[(base + i) * 2] = uv0.getX(i);
+        uv[(base + i) * 2 + 1] = uv0.getY(i);
+      }
+    }
+    faceMaterial.set(face, n * face.length);
+  }
+  // a mirrored instance winds the other way, so a geometric normal is a per-instance thing — taken
+  // over the whole concatenated run at once, after every transform has been applied
+  if (!normal) faceNormals(positions, normals);
+
+  emitters.push({ positions, normals, uv, faceMaterial });
+  return instances;
 }
 
 /**
@@ -521,11 +626,10 @@ function faceMaterials(
   matIds: Map<THREE.Material, number>,
   defaultAlbedo: number,
 ): Uint32Array {
+  // collectScene() drops a mesh with an empty material list before it gets here, so `list[0]` exists —
+  // a group naming a material index the list does not have is what the fallback is for
   const list = ([] as THREE.Material[]).concat(mesh.material as THREE.Material | THREE.Material[]);
-  const id = (m: THREE.Material | undefined) => {
-    if (!m) return intern(materials, matIds, list[0]!, defaultAlbedo);
-    return intern(materials, matIds, m, defaultAlbedo);
-  };
+  const id = (m: THREE.Material | undefined) => intern(materials, matIds, m ?? list[0]!, defaultAlbedo);
   const out = new Uint32Array(triCount).fill(id(list[0]));
   // groups survive toNonIndexed(), so a multi-material mesh keeps a material per triangle range
   if (list.length > 1) {
@@ -588,10 +692,16 @@ function materialOf(material: THREE.Material, defaultAlbedo: number): BakeMateri
     if (mean) emissive = [emissiveScale[0] * mean[0], emissiveScale[1] * mean[1], emissiveScale[2] * mean[2]];
   }
 
+  // three defaults `normalMapType` to tangent space, and an object-space map would need the mesh's
+  // normal matrix — which a texel, being a point in an atlas shared by every mesh, no longer has
+  const normalMap = m.normalMap && (m.normalMapType ?? THREE.TangentSpaceNormalMap) === THREE.TangentSpaceNormalMap;
+  const normalScale: [number, number] = [m.normalScale?.x ?? 1, m.normalScale?.y ?? 1];
+
   const coverage = coverageOf(m);
   return {
     albedo: albedo.map((c) => Math.min(1, Math.max(0, c))) as [number, number, number],
     emissive,
+    ...(normalMap ? { normalMap: m.normalMap!, normalScale } : {}),
     ...(m.emissiveMap ? { emissiveMap: m.emissiveMap, emissiveScale } : {}),
     ...(coverage < 1 ? { coverage } : {}),
     ...(override || !m.map ? {} : { map: m.map, mapScale: base.map((c) => c * diffuse) as [number, number, number] }),

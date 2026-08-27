@@ -31,6 +31,16 @@
   "activationEvents": [
     "onLanguage:scene"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The language server runs node against the workspace's own files: it reflects the installed three typings with the TypeScript compiler and follows @import out of node_modules."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "The checker reads three's typings and imported sheets off disk, so a workspace that is not on a filesystem has nothing to check against."
+    }
+  },
   "contributes": {
     "languages": [
       {

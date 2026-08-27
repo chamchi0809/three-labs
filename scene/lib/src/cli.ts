@@ -65,6 +65,9 @@ async function run(): Promise<number> {
   // a sheet imported by three others would otherwise report its problems three times
   const reported = new Set<string>();
   let errors = 0;
+  // separate from `errors` so the "N error(s)" line stays a count of diagnostics: a fix that threw is
+  // usually a sheet that does not parse, and checkSource is about to report that same problem properly
+  let unfixed = false;
 
   for (const file of files) {
     const text = fs.readFileSync(file, "utf8");
@@ -79,6 +82,7 @@ async function run(): Promise<number> {
         }
       } catch (e) {
         console.error(`${file}: cannot fix: ${(e as Error).message}`);
+        unfixed = true;
       }
     }
     for (const d of await checkSource(sources.get(file)!, file, schema)) {
@@ -94,7 +98,7 @@ async function run(): Promise<number> {
 
   if (json) console.log(JSON.stringify(found, null, 2));
   else console.log(`${files.length} file(s), ${errors} error(s)`);
-  return errors ? 1 : 0;
+  return errors || unfixed ? 1 : 0;
 }
 
 const status = await run();

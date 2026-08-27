@@ -83,6 +83,35 @@ type Comment = Pos & {
 
 ***
 
+### Compound
+
+```ts
+type Compound = Pos & {
+  classes: string[];
+  classSpans: Pos[];
+  id?: string;
+  idSpan?: Pos;
+  type?: string;
+  typeSpan?: Pos;
+};
+```
+
+One compound selector of an `@override` — `mesh#hero.glow`, in the order those are written on a node.
+At least one of the three parts is present; the spans are what rename and "find references" run on.
+
+#### Type Declaration
+
+| Name | Type |
+| ------ | ------ |
+| `classes` | `string`[] |
+| `classSpans` | [`Pos`](#pos-1)[] |
+| `id?` | `string` |
+| `idSpan?` | [`Pos`](#pos-1) |
+| `type?` | `string` |
+| `typeSpan?` | [`Pos`](#pos-1) |
+
+***
+
 ### Diagnostic
 
 ```ts
@@ -118,6 +147,7 @@ type Expanded = {
   diagnostics: Diagnostic[];
   ids: Map<string, ObjectValue>;
   nodes: Member[];
+  overrides: Override[];
   templates: Template[];
 };
 ```
@@ -130,6 +160,7 @@ type Expanded = {
 | <a id="diagnostics"></a> `diagnostics` | [`Diagnostic`](#diagnostic)[] | - |
 | <a id="ids"></a> `ids` | `Map`\<`string`, [`ObjectValue`](#objectvalue)\> | `#id` → the node that declared it, in document order |
 | <a id="nodes"></a> `nodes` | [`Member`](#member)[] | - |
+| <a id="overrides"></a> `overrides` | [`Override`](#override)[] | the `@override` rules of the sheet and everything it imported, in source order |
 | <a id="templates"></a> `templates` | [`Template`](#template)[] | - |
 
 ***
@@ -156,7 +187,10 @@ type HotListener = (mod) => void;
 
 ```ts
 type Knob = {
+  int?: boolean;
   length?: number;
+  max?: number;
+  min?: number;
   type: "number" | "string" | "boolean" | "numbers";
   values?: string[];
 };
@@ -164,11 +198,14 @@ type Knob = {
 
 #### Properties
 
-| Property | Type |
-| ------ | ------ |
-| <a id="length"></a> `length?` | `number` |
-| <a id="type"></a> `type` | `"number"` \| `"string"` \| `"boolean"` \| `"numbers"` |
-| <a id="values"></a> `values?` | `string`[] |
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="int"></a> `int?` | `boolean` | a count, not a measurement — `size: 1024.5` is a typo and `probe: 2` bakes nothing |
+| <a id="length"></a> `length?` | `number` | - |
+| <a id="max"></a> `max?` | `number` | - |
+| <a id="min"></a> `min?` | `number` | inclusive bounds for a number knob, or for every entry of a `numbers` one |
+| <a id="type"></a> `type` | `"number"` \| `"string"` \| `"boolean"` \| `"numbers"` | - |
+| <a id="values"></a> `values?` | `string`[] | - |
 
 ***
 
@@ -220,7 +257,7 @@ type LoadOptions = {
 | ------ | ------ | ------ |
 | <a id="base"></a> `base?` | `string` | - |
 | <a id="draco"></a> `draco?` | `string` | path to three's draco decoder, for gltf() files that use it |
-| <a id="ktx2"></a> `ktx2?` | \{ `path`: `string`; `renderer`: `unknown`; \} | transcoder path + the renderer whose support is probed, for gltf() files with ktx2 textures |
+| <a id="ktx2"></a> `ktx2?` | \{ `path`: `string`; `renderer`: `unknown`; \} | transcoder path + the renderer whose support is probed — required by `ktx2()` and by gltf() files with ktx2 textures |
 | `ktx2.path` | `string` | - |
 | `ktx2.renderer` | `unknown` | - |
 | <a id="lightmap"></a> `lightmap?` | `boolean` | `false` ignores the sheet's own `@bakery { lightmap }`. What the baker passes — it is the thing producing the atlas, and applying one mid-bake would zero the lights it is about to trace. |
@@ -368,6 +405,7 @@ type MountOptions = LoadOptions & {
 type NodeBakery = {
   density?: number;
   enabled?: boolean | "occluder";
+  influence?: number;
   probe?: number;
   radius?: number;
 };
@@ -381,6 +419,7 @@ A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a 
 | ------ | ------ | ------ |
 | <a id="density"></a> `density?` | `number` | lightmap texels per world unit, relative to the rest of the scene. 2 gives this node twice the resolution in each direction — so four times the atlas area — and 0.5 a quarter of it. |
 | <a id="enabled"></a> `enabled?` | `boolean` \| `"occluder"` | `false` keeps the node out of the bake entirely — as an occluder *and* a receiver — and on a light means it stays live at runtime. `occluder` keeps it in the ray tracing but gives it no lightmap of its own, which is what a proxy or a mesh too big to unwrap wants. |
+| <a id="influence"></a> `influence?` | `number` | How far this probe reaches, in world units. A mesh outside every probe's influence reflects none of them; inside two, it reflects a blend that fades to nothing at each one's edge. 0 — the default — is unbounded, and a scene of unbounded probes is the plain "nearest two, by distance" it was. |
 | <a id="probe"></a> `probe?` | `number` | Bake a reflection probe at this node's world position: an equirectangular map of the radiance leaving every direction, `probe` texels wide and half that tall. A metal has no diffuse lobe for the atlas to light, so this is what it reflects instead. 256 is plenty for anything but a mirror. |
 | <a id="radius"></a> `radius?` | `number` | soft shadows: the light becomes a sphere of this world radius (a directional light reads radians) |
 
@@ -417,6 +456,16 @@ type ObjectValue = Pos & {
 | `idSpan?` | [`Pos`](#pos-1) | source range of `#id` including the hash |
 | `kind` | `"object"` | - |
 | `name` | `string` | - |
+
+***
+
+### Override
+
+```ts
+type Override = Extract<Statement, {
+  kind: "override";
+}>;
+```
 
 ***
 
@@ -464,6 +513,7 @@ type SceneBakery = {
   dilateRadius?: number;
   exposure?: number;
   exr?: boolean;
+  fireflyThreshold?: number;
   include?: "all" | "none";
   indirect?: number;
   lightmap?: string;
@@ -492,6 +542,7 @@ What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()`
 | <a id="dilateradius"></a> `dilateRadius?` | `number` | - |
 | <a id="exposure"></a> `exposure?` | `number` | The divisor that packs the atlas into the 8-bit PNG, undone at runtime by `lightMapIntensity`, so it decides quantization and not brightness. Absent, the bake picks the 95th percentile of the atlas — which moves a little between bakes of a noisy scene. Set it to make that reproducible. |
 | <a id="exr"></a> `exr?` | `boolean` | - |
+| <a id="fireflythreshold"></a> `fireflyThreshold?` | `number` | How many times its neighbours' median a texel may be before the bake clamps it back to that — the stray bright dots a path tracer leaves. 0 keeps them. |
 | <a id="include"></a> `include?` | `"all"` \| `"none"` | `all` bakes every mesh but the ones that turn themselves off; `none` bakes only the ones that opt in |
 | <a id="indirect"></a> `indirect?` | `number` | - |
 | <a id="lightmap-1"></a> `lightmap?` | `string` | Runtime, not bake: the manifest `loadScene` applies to this sheet once it is built — what `tscene-bake` wrote with the settings above. The handle lands on `root.userData.lightmap`. Resolved against the sheet's url, and against the document for a sheet a bundler inlined (it has a file path, not a url). The manifest's own siblings — the png and the exr — are never bundled either, so a built app wants all three in `public/` and a path like `/lightmaps/room.lightmap.json`. |
@@ -571,6 +622,11 @@ type Statement =
   name: string;
   namePos: Pos;
   node?: string;
+}
+  | Pos & {
+  body: Member[];
+  kind: "override";
+  selector: Compound[];
 };
 ```
 
@@ -628,6 +684,7 @@ type Value =
   value: string;
 }
   | Pos & {
+  digits: 6 | 8;
   kind: "hex";
   value: number;
 }
@@ -720,6 +777,11 @@ const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>;
 is what the checker validates against, per position. Adding a knob to [SceneBakery](#scenebakery) and friends
 without a row here means the checker rejects it.
 
+The bounds are the range the bake is actually defined over, not taste: outside them a knob is either
+dropped with a warning (`probe: 2`), clamped to something else entirely (`indirect: -1`), or asks for
+an allocation no machine has (`size: 65536`). The checker says so in the editor rather than the baker
+saying so an hour in.
+
 ***
 
 ### BUILTINS
@@ -744,8 +806,24 @@ builtin cannot be added without a section in the docs.
 const LOADERS: Record<string, {
   args: TypeRef[];
   class: string;
+  summary: string;
 }>;
 ```
+
+Calls that fetch something instead of constructing it. `args` is the call's own signature — a
+loader's arguments are nothing like the constructor of the class it hands back, and both the
+checker and the editor have to say so.
+
+***
+
+### LOOP\_LIMIT
+
+```ts
+const LOOP_LIMIT: 1000000 = 1e6;
+```
+
+The ceiling `repeat()` and `each()` share. Not a three limit: a count this large is a typo — an
+`each(--i, 1e9, …)` builds nothing anyone can see and stops the tab responding first.
 
 ***
 
@@ -803,6 +881,36 @@ function className(name): string;
 
 ***
 
+### clearAssetCache()
+
+```ts
+function clearAssetCache(url?): void;
+```
+
+Forgets what `texture()` and `gltf()` downloaded, so the next sheet that asks for a url fetches it
+again. Pass a resolved absolute url to drop one entry, or nothing to drop them all.
+
+The cache is keyed by url and lives as long as the module does, which is what makes a hot reload
+instant — and also means an asset edited on disk keeps serving its old bytes, and a long-lived page
+that walks through a lot of scenes never gives the decoded images back. This is the way out of both.
+
+It only forgets. Whatever is already on screen keeps working: a `gltf()` node is a clone that shares
+the cached geometries and materials, and those are freed by [disposeScene](#disposescene) on the last scene
+holding them. Clearing while a load is in flight is safe too — that load finishes and hands its
+result to the caller that started it, and only the caching of it is dropped.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `url?` | `string` |
+
+#### Returns
+
+`void`
+
+***
+
 ### concrete()
 
 ```ts
@@ -826,6 +934,24 @@ as other abstract classes turn up in paths; a per-object check would need the lo
 #### Returns
 
 `string`
+
+***
+
+### countable()
+
+```ts
+function countable(n): boolean;
+```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `n` | `number` |
+
+#### Returns
+
+`boolean`
 
 ***
 

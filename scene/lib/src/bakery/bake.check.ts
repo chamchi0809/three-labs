@@ -244,15 +244,31 @@ const close = (got: number, want: number, tol: number, what: string) =>
   close(away[0], 0, 1e-6, "back-facing probe");
 }
 
+// --- 4b: a millimetre under that emitter, where the area-measure estimator used to fall apart -----
+// Sampling the triangle by area carries a cosLight/distance², which has no upper bound as a shading
+// point approaches an emitter: it needed a ceiling, and the ceiling only ever removed energy — pica's
+// near-emitter texels came out 9% dark and its brightest 0.1% came out 55% dark, bias that no number of
+// samples moved. Sampling by solid angle (Arvo) has no distance in it at all, so the closed form holds
+// right up to the surface. At 1/400 of the emitter's half-width the view factor is 0.9968, which the
+// old estimator could not reach through the clamp.
+{
+  const root = new THREE.Group();
+  root.add(plane(0.005, 4, false, new THREE.MeshStandardMaterial({ emissive: 0xffffff, emissiveIntensity: 1 })));
+
+  const want = Math.PI * squareViewFactor(2, 0.005);
+  assert.ok(want > Math.PI * 0.99, `the point is meant to be all but enclosed, view factor ${want / Math.PI}`);
+  const [under] = await measure(root, [{ p: [0, 0, 0], n: [0, 1, 0] }], 1 << 14, 0);
+  close(under[0], want, want * 0.02, "irradiance a millimetre from an emitter, with no clamp to eat it");
+}
+
 // --- 5: two emitters, four fifths of the picks going to one of them -------------------------------
 // One emitter is its own control: with a single light in the scene every weighting agrees, and an
 // area-proportional pick, a power-proportional one and a plain 1/n all bake the same picture. Put a
 // small bright square under the probe and a large dim one well above it and they stop agreeing — the
 // bright one takes 80% of the picks and the dim one has to be worth five times as much when it is
 // finally drawn. Each probe sees exactly one of the two, so both closed forms are the single-emitter
-// one, unchanged. The heights are chosen so that cosLight/distSq * (1/pdf) stays under the estimator's
-// solid-angle ceiling everywhere on both squares — 80/3^2 and 1.25/1^2 against 4PI — because that
-// clamp is a known bias and this check is about the pick, not about it.
+// one, unchanged. Both squares are well clear of their probes, so the pick is the only thing that can
+// be wrong here — 4b is where a near-emitter estimator is put under pressure.
 {
   const root = new THREE.Group();
   const white = (intensity: number) =>

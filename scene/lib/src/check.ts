@@ -1,7 +1,7 @@
 // Type checks an expanded .tscene AST against a reflected three schema.
 // Pure (no typescript / no three import) so it runs in the browser too.
-import type { Diagnostic, Member, ObjectValue, Pos, Template, Value } from "./parse.ts";
-import type { ClassInfo, Method, Schema, TypeRef } from "./schema.ts";
+import type { Diagnostic, Member, ObjectValue, Override, Pos, Template, Value } from "./parse.ts";
+import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
 import { ALIASES, BAKERY, BUILTINS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 
 /** Levenshtein distance, two rows at a time */
@@ -17,7 +17,7 @@ function distance(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-export function check(nodes: Member[], schema: Schema, templates: Template[] = []): Diagnostic[] {
+export function check(nodes: Member[], schema: Schema, templates: Template[] = [], overrides: Override[] = []): Diagnostic[] {
   const out: Diagnostic[] = [];
   const templateOf = new Map(templates.map((t) => [t.name, t]));
   const err = (message: string, pos: Pos, fix?: Diagnostic["fix"]): void => {
@@ -292,10 +292,27 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       alt ? { start: v.namePos.start, end: v.namePos.end, text: alt } : undefined);
   }
 
+  /**
+   * How many of `params` have to be passed. TypeScript only ever writes optionals at the tail, so the
+   * first optional ends the required prefix — reading it that way can never over-report on a signature
+   * the reflection typed oddly.
+   */
+  function required(params: { optional: boolean }[]): number {
+    const first = params.findIndex((p) => p.optional);
+    return first === -1 ? params.length : first;
+  }
+
   /** positional arguments against a constructor or method signature */
   function checkArgs(params: { name: string; type: TypeRef; optional: boolean }[], args: Value[], what: string, at: Pos) {
     if (args.length > params.length) {
       err(`${what} takes at most ${params.length} argument(s), got ${args.length}`, args[params.length] ?? at);
+    }
+    // three defaults most arguments and the typings say so, so what is left is genuinely required:
+    // `textGeometry()` used to check clean and throw inside three with no line to point at
+    const need = required(params);
+    if (args.length < need) {
+      const list = params.slice(0, need).map((p) => `${p.name}: ${show(p.type)}`).join(", ");
+      err(`${what} needs ${need} argument(s) (${list}), got ${args.length}`, at);
     }
     args.forEach((a, i) => {
       const p = params[i];
@@ -303,8 +320,11 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     });
   }
 
-  /** an overloaded method (`lookAt(v)` / `lookAt(x, y, z)`) passes if any signature does; else the closest one reports */
-  function checkOverloads(signatures: Method[], args: Value[], what: string, at: Pos) {
+  /**
+   * An overloaded call — a method (`lookAt(v)` / `lookAt(x, y, z)`) or a constructor (`color(#fff)` /
+   * `color(1, .5, 0)`) — passes if any signature does; else the closest one reports.
+   */
+  function checkOverloads(signatures: { params: Param[] }[], args: Value[], what: string, at: Pos) {
     let best: { distance: number; produced: Diagnostic[] } | undefined;
     for (const { params } of signatures) {
       const mark = out.length;
@@ -351,11 +371,13 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       }
     }
 
-    // constructor arguments
+    // constructor arguments. A loader's are its own — `gltf()` takes a url, and reporting it as the
+    // `Group()` it returns names a constructor the sheet never wrote.
     const loader = LOADERS[o.name];
-    const params = loader ? loader.args.map((type, i) => ({ name: `arg${i}`, type, optional: false })) : info(cls)!.ctor;
-    checkArgs(params, o.args, `${nodeName(cls)}()`, o);
-    if (loader && o.args.length !== 1) err(`${o.name}() takes a single url string`, o);
+    const overloads = loader
+      ? [loader.args.map((type) => ({ name: "url", type, optional: false }))]
+      : info(cls)!.ctors;
+    checkOverloads(overloads.map((params) => ({ params })), o.args, `${loader ? o.name : nodeName(cls)}()`, o);
 
     if (expect && !assignable({ kind: "class", name: cls }, expect.type)) {
       err(`${expect.what} expects ${show(expect.type)}, got ${cls}`, o);
@@ -423,13 +445,32 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       }
       return;
     }
-    if (knob.type === "number" && v.kind !== "number" && v.kind !== "hex") wrong("a number");
+    if (knob.type === "number") {
+      if (v.kind !== "number" && v.kind !== "hex") return wrong("a number");
+      return inRange(v.value, v, knob, what);
+    }
     if (knob.type === "string" && v.kind !== "string") wrong("a string");
     if (knob.type === "boolean" && !(v.kind === "ident" && (v.name === "true" || v.name === "false"))) wrong("true or false");
     if (knob.type === "numbers") {
       if (v.kind !== "array" || v.items.some((i) => i.kind !== "number")) wrong("an array of numbers");
       else if (knob.length !== undefined && v.items.length !== knob.length) wrong(`${knob.length} numbers`);
+      else for (const item of v.items) inRange((item as Value & { kind: "number" }).value, item, knob, what);
     }
+  }
+
+  /**
+   * A knob outside the range the bake is defined over. The baker either warns and drops it hours later
+   * or clamps it into something else, and neither reads as "this line is wrong" — so it is said here.
+   */
+  function inRange(n: number, at: Pos, knob: Knob, what: string): void {
+    if (knob.int && !Number.isInteger(n)) return err(`${what} expects a whole number, got ${n}`, at);
+    const low = knob.min !== undefined && n < knob.min;
+    const high = knob.max !== undefined && n > knob.max;
+    if (!low && !high) return;
+    const bound =
+      knob.min !== undefined && knob.max !== undefined ? `from ${knob.min} to ${knob.max}`
+        : knob.min !== undefined ? `of at least ${knob.min}` : `of at most ${knob.max}`;
+    err(`${what} expects a number ${bound}, got ${n}`, at);
   }
 
   function checkBody(cls: string, body: Member[]) {
@@ -453,14 +494,24 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
           err(`${cls}.${m.object.name}() is a method — call it as ${m.object.name}(…); without a block`, m.object);
           continue;
         }
-        // an unknown bare call is a mistyped method far more often than a mistyped class
+        // an unknown bare call is a mistyped method far more often than a mistyped class. Saying
+        // `unknown three class "LookAtTheThing"` to someone who wrote `lookAtTheThing(0, 1, 0);` names
+        // a thing they never mentioned, so report it as the method it reads as either way — with the
+        // nearest class named too, for the rarer case where a bodyless child node is what was meant.
         if (!info(childCls) && !declared(m.object.name) && plain && info(cls)) {
+          const range = { start: m.object.start, end: m.object.start + m.object.name.length, file: m.object.file };
           const alt = suggest(m.object.name, Object.keys(info(cls)!.methods));
           if (alt) {
-            const range = { start: m.object.start, end: m.object.start + m.object.name.length, file: m.object.file };
             err(`${cls} has no method ${JSON.stringify(m.object.name)}; did you mean ${alt}?`, range, { ...range, text: alt });
             continue;
           }
+          const node = suggest(childCls, Object.keys(schema.classes));
+          err(
+            `${cls} has no method ${JSON.stringify(m.object.name)}` + (node ? `; did you mean the node ${nodeName(node)}?` : ""),
+            range,
+            node ? { ...range, text: nodeName(node) } : undefined,
+          );
+          continue;
         }
         if (info(childCls) && !isA(childCls, "Object3D")) {
           err(`${childCls} is not an Object3D, so it cannot be a child; use it as a property value instead`, m.object);
@@ -499,9 +550,10 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
 
       const prop = propOf(owner, leaf);
       if (!prop) {
-        const ctorArg = info(owner)?.ctor.find((p) => p.name === leaf);
+        // any overload's argument list: `color { r: 1 }` is the same mistake whichever `Color()` it meant
+        const ctorArg = info(owner)?.ctors.some((params) => params.some((p) => p.name === leaf));
         if (ctorArg) {
-          const order = info(owner)!.ctor.map((p) => p.name).join(", ");
+          const order = info(owner)!.ctors[0]!.map((p) => p.name).join(", ");
           err(`${leaf} is a constructor argument of ${owner}, not a property — pass it positionally: ${nodeName(owner)}(${order})`, m);
           continue;
         }
@@ -542,6 +594,29 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     } else {
       checkBody(cls, t.body);
     }
+  }
+
+  // an @override body is checked where it is written, against the type its rightmost compound names —
+  // so a rule that currently matches nothing is still checked, exactly as an unapplied template is
+  for (const o of overrides) {
+    const last = o.selector[o.selector.length - 1]!;
+    for (const c of o.selector) {
+      if (!c.type) continue;
+      const cls = className(c.type);
+      const range = c.typeSpan ?? c;
+      if (!info(cls)) {
+        const alt = suggest(cls, Object.keys(schema.classes));
+        err(
+          `unknown three class ${JSON.stringify(cls)}` + (alt ? `; did you mean ${nodeName(alt)}?` : ""),
+          range,
+          alt ? { start: range.start, end: range.end, text: nodeName(alt) } : undefined,
+        );
+      } else if (!isA(cls, "Object3D")) {
+        err(`${cls} is not an Object3D, so no node in the tree can be one`, range);
+      }
+    }
+    const cls = className(last.type ?? "object3D");
+    if (info(cls) && isA(cls, "Object3D")) checkBody(cls, o.body);
   }
 
   for (const m of nodes) {

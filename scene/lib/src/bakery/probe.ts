@@ -32,24 +32,55 @@ export function probeDirections(width: number, height: number): Float32Array {
   return out;
 }
 
+/** A probe and how much of `position`'s reflection is its. The weights of a blend sum to 1. */
+export type ProbeWeight = { index: number; weight: number };
+
+/** A placed probe as {@link probeWeights} needs it. `influence` 0 or absent means unbounded. */
+export type PlacedProbe = { position: readonly number[]; influence?: number };
+
 /**
- * Which probe `position` reflects: the nearest one, or -1 when there are none.
+ * The probes `position` reflects: the two nearest that reach it, weighted, nearest first. Empty when
+ * every probe's influence volume excludes it — which is what an author who sets `influence` at all is
+ * asking for, and why the default is unbounded.
  *
- * ponytail: nearest centre, so the probes partition the scene into Voronoi cells with no say from the
- * author beyond where they put them. An influence volume per probe (Unity's box, Unreal's sphere) and a
- * blend between the two nearest are the upgrade; both need a second field in the manifest, not a
- * different shape here.
+ * The weight is inverse distance times a linear falloff to each probe's own edge. Distance alone is
+ * what makes a mesh sitting on a probe reflect that probe and not half of its neighbour; the falloff
+ * is what stops a probe from vanishing abruptly at the boundary of its volume. With no influence set
+ * anywhere the falloffs are all 1, so the two nearest split the reflection as `d1/(d0+d1)` — the
+ * Voronoi cells this used to hand out, with the seam between two cells softened into a gradient.
  */
-export function nearestProbe(position: readonly number[], probes: readonly { position: readonly number[] }[]): number {
-  let best = -1;
-  let bestDistance = Infinity;
+export function probeWeights(position: readonly number[], probes: readonly PlacedProbe[]): ProbeWeight[] {
+  let near = -1;
+  let next = -1;
+  let nearDistance = Infinity;
+  let nextDistance = Infinity;
   probes.forEach((probe, i) => {
-    let distance = 0;
-    for (let k = 0; k < 3; k++) distance += (position[k]! - probe.position[k]!) ** 2;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = i;
+    let squared = 0;
+    for (let k = 0; k < 3; k++) squared += (position[k]! - probe.position[k]!) ** 2;
+    const distance = Math.sqrt(squared);
+    const reach = probe.influence ?? 0;
+    if (reach > 0 && distance > reach) return;
+    if (distance < nearDistance) {
+      [next, nextDistance] = [near, nearDistance];
+      [near, nearDistance] = [i, distance];
+    } else if (distance < nextDistance) {
+      [next, nextDistance] = [i, distance];
     }
   });
-  return best;
+  if (near < 0) return [];
+
+  const strength = (i: number, distance: number) => {
+    const reach = probes[i]!.influence ?? 0;
+    const falloff = reach > 0 ? Math.max(0, 1 - distance / reach) : 1;
+    // a mesh standing exactly on a probe would divide by zero, and it is that probe's anyway
+    return falloff / Math.max(distance, 1e-6);
+  };
+  const a = strength(near, nearDistance);
+  const b = next < 0 ? 0 : strength(next, nextDistance);
+  // both fall to zero only when the nearest probe sits exactly on its own edge; it is still the answer
+  if (!(a + b > 0) || b <= 0) return [{ index: near, weight: 1 }];
+  return [
+    { index: near, weight: a / (a + b) },
+    { index: next, weight: b / (a + b) },
+  ];
 }

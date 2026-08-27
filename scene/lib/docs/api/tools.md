@@ -15,7 +15,7 @@ type ClassInfo = {
   abstract: boolean;
   bases: string[];
   copyable: boolean;
-  ctor: Param[];
+  ctors: Param[][];
   doc?: string;
   methods: Record<string, Method[]>;
   props: Record<string, PropInfo>;
@@ -29,7 +29,7 @@ type ClassInfo = {
 | <a id="abstract"></a> `abstract` | `boolean` | - |
 | <a id="bases"></a> `bases` | `string`[] | - |
 | <a id="copyable"></a> `copyable` | `boolean` | - |
-| <a id="ctor"></a> `ctor` | [`Param`](#param)[] | first construct signature, in order |
+| <a id="ctors"></a> `ctors` | [`Param`](#param)[][] | Every construct signature, in declaration order — `color(#fff)` and `color(1, .5, 0)` are two different ones, and reflecting only the first made the second an error the language never had. Always at least one entry: a class with no constructor of its own reflects as `[[]]`. |
 | <a id="doc"></a> `doc?` | `string` | - |
 | <a id="methods"></a> `methods` | `Record`\<`string`, [`Method`](#method)[]\> | call signatures of each public method — `lookAt(x, y, z);` is checked against these |
 | <a id="props"></a> `props` | `Record`\<`string`, [`PropInfo`](#propinfo)\> | - |
@@ -314,7 +314,8 @@ function buildSchema(opts?): Schema;
 function check(
    nodes, 
    schema, 
-   templates?): Diagnostic[];
+   templates?, 
+   overrides?): Diagnostic[];
 ```
 
 #### Parameters
@@ -324,6 +325,7 @@ function check(
 | `nodes` | [`Member`](index.md#member)[] | `undefined` |
 | `schema` | [`Schema`](#schema) | `undefined` |
 | `templates` | [`Pos`](index.md#pos-1) & \{ `body`: [`Member`](index.md#member)[]; `kind`: `"template"`; `name`: `string`; `namePos`: [`Pos`](index.md#pos-1); `node?`: `string`; \}[] | `[]` |
+| `overrides` | [`Pos`](index.md#pos-1) & \{ `body`: [`Member`](index.md#member)[]; `kind`: `"override"`; `selector`: [`Compound`](index.md#compound)[]; \}[] | `[]` |
 
 #### Returns
 

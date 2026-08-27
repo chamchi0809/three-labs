@@ -3,7 +3,7 @@
 // Nothing here reaches into three by name at runtime: the handful of values below are the only ones
 // this module imports, and every class a sheet mentions arrives through a registry the vite plugin
 // built at compile time. That is what lets a bundler tree-shake three down to what the scene uses.
-import { AnimationClip, AnimationMixer, Group, SRGBColorSpace, TextureLoader } from "three/webgpu";
+import { AnimationClip, AnimationMixer, EquirectangularReflectionMapping, Group, SRGBColorSpace, TextureLoader } from "three/webgpu";
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
 import { className, LOADERS, math } from "./names.ts";
@@ -47,7 +47,7 @@ export type LoadOptions = {
   manager?: LoadingManager;
   /** path to three's draco decoder, for gltf() files that use it */
   draco?: string;
-  /** transcoder path + the renderer whose support is probed, for gltf() files with ktx2 textures */
+  /** transcoder path + the renderer whose support is probed — required by `ktx2()` and by gltf() files with ktx2 textures */
   ktx2?: { path: string; renderer: unknown };
   /**
    * `false` ignores the sheet's own `@bakery { lightmap }`. What the baker passes — it is the thing
@@ -113,7 +113,10 @@ export async function loadScene(src: string | SceneModule, opts: LoadOptions = {
   // the imported module object goes stale on every hot reload, so always take the registered one
   const mod = typeof src === "string" ? undefined : latest(src);
   const base = opts.base ?? mod?.file;
-  const sheet = parse(mod ? mod.source : (src as string), base);
+  // `base` resolves assets; a sheet's own file is its identity, and `moduleLoader` finds the owner of an
+  // `@import` by it. Handing `parse()` the caller's base instead made every import of a bundled sheet
+  // look itself up under a name nothing was registered as — so `base` broke the option it documents.
+  const sheet = parse(mod ? mod.source : (src as string), mod?.file ?? opts.base);
   const { nodes, diagnostics } = await expand(sheet, opts.load ?? (mod ? moduleLoader(mod) : fetchLoader));
   // warnings (dead vars, duplicate ids, …) are the checker's business; only errors stop the build
   const errors = [...sheet.errors, ...diagnostics].filter((d) => d.severity === "error");
@@ -373,6 +376,24 @@ const HINT =
 // module-level: a reloaded scene reuses the bytes it already downloaded
 // ponytail: keyed by url only — two loadScene calls with different draco/ktx2 options share the first result
 const assets = new Map<string, Promise<any>>();
+
+/**
+ * Forgets what `texture()` and `gltf()` downloaded, so the next sheet that asks for a url fetches it
+ * again. Pass a resolved absolute url to drop one entry, or nothing to drop them all.
+ *
+ * The cache is keyed by url and lives as long as the module does, which is what makes a hot reload
+ * instant — and also means an asset edited on disk keeps serving its old bytes, and a long-lived page
+ * that walks through a lot of scenes never gives the decoded images back. This is the way out of both.
+ *
+ * It only forgets. Whatever is already on screen keeps working: a `gltf()` node is a clone that shares
+ * the cached geometries and materials, and those are freed by {@link disposeScene} on the last scene
+ * holding them. Clearing while a load is in flight is safe too — that load finishes and hands its
+ * result to the caller that started it, and only the caching of it is dropped.
+ */
+export function clearAssetCache(url?: string): void {
+  if (url === undefined) assets.clear();
+  else assets.delete(url);
+}
 /** gltf() root → the clips that came with it, for play() */
 const clipsOf = new WeakMap<object, AnimationClip[]>();
 /** clip owner → its mixer, so several play() calls on one gltf share one mixer */
@@ -399,13 +420,27 @@ async function gltfLoader(ctx: Ctx) {
     const { DRACOLoader } = await import("three/addons/loaders/DRACOLoader.js");
     loader.setDRACOLoader(new DRACOLoader(ctx.opts.manager).setDecoderPath(ctx.opts.draco));
   }
-  if (ctx.opts.ktx2) {
-    const { KTX2Loader } = await import("three/addons/loaders/KTX2Loader.js");
-    const ktx2 = new KTX2Loader(ctx.opts.manager).setTranscoderPath(ctx.opts.ktx2.path);
-    loader.setKTX2Loader(ktx2.detectSupport(ctx.opts.ktx2.renderer as any));
-  }
+  if (ctx.opts.ktx2) loader.setKTX2Loader(await ktx2Loader(ctx));
   return loader;
 }
+
+/** the transcoder is configured, not bundled: it has to be served, and it has to probe the renderer */
+async function ktx2Loader(ctx: Ctx) {
+  const { KTX2Loader } = await import("three/addons/loaders/KTX2Loader.js");
+  const { path, renderer } = ctx.opts.ktx2!;
+  return new KTX2Loader(ctx.opts.manager).setTranscoderPath(path).detectSupport(renderer as any);
+}
+
+/**
+ * The texture loaders that are three/addons modules rather than three's own — imported when a sheet
+ * asks for one, so a scene with no `.hdr` in it never downloads the parser for one.
+ */
+const TEXTURE_LOADERS: Record<string, (ctx: Ctx) => Promise<{ loadAsync(url: string): Promise<any> }>> = {
+  texture: async (ctx) => new TextureLoader(ctx.opts.manager),
+  hdr: async (ctx) => new (await import("three/addons/loaders/HDRLoader.js")).HDRLoader(ctx.opts.manager),
+  exr: async (ctx) => new (await import("three/addons/loaders/EXRLoader.js")).EXRLoader(ctx.opts.manager),
+  ktx2: (ctx) => ktx2Loader(ctx),
+};
 
 function construct(o: ObjectValue, ctx: Ctx): Promise<any> {
   // one AST node is one instance — except inside an each(), where expand() marked the nodes that read
@@ -432,13 +467,21 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   };
 
   let target: any;
-  if (o.name === "texture") {
+  const loader = TEXTURE_LOADERS[o.name];
+  if (loader) {
+    if (o.name === "ktx2" && !ctx.opts.ktx2) fail("ktx2() needs loadScene's `ktx2` option — the transcoder has to be served and the renderer probed", o, ctx);
     // a texture clone owns its own GPU upload and shares only the decoded image, so it stays disposable
-    const source = await asset(url(), () => new TextureLoader(ctx.opts.manager).loadAsync(url()));
+    const source = await asset(url(), async () => (await loader(ctx)).loadAsync(url()));
     target = source.clone(); // shares the decoded image, but each use gets its own wrap/repeat state
     target.needsUpdate = true;
-    // which slot this ends up in is not known yet, so the ones the sheet left alone are remembered
-    if (!o.body.some((m) => m.kind === "prop" && m.name === "colorSpace")) untagged.add(target);
+    // which slot this ends up in is not known yet, so the ones the sheet left alone are remembered.
+    // Only for texture(): float radiance is linear by definition, and a .ktx2 carries its own colour
+    // space in the container, so neither has a guess to make.
+    if (o.name === "texture" && !o.body.some((m) => m.kind === "prop" && m.name === "colorSpace")) untagged.add(target);
+    // an .hdr or .exr is an environment map often enough that UVMapping is never what was meant
+    if ((o.name === "hdr" || o.name === "exr") && !o.body.some((m) => m.kind === "prop" && m.name === "mapping")) {
+      target.mapping = EquirectangularReflectionMapping;
+    }
   } else if (o.name === "gltf") {
     // ponytail: a cached gltf is cloned per use; skinned meshes need SkeletonUtils.clone if that ever comes up
     const gltf = await asset(url(), async () => {
@@ -508,6 +551,11 @@ async function apply(target: any, m: Member, ctx: Ctx): Promise<void> {
     if (owner == null) fail(`cannot set ${m.name}: ${seg} is not set`, m, ctx);
   }
   const leaf = path.at(-1)!;
+  // a path that walked into a primitive — `position.x.y: 2` reached `0`, and `"y" in 0` throws a raw
+  // TypeError with no sheet position on it. The checker catches this; `vite({ check: false })` does not.
+  if (typeof owner !== "object" && typeof owner !== "function") {
+    fail(`cannot set ${m.name}: ${path.slice(0, -1).join(".")} is a ${typeof owner}, not an object`, m, ctx);
+  }
   // `map: texture("./wall.png")` is a colour, and TextureLoader hands every file back as raw data —
   // so an untagged texture in a colour slot renders washed out until somebody types `colorSpace: srgb`
   if (COLOR_SLOTS.has(leaf) && untagged.delete(value as object)) (value as { colorSpace: string }).colorSpace = SRGBColorSpace;
@@ -569,6 +617,8 @@ function forwardRef(v: Value, ctx: Ctx): boolean {
 
 /** `find(mesh, "Body") { … }` — settings for a node that already exists inside this subtree */
 async function applyFind(target: any, o: ObjectValue, ctx: Ctx): Promise<void> {
+  // `find() { }` used to index past the end of an empty argument list and throw a bare TypeError
+  if (!o.args.length || o.args.length > 2) fail('find() takes an optional node type and a name: find(mesh, "Body")', o, ctx);
   const name = String(await evaluate(o.args.at(-1)!, ctx));
   const found = target.getObjectByName?.(name);
   if (!found) fail(`no descendant named ${JSON.stringify(name)}`, o, ctx);

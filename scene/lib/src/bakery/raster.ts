@@ -102,22 +102,32 @@ async function inWorkers(
   const { Worker } = await import("node:worker_threads");
   const texels = allocate(atlas.width, atlas.height, true);
   const bins = balance(parts, jobs);
+  const workers: InstanceType<typeof Worker>[] = [];
   let done = 0;
 
-  await Promise.all(
-    bins.map(
-      (bin) =>
-        new Promise<void>((resolve, reject) => {
-          const worker = new Worker(WORKER, {
-            eval: true,
-            workerData: { module: import.meta.url, texels, parts: bin },
-          });
-          worker.on("message", () => onProgress?.(++done / parts.length));
-          worker.on("error", reject);
-          worker.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`rasterize worker exited with ${code}`))));
-        }),
-    ),
-  );
+  try {
+    await Promise.all(
+      bins.map(
+        (bin) =>
+          new Promise<void>((resolve, reject) => {
+            const worker = new Worker(WORKER, {
+              eval: true,
+              workerData: { module: import.meta.url, texels, parts: bin },
+            });
+            workers.push(worker);
+            worker.on("message", () => onProgress?.(++done / parts.length));
+            worker.on("error", reject);
+            worker.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`rasterize worker exited with ${code}`))));
+          }),
+      ),
+    );
+  } catch (e) {
+    // `Promise.all` settles on the first rejection and leaves the siblings running — threads that keep
+    // writing into `texels` while the caller has already restarted the rasterize on one thread, and
+    // that hold the process open long after the bake is over
+    await Promise.all(workers.map((w) => w.terminate()));
+    throw e;
+  }
   return indexed(texels);
 }
 
@@ -143,8 +153,24 @@ function balance(parts: RasterMesh[], jobs: number): RasterMesh[][] {
   return bins.filter((b) => b.length);
 }
 
+/** what one texel of {@link Texels} costs: mask 1 + position 16 + normal 16 + uv 8 + mesh 4 */
+export const TEXEL_BYTES = 45;
+
+/** past this the allocation is announced, so running out of memory is not the first news of it */
+const LOUD_ABOVE = 512 * 1024 * 1024;
+
 function allocate(width: number, height: number, shared: boolean): Texels {
   const n = width * height;
+  // a 2048x8192 stacked atlas is 754 MB of surface samples before the tracer has allocated anything of
+  // its own, and the number is knowable from the size knob alone — worth saying out loud rather than
+  // letting it surface as an allocation failure with no mention of what asked for the memory
+  if (n * TEXEL_BYTES > LOUD_ABOVE) {
+    const mb = Math.round((n * TEXEL_BYTES) / 1024 / 1024);
+    console.warn(
+      `tscene/bakery: a ${width}x${height} atlas needs ${mb} MB of surface samples — lower @bakery { size } ` +
+        `or texelsPerUnit if this runs out of memory`,
+    );
+  }
   const buffer = (bytes: number) => (shared ? new SharedArrayBuffer(bytes) : new ArrayBuffer(bytes));
   return {
     width,

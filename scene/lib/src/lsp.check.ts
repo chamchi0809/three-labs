@@ -35,6 +35,10 @@ group #stage {
 @template mesh.shiny {
   receiveShadow: true;
 }
+
+@override #stage mesh.glow {
+  frustumCulled: false;
+}
 `;
 fs.writeFileSync(main, text);
 
@@ -245,7 +249,7 @@ await check("#id references and definitions follow ref()", async () => {
 
 await check("document symbols mirror the scene graph", async () => {
   const symbols = await request("textDocument/documentSymbol", { textDocument: { uri } });
-  assert.deepEqual(symbols.map((s: any) => s.name), ["--height", "group #stage", "@template mesh.shiny"]);
+  assert.deepEqual(symbols.map((s: any) => s.name), ["--height", "group #stage", "@template mesh.shiny", "@override #stage mesh.glow"]);
   assert.deepEqual(symbols[1].children.map((s: any) => s.name), ["mesh #box.glow", "mesh #floor"]);
 });
 
@@ -280,6 +284,27 @@ await check("completion is context sensitive", async () => {
   const inTemplate = labels(await request("textDocument/completion", position("  receiveShadow", 2)));
   assert.ok(inTemplate.includes("castShadow"), "expected Mesh properties inside @template mesh.shiny");
   assert.ok(!inTemplate.includes("intensity"), "PointLight properties leaked into a Mesh template");
+});
+
+await check("@override is resolved through its selector and completed against its type", async () => {
+  // the body is checked against the rightmost compound's type, and nothing narrower
+  const body = labels(await request("textDocument/completion", position("  frustumCulled", 2)));
+  assert.ok(body.includes("castShadow"), "expected Mesh properties inside @override … mesh.glow");
+  assert.ok(!body.includes("intensity"), "PointLight properties leaked into a mesh selector");
+
+  // both names a selector picks by resolve to their declaration — the #id here, the template's sheet there
+  const id = await request("textDocument/definition", position("#stage mesh.glow", 2));
+  assert.equal(id[0].uri, uri);
+  assert.deepEqual(id[0].range.start, at("#stage"));
+  const template = await request("textDocument/definition", position("#stage mesh.glow", "#stage mesh".length + 2));
+  assert.equal(template[0].uri, pathToFileURL(shared).href);
+
+  // …so renaming the node rewrites the selector with it
+  const edit = await request("textDocument/rename", { ...position("group #stage", 8), newName: "arena" });
+  assert.deepEqual(edit.changes[uri].map((e: any) => e.newText), ["#arena", "#arena"]);
+
+  const hover = await request("textDocument/hover", position("  frustumCulled", 4));
+  assert.match(hover.contents.value, /frustumCulled/);
 });
 
 await check("completion narrows to the property type while the document is unparseable", async () => {
@@ -325,7 +350,7 @@ await check("@bakery completes its own keys, never three's names", async () => {
   assert.ok(!sheet.includes("ambientLight"), "three class names leaked into @bakery");
   assert.ok(!sheet.includes("castShadow"), "three properties leaked into @bakery");
 
-  assert.deepEqual(labels(await request("textDocument/completion", blank(1))).sort(), ["density", "enabled", "probe", "radius"]);
+  assert.deepEqual(labels(await request("textDocument/completion", blank(1))).sort(), ["density", "enabled", "influence", "probe", "radius"]);
   assert.deepEqual(labels(await request("textDocument/completion", blank(2))), ["albedo"]);
 
   // after a key, the values that key accepts, and hover reads the same table
@@ -376,7 +401,7 @@ await check("@ completes at-rules, never three's names", async () => {
   await new Promise((r) => setTimeout(r, 200));
 
   const sheet = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: 1 } });
-  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@import", "@template"]);
+  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@import", "@override", "@template"]);
   assert.equal(sheet[0].textEdit.newText, sheet[0].label); // the typed `@` is replaced, not doubled
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery"]);
   // a record literal takes any key, so it takes neither three's names nor an at-rule
@@ -461,6 +486,66 @@ await check("folding ranges cover blocks and block comments", async () => {
   });
   assert.equal(presented[0].label, "#ff8000");
   assert.deepEqual(presented[0].textEdit.range, colors[0].range);
+  await edit(text);
+});
+
+await check("a method completes, hovers and signature-helps inside the body it belongs to", async () => {
+  const doc = `mesh #box {\n  lookAt(0, 1, 0);\n  \n}\n`;
+  await edit(doc);
+
+  const items = await request("textDocument/completion", { textDocument: { uri }, position: { line: 2, character: 2 } });
+  const method = items.find((i: any) => i.label === "lookAt");
+  assert.ok(method, `a bare method call is part of a body, so it belongs in its completions: ${labels(items).slice(0, 5)}`);
+  assert.match(method.detail, /\(vector: Vector3\)/);
+  assert.equal(method.insertText, "lookAt(");
+
+  // every overload, the way a class hovers every constructor
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, "lookAt(0", 2) });
+  assert.match(hover.contents.value, /Mesh\.lookAt\(vector: Vector3\)/);
+  assert.match(hover.contents.value, /Mesh\.lookAt\(x: number, y: number, z: number\)/);
+
+  const help = await request("textDocument/signatureHelp", { textDocument: { uri }, position: posIn(doc, "lookAt(0, ", "lookAt(0, ".length) });
+  assert.match(help.signatures[0].label, /^Mesh\.lookAt\(x: number/, "the overload with a slot for the argument being typed");
+  assert.equal(help.activeParameter, 1);
+});
+
+await check("a loader documents its own call, not the class it hands back", async () => {
+  const doc = `mesh #box {\n  material: meshStandardMaterial { map: texture("/t.png"); };\n}\n`;
+  await edit(doc);
+
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, "texture(", 2) });
+  assert.match(hover.contents.value, /texture\(url: string\) → Texture/);
+  assert.match(hover.contents.value, /loads an image/);
+  // `Texture(mapping?, wrapS?, …)` is a call no sheet can write
+  assert.doesNotMatch(hover.contents.value, /mapping/);
+
+  const help = await request("textDocument/signatureHelp", { textDocument: { uri }, position: posIn(doc, `texture("`, `texture("`.length) });
+  assert.match(help.signatures[0].label, /^texture\(url: string\) → Texture$/);
+  assert.equal(help.activeParameter, 0);
+});
+
+await check("swatches cover named and numeric colours, written back in the form they replace", async () => {
+  const doc = `mesh #box {\n  material: meshStandardMaterial {\n    color: color("red");\n    emissive: color(1, 0.5, 0);\n  };\n}\n`;
+  await edit(doc);
+  // both ways of writing one are constructors three declares, and the hover says so
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, `color("red")`, 2) });
+  assert.match(hover.contents.value, /color\(color\?: /);
+  assert.match(hover.contents.value, /color\(r: number, g: number, b: number\)/);
+
+  const [named, numeric] = await request("textDocument/documentColor", { textDocument: { uri } });
+
+  assert.deepEqual(named.range, { start: posIn(doc, `"red"`), end: posIn(doc, `"red"`, 5) });
+  assert.deepEqual(named.color, { red: 1, green: 0, blue: 0, alpha: 1 });
+  // three numbers are the working (linear) colour space; a picker speaks sRGB
+  assert.deepEqual(numeric.range, { start: posIn(doc, "1, 0.5, 0"), end: posIn(doc, "1, 0.5, 0", "1, 0.5, 0".length) });
+  assert.ok(Math.abs(numeric.color.green - 0.7354) < 1e-3, `linear 0.5 shows as sRGB 0.735, got ${numeric.color.green}`);
+
+  const presentation = (color: object, range: object) => request("textDocument/colorPresentation", { textDocument: { uri }, color, range });
+  const blue = await presentation({ red: 0, green: 0, blue: 1, alpha: 1 }, named.range);
+  assert.deepEqual(blue.map((p: any) => p.label), [`"blue"`, `"#0000ff"`], "the quotes stay, and an exact name comes first");
+
+  const orange = await presentation({ red: 1, green: 0.5, blue: 0, alpha: 1 }, numeric.range);
+  assert.deepEqual(orange.map((p: any) => p.label), ["1, 0.214, 0"], "…and three numbers stay three numbers, converted back");
   await edit(text);
 });
 

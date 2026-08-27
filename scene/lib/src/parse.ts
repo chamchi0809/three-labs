@@ -28,7 +28,8 @@ export type ObjectValue = Pos & {
 export type Value =
   | (Pos & { kind: "number"; value: number; unit: "" | "deg" | "rad" })
   | (Pos & { kind: "string"; value: string })
-  | (Pos & { kind: "hex"; value: number })
+  /** `digits` is the width it was written at, so `#00000080` does not print back as `#000080` */
+  | (Pos & { kind: "hex"; value: number; digits: 6 | 8 })
   | (Pos & { kind: "ident"; name: string })
   | (Pos & { kind: "var"; name: string; fallback?: Value; namePos: Pos })
   /** `ref(#id)` — the instance built for that node. `node` is the node name expand() resolved it to. */
@@ -59,10 +60,25 @@ export type Member =
 
 export type RecordValue = Extract<Value, { kind: "record" }>;
 
+/**
+ * One compound selector of an `@override` — `mesh#hero.glow`, in the order those are written on a node.
+ * At least one of the three parts is present; the spans are what rename and "find references" run on.
+ */
+export type Compound = Pos & {
+  type?: string;
+  typeSpan?: Pos;
+  id?: string;
+  idSpan?: Pos;
+  classes: string[];
+  classSpans: Pos[];
+};
+
 export type Statement =
   | Member
   | (Pos & { kind: "import"; path: string })
-  | (Pos & { kind: "template"; node?: string; name: string; body: Member[]; namePos: Pos });
+  | (Pos & { kind: "template"; node?: string; name: string; body: Member[]; namePos: Pos })
+  /** `@override .enemy mesh { … }` — a body appended to every node the descendant chain matches */
+  | (Pos & { kind: "override"; selector: Compound[]; body: Member[] });
 
 export type Comment = Pos & { text: string };
 /** `errors` is what the parser could not make sense of; `statements` is everything it could. */
@@ -91,6 +107,15 @@ export type Tok = Pos & { type: TokType; value: string; unit?: string };
 const isIdStart = (c: string) => /[A-Za-z_]/.test(c);
 const isId = (c: string) => /[A-Za-z0-9_-]/.test(c);
 const isDigit = (c: string) => c >= "0" && c <= "9";
+
+/**
+ * `0x1f` and `-0x1f` as numbers. Neither built-in does both: `parseFloat` stops at the `x`, and
+ * `Number()` returns NaN for a *signed* hex — which used to reach three as NaN with no diagnostic.
+ */
+function hexLiteral(text: string): number | undefined {
+  const m = /^([-+]?)0[xX]([0-9a-fA-F]+)$/.exec(text);
+  return m ? (m[1] === "-" ? -1 : 1) * parseInt(m[2]!, 16) : undefined;
+}
 
 /**
  * The lexer, standing on its own — highlighting and folding need the tokens of a document that does
@@ -236,14 +261,26 @@ export function parse(text: string, file?: string): Sheet {
     return out;
   }
 
-  // `@bakery` is a member, so it also works inside a node — the other two are top level only
+  // `@bakery` is a member, so it also works inside a node — the other three are top level only
+  const TOP_LEVEL = ["import", "template", "override"];
+
   function parseStatement(): Statement {
-    if (at("at") && (peek().value === "import" || peek().value === "template")) {
+    if (at("at") && TOP_LEVEL.includes(peek().value)) {
       const t = next();
       if (t.value === "import") {
         const s = expect("string");
         const end = at("punc", ";") ? next().end : s.end;
         return { kind: "import", path: s.value, start: t.start, end, file };
+      }
+      if (t.value === "override") {
+        const selector: Compound[] = [];
+        while (!at("punc", "{")) {
+          if (at("eof")) fail("expected {");
+          selector.push(parseCompound());
+        }
+        if (!selector.length) fail("@override takes a selector: @override .enemy { … }", peek());
+        const body = parseBlock();
+        return { kind: "override", selector, body: body.members, start: t.start, end: body.end, file };
       }
       // `@template mesh.glow { }` — the node type it applies to, `@template .glow { }` for any Object3D
       const node = at("ident") ? next().value : undefined;
@@ -254,6 +291,50 @@ export function parse(text: string, file?: string): Sheet {
       return { kind: "template", node, name: name.value, body: body.members, namePos, start: t.start, end: body.end, file };
     }
     return parseMember();
+  }
+
+  /**
+   * `mesh`, `#hero`, `.enemy`, `mesh#hero.enemy` — the same head a node is written with, minus the body.
+   * Written without a space: inside a selector a space is the descendant combinator, so `#arena .enemy`
+   * is two compounds where `#arena.enemy` is one.
+   */
+  function parseCompound(): Compound {
+    const from = peek();
+    let started = false;
+    /** the first part opens the compound; every later one has to be written against it, with no space */
+    const joins = () => !started || peek().start === toks[p - 1]!.end;
+    let type: string | undefined;
+    let typeSpan: Pos | undefined;
+    if (at("ident")) {
+      const n = next();
+      type = n.value;
+      typeSpan = { start: n.start, end: n.end, file };
+      started = true;
+    }
+    let id: string | undefined;
+    let idSpan: Pos | undefined;
+    const classes: string[] = [];
+    const classSpans: Pos[] = [];
+    for (;;) {
+      if (at("hash") && joins()) {
+        const h = next();
+        id = h.value;
+        idSpan = { start: h.start, end: h.end, file };
+        started = true;
+        continue;
+      }
+      if (at("punc", ".") && peek(1).type === "ident" && joins()) {
+        const dot = next();
+        const cls = expect("ident");
+        classes.push(cls.value);
+        classSpans.push({ start: dot.start, end: cls.end, file });
+        started = true;
+        continue;
+      }
+      break;
+    }
+    if (!started) return fail("expected a node name, #id or .template");
+    return { type, typeSpan, id, idSpan, classes, classSpans, start: from.start, end: toks[p - 1]!.end, file };
   }
 
   function parseMember(): Member {
@@ -424,7 +505,9 @@ export function parse(text: string, file?: string): Sheet {
       next();
       const unit = t.unit ?? "";
       if (unit && unit !== "deg" && unit !== "rad") fail(`unknown unit ${JSON.stringify(unit)}`, t);
-      const value = /^[-+]?0[xX]/.test(t.value) ? Number(t.value) : parseFloat(t.value);
+      const value = hexLiteral(t.value) ?? parseFloat(t.value);
+      // `0x` with nothing after it, and anything else the lexer let through that is not a number
+      if (!Number.isFinite(value)) fail(`${JSON.stringify(t.value)} is not a number`, t);
       return { kind: "number", value, unit: unit as "" | "deg" | "rad", start: t.start, end: t.end, file };
     }
     if (t.type === "string") { next(); return { kind: "string", value: t.value, start: t.start, end: t.end, file }; }
@@ -432,7 +515,7 @@ export function parse(text: string, file?: string): Sheet {
       next();
       if (!/^([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(t.value)) fail("expected a hex color like #ff8000", t);
       const hex = t.value.length === 3 ? t.value.replace(/./g, (c) => c + c) : t.value;
-      return { kind: "hex", value: parseInt(hex, 16), start: t.start, end: t.end, file };
+      return { kind: "hex", value: parseInt(hex, 16), digits: hex.length as 6 | 8, start: t.start, end: t.end, file };
     }
     if (t.type === "ident") {
       if (t.value === "var" && peek(1).type === "punc" && peek(1).value === "(") {
@@ -558,16 +641,20 @@ export function print(sheet: Sheet): string {
     }
   };
 
+  /** a record key the lexer would not hand back as one ident has to keep its quotes to re-parse */
+  const key = (name: string) => (/^[A-Za-z_][\w-]*$/.test(name) ? name : JSON.stringify(name));
+
   const value = (v: Value, indent = ""): string => {
     switch (v.kind) {
       case "number": return `${v.value}${v.unit}`;
       case "string": return JSON.stringify(v.value);
-      case "hex": return "#" + v.value.toString(16).padStart(6, "0");
+      // padded back to the width it was written at: #00000080 is not #000080
+      case "hex": return "#" + v.value.toString(16).padStart(v.digits, "0");
       case "ident": return v.name;
       case "var": return `var(--${v.name}${v.fallback ? `, ${value(v.fallback, indent)}` : ""})`;
       case "ref": return `ref(#${v.name})`;
       case "array": return `[${v.items.map((i) => value(i, indent)).join(", ")}]`;
-      case "record": return `{ ${v.entries.map((e) => `${e.name}: ${value(e.value, indent)}`).join("; ")} }`;
+      case "record": return `{ ${v.entries.map((e) => `${key(e.name)}: ${value(e.value, indent)}`).join("; ")} }`;
       case "calc": return `calc(${expr(v, indent)})`;
       // a bare fn only ever comes out of a calc(), so it needs the wrapper back
       case "fn": return `calc(${arith(v, indent)})`;
@@ -597,6 +684,10 @@ export function print(sheet: Sheet): string {
     o.name + o.classes.map((c) => `.${c}`).join("") + (o.id ? ` #${o.id}` : "") +
     (o.args.length || (!o.hasBody && !o.id && !o.classes.length) ? `(${o.args.map((a) => value(a)).join(", ")})` : "");
 
+  // a node head with the space taken out — inside a selector a space is the descendant combinator
+  const compound = (c: Compound) =>
+    (c.type ?? "") + c.classes.map((x) => `.${x}`).join("") + (c.id ? `#${c.id}` : "");
+
   const object = (o: ObjectValue, indent: string): string => {
     if (!o.hasBody) return header(o);
     const inner = members(o.body, indent + "  ", o.end);
@@ -625,6 +716,10 @@ export function print(sheet: Sheet): string {
       const inner = members(s.body, "  ", s.end);
       const head = `@template ${s.node ?? ""}.${s.name}`;
       emit("", inner ? `${head} {\n${inner}\n}` : `${head} {}`);
+    } else if (s.kind === "override") {
+      const inner = members(s.body, "  ", s.end);
+      const head = `@override ${s.selector.map(compound).join(" ")}`;
+      emit("", inner ? `${head} {\n${inner}\n}` : `${head} {}`);
     } else out.push(members([s], ""));
     out.push("");
   }
@@ -652,6 +747,8 @@ export type Loader = (path: string, from: string | undefined) => Promise<{ text:
 
 export type Template = Extract<Statement, { kind: "template" }>;
 
+export type Override = Extract<Statement, { kind: "override" }>;
+
 /** a resolved use site and the declaration it resolved to — what "find references" and "rename" run on */
 export type Binding = { use: Pos; decl: Pos };
 
@@ -659,6 +756,8 @@ export type Expanded = {
   nodes: Member[];
   diagnostics: Diagnostic[];
   templates: Template[];
+  /** the `@override` rules of the sheet and everything it imported, in source order */
+  overrides: Override[];
   bindings: Binding[];
   /** `#id` → the node that declared it, in document order */
   ids: Map<string, ObjectValue>;
@@ -693,6 +792,15 @@ function deferred(v: Value): boolean {
   }
 }
 
+/**
+ * The ceiling `repeat()` and `each()` share. Not a three limit: a count this large is a typo — an
+ * `each(--i, 1e9, …)` builds nothing anyone can see and stops the tab responding first.
+ */
+export const LOOP_LIMIT = 1e6;
+export const countable = (n: number): boolean => Number.isInteger(n) && n >= 0 && n <= LOOP_LIMIT;
+const EACH_COUNT = `each() counts to a whole number from 0 to ${LOOP_LIMIT}, or walks a list`;
+const REPEAT_COUNT = `repeat() takes one whole number from 0 to ${LOOP_LIMIT}, e.g. repeat(3) { … }`;
+
 /** does this value read a loop binding — i.e. is it a different value on every iteration? */
 function varies(v: Value, loop: Map<string, Pos>): boolean {
   switch (v.kind) {
@@ -715,6 +823,9 @@ function varies(v: Value, loop: Map<string, Pos>): boolean {
 export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
   const diagnostics: Diagnostic[] = [];
   const templates: Template[] = [];
+  const overrides: Override[] = [];
+  /** an `@override` and the scope its body reads `var(--x)` and `.class` in — where it was written */
+  const rules: { rule: Override; scope: Scope }[] = [];
   const scope: Scope = { vars: new Map(), own: new Set(), templates: new Map(), loop: new Map() };
   const root = sheet.file ?? "<input>";
   const included = new Set<string>([root]);
@@ -757,6 +868,10 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
         sc.templates.set(st.name, { body: st.body, scope: sc, decl: st.namePos });
         duplicates(st.body);
         templates.push(st);
+      } else if (st.kind === "override") {
+        duplicates(st.body);
+        overrides.push(st);
+        rules.push({ rule: st, scope: sc });
       } else if (st.kind === "var") {
         if (top.has(st.name)) warn(`--${st.name} is set twice in this file`, st);
         top.add(st.name);
@@ -826,11 +941,14 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
 
   /** `each(--j, 48, expr)` — the binding is the loop's, so the body is substituted with it left standing */
   function loop(v: Value & { kind: "each" }, sc: Scope): Value {
+    const over = subst(v.over, sc);
+    // the same rule repeat() has had all along: a count known now is checked now, not at run time
+    if (over.kind === "number" && !countable(over.value)) err(EACH_COUNT, v.over);
     const inner = childScope(sc);
     inner.loop = new Map(sc.loop);
     // `--index` and `--count` come along, exactly as they do in repeat()
     for (const name of [v.name, "index", "count"]) inner.loop.set(name, v.namePos);
-    return { ...v, over: subst(v.over, sc), body: subst(v.body, inner) };
+    return { ...v, over, body: subst(v.body, inner) };
   }
 
   function subst(v: Value, sc: Scope): Value {
@@ -867,8 +985,8 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
   /** `repeat(3) { … }` — n copies of its body, with `--index` (0-based) and `--count` bound inside each */
   function repeat(o: ObjectValue, outer: Scope): Member[] {
     const count = o.args.length === 1 ? subst(o.args[0]!, outer) : undefined;
-    if (!count || count.kind !== "number" || !Number.isInteger(count.value) || count.value < 0) {
-      err("repeat() takes one whole number, e.g. repeat(3) { … }", o);
+    if (!count || count.kind !== "number" || !countable(count.value)) {
+      err(REPEAT_COUNT, o);
       return [];
     }
     if (o.id || o.classes.length) err("repeat() takes no #id or template", o);
@@ -941,7 +1059,75 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
     return out;
   }
 
+  /** one compound against one node — the same three things a node head is written with */
+  function fits(c: Compound, o: ObjectValue): boolean {
+    if (c.type && c.type !== o.name) return false;
+    if (c.id && c.id !== o.id) return false;
+    return c.classes.every((cls) => o.classes.includes(cls));
+  }
+
+  /** a descendant chain, read right to left: the last compound is the node, the rest are ancestors */
+  function selects(sel: Compound[], chain: ObjectValue[]): boolean {
+    if (!fits(sel[sel.length - 1]!, chain[chain.length - 1]!)) return false;
+    let i = sel.length - 2;
+    for (let j = chain.length - 2; j >= 0 && i >= 0; j--) if (fits(sel[i]!, chain[j]!)) i--;
+    return i < 0;
+  }
+
+  /**
+   * Every node of the scene graph with the ancestors it hangs under. Children only: a material or a
+   * geometry is a property of a node, not a node in the tree the selector walks.
+   */
+  function walk(list: Member[], chain: ObjectValue[], visit: (chain: ObjectValue[]) => void) {
+    for (const m of list) {
+      if (m.kind !== "node") continue;
+      const next = [...chain, m.object];
+      visit(next);
+      walk(m.object.body, next, visit);
+    }
+  }
+
+  /**
+   * `@override` — applied once the whole tree exists, so a rule reaches a node wherever it ended up:
+   * inside a `@template`, a `repeat()` or an `@import`ed sheet. The tree it matches against is the one
+   * collect() produced, so a rule never selects a node another rule appended; the body lands at the end
+   * of the node's own, and rules land in source order, which is what makes the last one win.
+   */
+  function override(nodes: Member[]) {
+    const hits = new Map<{ rule: Override; scope: Scope }, ObjectValue[]>(rules.map((r) => [r, []]));
+    walk(nodes, [], (chain) => {
+      for (const r of rules) if (selects(r.rule.selector, chain)) hits.get(r)!.push(chain[chain.length - 1]!);
+    });
+    for (const r of rules) {
+      // the names a selector picks nodes out by are the same declarations everything else resolves to
+      let unknown = false;
+      for (const c of r.rule.selector) {
+        if (c.id) {
+          const target = ids.get(c.id);
+          if (!target) { err(`unknown node #${c.id}`, c.idSpan ?? c); unknown = true; }
+          else bind(c.idSpan ?? c, target.idSpan ?? target);
+        }
+        for (const [i, cls] of c.classes.entries()) {
+          const t = r.scope.templates.get(cls);
+          if (!t) { err(`unknown template .${cls}`, c.classSpans[i] ?? c); unknown = true; }
+          else bind(c.classSpans[i] ?? c, t.decl);
+        }
+      }
+      const matched = hits.get(r)!;
+      // a name that does not exist matches nothing by construction; saying so twice helps nobody
+      if (!matched.length && unknown) continue;
+      if (!matched.length) {
+        warn("this @override matches no node", { start: r.rule.selector[0]!.start, end: r.rule.selector[r.rule.selector.length - 1]!.end, file: r.rule.file });
+        continue;
+      }
+      // expanded per match, the way a template is: one shared AST node would be one shared instance,
+      // and a child appended to five nodes would end up parented to the last of them alone
+      for (const node of matched) node.body.push(...expandBody(r.rule.body, childScope(r.scope)));
+    }
+  }
+
   const nodes = await collect(sheet, scope, [root]);
+  if (rules.length) override(nodes);
 
   for (const r of pendingRefs) {
     const target = ids.get(r.name);
@@ -962,5 +1148,5 @@ export async function expand(sheet: Sheet, load?: Loader): Promise<Expanded> {
     }
   }
 
-  return { nodes, diagnostics, templates, bindings, ids };
+  return { nodes, diagnostics, templates, overrides, bindings, ids };
 }

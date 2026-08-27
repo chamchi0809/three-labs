@@ -7,8 +7,8 @@ to the grammar breaks this file first.
 
 ## Sheets
 
-One file is one sheet. Only `@import`, `--variable` declarations, `@template` and nodes may appear at
-the top level. Comments are `//` and `/* */`, statements end with `;`, blocks are `{ }`.
+One file is one sheet. Only `@import`, `--variable` declarations, `@template`, `@override` and nodes may
+appear at the top level. Comments are `//` and `/* */`, statements end with `;`, blocks are `{ }`.
 
 ```css
 // top level
@@ -141,9 +141,41 @@ classes. `color()` takes `#ff8000`, `0xff8000` or `"red"`.
 
 ### Loaders
 
-`texture(url)` runs `TextureLoader`, `gltf(url)` runs `GLTFLoader`. `gltf()` may also be used as a node,
-in which case the loaded scene is added as a child. Relative paths are rewritten by the vite plugin into
-`?url` imports, so hashing and copying are the bundler's job.
+| | loads | arrives as |
+| --- | --- | --- |
+| `texture(url)` | an image, through `TextureLoader` | `Texture` |
+| `hdr(url)` | a Radiance `.hdr`, through `HDRLoader` | `DataTexture` |
+| `exr(url)` | an OpenEXR `.exr`, through `EXRLoader` | `DataTexture` |
+| `ktx2(url)` | a `.ktx2`, transcoded to whatever the GPU compresses | `CompressedTexture` |
+| `gltf(url)` | a `.gltf`/`.glb`, through `GLTFLoader` | `Group` |
+
+`gltf()` may also be used as a node, in which case the loaded scene is added as a child. Relative paths
+are rewritten by the vite plugin into `?url` imports, so hashing and copying are the bundler's job. Every
+loader downloads a url once; each use gets its own clone, so two nodes can set different `repeat`s on the
+same image.
+
+`hdr()` and `exr()` carry linear radiance rather than colour, and default to
+`EquirectangularReflectionMapping` — an environment map is what they are almost always for. Set `mapping`
+in the body to say otherwise.
+
+```css
+scene #world {
+  environment: hdr("./venice.hdr");
+  mesh #floor {
+    geometry: planeGeometry(10, 10);
+    material: meshStandardMaterial { map: ktx2("./floor.ktx2"); };
+  }
+}
+```
+
+The addon loaders are imported the first time a sheet asks for one, so a scene with no `.hdr` in it never
+downloads the parser for one. `ktx2()` additionally needs `loadScene`'s `ktx2` option — the transcoder is
+served, not bundled, and it has to probe the renderer — and `gltf()` needs the `draco` option for a model
+that was compressed with it.
+
+```js
+await loadScene(sheet, { ktx2: { path: "/basis/", renderer }, draco: "/draco/" });
+```
 
 ### `var()`
 
@@ -285,6 +317,59 @@ mesh.glow.hidden #b { geometry: boxGeometry(1, 1, 1); }
 pointLight.glow #lamp { }
 ```
 
+## `@override`
+
+A body appended to every node a selector reaches, once the whole tree exists. Where a `@template` is
+opted into at the node, an `@override` reaches down into nodes that were written elsewhere — inside a
+`repeat()`, inside another template, inside an `@import`ed sheet.
+
+```css
+@template mesh.enemy { material: meshStandardMaterial { color: color(#ff4040); }; }
+
+group #arena {
+  repeat(3) { mesh.enemy #grunt { geometry: boxGeometry(1, 1, 1); } }
+  mesh #floor { geometry: planeGeometry(8, 8); }
+}
+
+@override #arena mesh.enemy {
+  castShadow: true;
+  renderOrder: 1;
+}
+```
+
+A selector is a chain of **compound selectors** separated by whitespace. A compound is the same head a
+node is written with — a type, a `#id`, any number of `.template`s, in any order but with no space
+between them. Whitespace is the descendant combinator, so `#arena .enemy` is a `.enemy` anywhere under
+`#arena` and `#arena.enemy` is one node that is both.
+
+| | matches |
+| --- | --- |
+| `mesh` | every `mesh` node |
+| `#hero` | the node declared `#hero` |
+| `.glow` | every node the `.glow` template was applied to |
+| `mesh#hero.glow` | a node that is all three |
+| `group mesh` | a `mesh` at any depth under a `group` |
+
+- Rules are matched against the tree `@import`s, templates and `repeat()` already produced, so a rule
+  never selects a node another rule appended. The order between rules is source order, and the body
+  lands after the node's own — so the last thing written wins.
+- Only nodes are selected. A material or a geometry is a property of a node, not a node in the tree.
+- The body is expanded once **per match**: a child declared in a rule that hits five nodes becomes five
+  children, not one shared instance.
+- The body is checked against the type the rightmost compound names, where the rule is written — so a
+  rule that currently matches nothing is still checked, exactly as an unapplied template is.
+
+```css error: has no property
+@override mesh { castShaddow: true; }
+```
+
+- A `#id` or `.template` a selector names has to exist; go-to-definition and rename work through it.
+- A rule that matches no node is a warning, not an error.
+
+```css error: unknown node
+@override #nobody { visible: false; }
+```
+
 ## `@import`
 
 ```css
@@ -372,7 +457,7 @@ Errors stop the scene from being built; warnings do not.
 | Severity | Examples |
 | --- | --- |
 | error | syntax errors, unknown class/property/method, type mismatch, no matching constructor overload, unknown variable/template/`#id`, a child that is not an `Object3D` |
-| warning | a property or variable set twice in one block, `--x` declared twice in one file, a duplicate `#id` (`getObjectByName` only finds the first), a `--x` or `.template` that is never used |
+| warning | a property or variable set twice in one block, `--x` declared twice in one file, a duplicate `#id` (`getObjectByName` only finds the first), a `--x` or `.template` that is never used, an `@override` that matches no node |
 
 Casing typos (`CastShadow`, `Mesh`) are errors that carry a fix — `tscene fix` and the editor quick
 fix apply them. Anything more aggressive (spelling corrections, value conversions) is only reported.

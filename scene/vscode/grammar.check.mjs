@@ -49,6 +49,9 @@ gltf #hero("/hero.glb") {
 mesh #ring {
   geometry: loftGeometry(each(--p, splineCurve([vec2(1, 0)]).getPoints(8), vec3(calc(sin(var(--index)) * var(--p).x), 0, 0)));
 }
+@override #ring mesh.glow {
+  renderOrder: 1;
+}
 `;
 
 // Tokenise every line, then look up the scope stack at the first offset of a given substring.
@@ -112,6 +115,10 @@ has("each", "support.function.each");
 has("sin", "support.function.math");
 has("getPoints", "entity.name.function.member"); // a method of the value in front of the dot, not a template
 has("x", "variable.other.property"); // …and `.x` after `)` is a property read
+has("@override", "keyword.control.override");
+has("#ring", "entity.other.attribute-name.id", 25); // a selector's parts, not a node being declared
+has("mesh", "entity.name.tag", 25);
+has(".glow", "entity.other.attribute-name.class", 25);
 
 // every path the manifest contributes must exist, and extension.js must at least parse
 const manifest = require("./package.json");

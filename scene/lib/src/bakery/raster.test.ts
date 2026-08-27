@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as THREE from "three/webgpu";
 import { unwrap, type Atlas } from "./atlas.ts";
-import { albedoAtlas, reuseAtlas, subset } from "./bake.ts";
-import { rasterize, rasterizeParallel } from "./raster.ts";
+import { albedoAtlas, applyNormalMaps, reuseAtlas, subset } from "./bake.ts";
+import { rasterize, rasterizeParallel, type Texels } from "./raster.ts";
 import {
   areaLights,
   AREA_STRIDE,
@@ -19,8 +19,8 @@ import {
   type BakeMesh,
   type BakeScene,
 } from "./scene.ts";
-import { dilate } from "./filter.ts";
-import { nearestProbe, probeDirection, probeDirections } from "./probe.ts";
+import { dilate, fireflies } from "./filter.ts";
+import { probeDirection, probeDirections, probeWeights } from "./probe.ts";
 import { applyLightmap, decodeFloats, encodeFloats, MANIFEST_VERSION, type LightmapManifest } from "./apply.ts";
 import { readEXR, writeBake } from "./io.ts";
 import type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";
@@ -97,11 +97,60 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   mask[centre] = 1;
   image.set([4, 4, 4, 1], centre * 4);
 
-  const grown = dilate(image, mask, width, height, 1);
-  assert.equal(grown.reduce((a, b) => a + b, 0), 9, "one pass grows a texel into its 3x3 ring");
+  dilate(image, mask, width, height, 1);
+  let opaque = 0;
+  for (let i = 3; i < image.length; i += 4) opaque += image[i]!;
+  assert.equal(opaque, 9, "one pass grows a texel into its 3x3 ring, alpha and all");
   assert.equal(image[centre * 4], 4, "the lit texel is left alone");
   assert.equal(image[(2 * width + 1) * 4], 4, "its neighbour picks up its value");
   assert.equal(image[0], 0, "two rings away is still dark after one pass");
+  assert.equal(mask.reduce((a: number, b: number) => a + b, 0), 1, "the chart coverage it was handed is not what grew");
+}
+
+// --- a firefly is clamped to its neighbourhood; a bright surface next to it is not ----------------
+{
+  // one flat 5x5 chart, a texel apart, with the last two columns a second surface facing 90 degrees off
+  const [width, height] = [5, 5];
+  const at = (x: number, y: number) => y * width + x;
+  const texels: Texels = {
+    width,
+    height,
+    mask: new Uint8Array(width * height).fill(1),
+    position: new Float32Array(width * height * 4),
+    normal: new Float32Array(width * height * 4),
+    uv: new Float32Array(width * height * 2),
+    mesh: new Int32Array(width * height).fill(0),
+    index: Uint32Array.from({ length: width * height }, (_, i) => i),
+  };
+  const image = new Float32Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = at(x, y) * 4;
+      texels.position.set([x, y, 0, 0], i);
+      texels.normal.set(x >= width - 2 ? [1, 0, 0, 0] : [0, 0, 1, 0], i);
+      // the far columns are a genuinely bright surface, not noise: every texel in them agrees
+      image.set(x >= width - 2 ? [50, 50, 50, 1] : [1, 1, 1, 1], i);
+    }
+  }
+  const spike = at(2, 2);
+  image.set([80, 40, 20, 1], spike * 4);
+
+  fireflies(image, texels, 4);
+
+  // 80 is the luminance of a neighbourhood whose median is 1, so it comes back to 4 — and the two
+  // dimmer channels come with it, because a clamp that only touched the bright one would shift the hue
+  const scaled = 4 / (0.2126 * 80 + 0.7152 * 40 + 0.0722 * 20);
+  assert.ok(Math.abs(image[spike * 4]! - 80 * scaled) < 1e-4, `red came back to ${image[spike * 4]}`);
+  assert.ok(Math.abs(image[spike * 4 + 1]! / image[spike * 4]! - 0.5) < 1e-6, "the hue survived the clamp");
+  assert.equal(image[spike * 4 + 3], 1, "alpha is coverage, not colour");
+  assert.equal(image[at(0, 0) * 4], 1, "a texel already at its neighbours' level is untouched");
+  assert.equal(image[at(4, 2) * 4], 50, "50x its neighbours across a crease is a different surface, not a firefly");
+
+  // and the pass is optional, both ways round
+  const kept = new Float32Array(image.length);
+  kept.set([80, 40, 20, 1], spike * 4);
+  fireflies(kept, texels, 0);
+  assert.equal(kept[spike * 4], 80, "threshold 0 keeps every firefly");
 }
 
 // --- collectScene: three's light conventions, materials, and the emissive area list --------------
@@ -255,7 +304,7 @@ function quad(): { meshes: BakeMesh[]; atlas: Atlas } {
   const vertices = bakeGeometry(mesh).getAttribute("position").count;
   const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
   const manifest: LightmapManifest = {
-    version: 1,
+    version: MANIFEST_VERSION,
     width: 64,
     height: 32,
     intensity: 2,
@@ -471,6 +520,49 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   );
 }
 
+// --- normal maps bend the texel the trace shades, with a frame read out of the atlas ------------------
+{
+  const { meshes, atlas } = quad();
+  const texels = rasterize(meshes, atlas);
+
+  // one texel tilting 0.6 along the map's +x. uv = position.xz / 2, so +u is world +x and +v is world +z
+  const encode = (x: number, y: number, z: number) =>
+    new THREE.DataTexture(Uint8Array.from([x, y, z].map((c) => Math.round((c + 1) * 127.5)).concat(255)), 1, 1);
+  const tilted = encode(0.6, 0, 0.8);
+  const flat = { albedo: [1, 1, 1] as [number, number, number], emissive: [0, 0, 0] as [number, number, number] };
+
+  const before = Float32Array.from(texels.normal);
+  assert.equal(applyNormalMaps(sceneOf(meshes, [flat]), texels), 0, "no normalMap anywhere: nothing is read");
+  assert.deepEqual(texels.normal, before, "and nothing is touched");
+
+  const scene = sceneOf(meshes, [{ ...flat, normalMap: tilted, normalScale: [1, 1] }]);
+  assert.equal(applyNormalMaps(scene, texels), 64, "every texel of a fully covered chart has a frame");
+  const normal = (at: number) => [0, 1, 2].map((k) => texels.normal[at * 4 + k]!);
+  const [nx, ny, nz] = normal(8 * 3 + 4);
+  assert.ok(Math.abs(nx! - 0.598) < 0.01, `bent along +x toward the map's +x, got ${nx}`);
+  assert.ok(Math.abs(ny! - 0.801) < 0.01, `and mostly still up, got ${ny}`);
+  assert.ok(Math.abs(nz!) < 0.01, `with nothing along +z, got ${nz}`);
+  assert.ok(Math.abs(Math.hypot(nx!, ny!, nz!) - 1) < 1e-5, "unit length");
+  assert.equal(texels.normal[(8 * 3 + 4) * 4 + 3], 0, "the material id in .w survives");
+
+  // the map's y is the bitangent, which the winding decides — it must come out along world +z, not -z
+  const green = rasterize(meshes, atlas);
+  applyNormalMaps(sceneOf(meshes, [{ ...flat, normalMap: encode(0, 0.6, 0.8), normalScale: [1, 1] }]), green);
+  assert.ok(green.normal[0]! < 0.01 && green.normal[2]! > 0.5, "the bitangent points the way +v does");
+
+  // `normalScale` is applied before the frame is rebuilt, so twice the x is a steeper tilt
+  const steep = rasterize(meshes, atlas);
+  applyNormalMaps(sceneOf(meshes, [{ ...flat, normalMap: tilted, normalScale: [2, 2] }]), steep);
+  assert.ok(steep.normal[0]! > nx!, "twice the scale leans further over");
+
+  // a normalScale that would tip the normal under the surface leaves it alone rather than starting
+  // the trace's rays inside the mesh
+  const over = rasterize(meshes, atlas);
+  applyNormalMaps(sceneOf(meshes, [{ ...flat, normalMap: tilted, normalScale: [-100, -100] }]), over);
+  assert.equal(applyNormalMaps(sceneOf(meshes, [{ ...flat, normalMap: tilted, normalScale: [1e6, 1e6] }]), over), 0);
+  assert.deepEqual(Array.from(over.normal.slice(0, 3)), [0, 1, 0], "the geometry's own normal is kept");
+}
+
 // --- partial rebake: the uv layout is reused and only the named meshes are dispatched ------------------
 {
   const { meshes, atlas } = quad();
@@ -492,7 +584,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   assert.throws(() => subset(texels, scene, ["nope"]), /no mesh named/);
 
   const manifest: LightmapManifest = {
-    version: 1,
+    version: MANIFEST_VERSION,
     width: 8,
     height: 8,
     intensity: 1,
@@ -526,7 +618,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
 
   const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
   const manifest: LightmapManifest = {
-    version: 1,
+    version: MANIFEST_VERSION,
     width: 8,
     height: 8,
     intensity: 1,
@@ -648,6 +740,46 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   assert.match(warnings[0]!, /"rig" is skinned and cannot carry a lightmap/);
 }
 
+// --- an instance carries no lightmap, but it does shadow and bounce ------------------------------------
+{
+  const root = new THREE.Group();
+  const instanced = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial(), 4);
+  instanced.name = "trees";
+  instanced.count = 3; // the buffer holds four; only three are drawn, so only three are baked
+  const at = new THREE.Matrix4();
+  for (let i = 0; i < 4; i++) instanced.setMatrixAt(i, at.makeTranslation(i * 10, 0, 0));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial());
+  floor.name = "floor";
+  root.add(instanced, floor);
+  root.position.set(0, 5, 0);
+  root.updateMatrixWorld(true);
+
+  const warnings: string[] = [];
+  const scene = collectScene(root, { onWarn: (m) => warnings.push(m) });
+
+  assert.deepEqual(scene.meshes.map((m) => m.key), ["floor"], "no atlas can hold one uv1 for many transforms");
+  assert.equal(scene.emitters.length, 1, "all the instances are one emitter, so the BVH proxy stays one geometry");
+  const verts = instanced.geometry.toNonIndexed().getAttribute("position").count;
+  const emitter = scene.emitters[0]!;
+  assert.equal(emitter.positions.length, verts * 3 * 3, "three instances of the geometry, world space");
+  assert.equal(emitter.faceMaterial.length, (verts / 3) * 3, "one material id per triangle of every instance");
+  assert.equal(emitter.uv?.length, verts * 2 * 3, "uv0 rides along for the albedo lookup");
+  assert.deepEqual([...emitter.normals.slice(0, 3)], [0, 0, 1], "a plane still faces +z after translating");
+  // the parent's transform composes with the instance's, and the bounds see all of it
+  assert.equal(emitter.positions[0], -0.5, "instance 0 sits where its matrix put it");
+  assert.equal(emitter.positions[verts * 3 * 2], 19.5, "…and instance 2 ten units on, twice");
+  assert.equal(scene.bounds.max.x, 20.5);
+  assert.equal(scene.bounds.max.y, 5.5, "root.position is in there too");
+  assert.equal(warnings.length, 1, `expected one warning, got ${warnings.join(" / ")}`);
+  assert.match(warnings[0]!, /"trees" is instanced, so it cannot carry a lightmap — its 3 instance\(s\)/);
+
+  // and `enabled: false` is still how to say the omission was intended
+  const quiet: string[] = [];
+  bakery(instanced, { enabled: false } satisfies NodeBakery);
+  assert.equal(collectScene(root, { onWarn: (m) => quiet.push(m) }).emitters.length, 0);
+  assert.deepEqual(quiet, []);
+}
+
 // --- a metal is baked and then thrown away, so it has to say so -----------------------------------------
 {
   const root = new THREE.Group();
@@ -718,12 +850,26 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
     `texel 3 of row 0 is ${[...buffer.subarray(12, 15)]}, want ${third}`,
   );
 
-  // the runtime's half: nearest centre wins, and no probes means no reflection
+  // the runtime's half: the two nearest probes that reach the point, weighted, nearest first
   const probes = [{ position: [0, 0, 0] }, { position: [10, 0, 0] }];
-  assert.equal(nearestProbe([1, 0, 0], probes), 0);
-  assert.equal(nearestProbe([9, 5, 0], probes), 1);
-  assert.equal(nearestProbe([5, 0, 0], probes), 0, "a tie goes to the first, deterministically");
-  assert.equal(nearestProbe([0, 0, 0], []), -1);
+  const reached = (p: readonly number[], list = probes) => probeWeights(p, list).map((w) => w.index);
+  assert.deepEqual(reached([1, 0, 0]), [0, 1], "an unbounded probe reaches everywhere, so both are in");
+  assert.deepEqual(reached([9, 5, 0]), [1, 0], "and the nearer one always comes first");
+  assert.deepEqual(probeWeights([0, 0, 0], []), [], "no probes, no reflection");
+
+  // inverse distance, so the split is d1/(d0+d1) — and a mesh standing on a probe is wholly its
+  assert.ok(Math.abs(probeWeights([5, 0, 0], probes)[0]!.weight - 0.5) < 1e-9, "equidistant is an even blend");
+  const lopsided = probeWeights([1, 0, 0], probes)[0]!.weight;
+  assert.ok(Math.abs(lopsided - 0.9) < 1e-9, `1 unit from one and 9 from the other is ${lopsided}`);
+  assert.ok(probeWeights([0, 0, 0], probes)[0]!.weight > 0.9999, "and standing on one is all but wholly its");
+
+  // `influence` is a hard edge on what a probe reaches and a soft one on how much, so nothing pops
+  const bounded = [{ position: [0, 0, 0], influence: 4 }, { position: [10, 0, 0] }];
+  assert.deepEqual(reached([6, 0, 0], bounded), [1], "6 units out is past a radius of 4");
+  const edge = probeWeights([3.9, 0, 0], bounded);
+  assert.deepEqual(edge.map((w) => w.index), [0, 1], "just inside it is still the nearer of the two");
+  assert.ok(edge[0]!.weight < 0.1, `but the falloff has all but run out: ${edge[0]!.weight}`);
+  assert.deepEqual(probeWeights([100, 0, 0], [bounded[0]!]), [], "outside every volume is no reflection at all");
 }
 
 // --- a probe lands on the envMap of the metals in its cell, and comes back off on dispose -------------
@@ -736,13 +882,19 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   const far = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chrome);
   far.name = "far";
   far.position.set(100, 0, 0);
+  const middle = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), chrome);
+  middle.name = "middle";
+  middle.position.set(50, 0, 0);
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), paint);
   wall.name = "wall";
-  root.add(near, far, wall);
+  root.add(near, far, middle, wall);
   root.updateMatrixWorld(true);
 
   const texture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
-  const probes = [new THREE.DataTexture(new Uint8Array(4), 1, 1), new THREE.DataTexture(new Uint8Array(4), 1, 1)];
+  // one texel each, and two radiances a lerp between them can be read off
+  const equirect = (v: number) =>
+    new THREE.DataTexture(Float32Array.from([v, v, v, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+  const probes = [equirect(2), equirect(6)];
   const uv = encodeFloats(new Float32Array(12));
   const manifest: LightmapManifest = {
     version: MANIFEST_VERSION,
@@ -750,7 +902,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
     height: 8,
     intensity: 1,
     texture: "atlas.png",
-    meshes: ["near", "far", "wall"].map((key) => ({ key, vertices: 6, uv })),
+    meshes: ["near", "far", "middle", "wall"].map((key) => ({ key, vertices: 6, uv })),
     probes: [
       { key: "a", position: [0, 0, 0], texture: "a.exr" },
       { key: "b", position: [100, 0, 0], texture: "b.exr" },
@@ -761,10 +913,17 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   assert.equal((wall.material as THREE.MeshStandardMaterial).envMap, null, "a dielectric's diffuse is in the atlas");
   const a = near.material as THREE.MeshStandardMaterial;
   const b = far.material as THREE.MeshStandardMaterial;
-  assert.notEqual(a, b, "one material, two cells: envMap is a per-material slot, so it has to be cloned");
+  const mid = middle.material as THREE.MeshStandardMaterial;
+  assert.equal(new Set([a, b, mid]).size, 3, "one material, three blends: envMap is a per-material slot");
+  // a hundredth of the far probe rounds away, so a mesh sitting on one probe gets that probe itself
   assert.equal(a.envMap, probes[0]);
   assert.equal(b.envMap, probes[1]);
   assert.equal(a.envMapIntensity, 1, "metalness scales the gain, so a full metal reflects it all");
+
+  // halfway between them is neither, and three has no envMap blend — so the pixels are mixed instead
+  assert.ok(mid.envMap && mid.envMap !== probes[0] && mid.envMap !== probes[1], "an even blend is its own map");
+  assert.equal((mid.envMap!.image as { data: Float32Array }).data[0], 4, "(2 + 6) / 2");
+  assert.equal(mid.envMap!.mapping, THREE.EquirectangularReflectionMapping, "PMREM has to see an equirect");
 
   lightmap.environment = 0.25;
   assert.equal(a.envMapIntensity, 0.25);
@@ -815,7 +974,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
   };
   await assert.rejects(
     applyLightmap(root, { manifest, texture: new THREE.DataTexture(new Uint8Array(4), 1, 1) }),
-    /manifest version 2, this build reads 1 — rebake/,
+    new RegExp(`manifest version ${MANIFEST_VERSION + 1}, this build reads ${MANIFEST_VERSION} — rebake`),
   );
 }
 
@@ -833,7 +992,7 @@ function sceneOf(meshes: BakeMesh[], materials: BakeScene["materials"]): BakeSce
       width: 2,
       height: 2,
       image,
-      probes: [{ key: "probe", position: [0, 1, 0], width: 4, height: 2, image: probe }],
+      probes: [{ key: "probe", position: [0, 1, 0], influence: 0, width: 4, height: 2, image: probe }],
       exposure: 1,
       utilization: 1,
       manifest: { version: MANIFEST_VERSION, width: 2, height: 2, intensity: 1, meshes: [] },

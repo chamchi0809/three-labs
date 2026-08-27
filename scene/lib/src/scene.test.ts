@@ -254,6 +254,75 @@ test("ref(#id) binds to the node it names", async () => {
   assert.match(bad.diagnostics[0]!.message, /unknown node #nope/);
 });
 
+test("@override appends its body to every node its selector reaches", async () => {
+  const src = `
+@template mesh.enemy { castShadow: true; }
+group #arena {
+  mesh.enemy #a { visible: true; }
+  group { mesh.enemy #b { } }
+  mesh #c { }
+}
+mesh.enemy #outside { }
+@override #arena .enemy { visible: false; renderOrder: 1; }
+`;
+  const { nodes, diagnostics } = await expand(parse(src, "t.tscene"), noImports);
+  assert.deepEqual(diagnostics.map((d) => d.message), []);
+  const arena = (nodes[0] as any).object;
+  const named = (o: any, id: string): any => (o.id === id ? o : o.body.filter((m: any) => m.kind === "node").map((m: any) => named(m.object, id)).find(Boolean));
+  const props = (o: any) => o.body.filter((m: any) => m.kind === "prop").map((m: any) => `${m.name}=${m.value.name ?? m.value.value}`);
+  // the rule's members land after the node's own, which is what makes the override win
+  assert.deepEqual(props(named(arena, "a")), ["castShadow=true", "visible=true", "visible=false", "renderOrder=1"]);
+  // a descendant, not just a child
+  assert.deepEqual(props(named(arena, "b")), ["castShadow=true", "visible=false", "renderOrder=1"]);
+  assert.deepEqual(props(named(arena, "c")), []); // no .enemy
+  assert.deepEqual(props((nodes[1] as any).object), ["castShadow=true"]); // outside #arena
+});
+
+test("@override selects by type, id and class, and says so when it selects nothing", async () => {
+  const one = async (selector: string) => {
+    const { nodes, diagnostics } = await expand(
+      parse(`@template pointLight.warm { }\ngroup #s { mesh #box { } pointLight.warm #key { } }\n@override ${selector} { renderOrder: 7; }`, "t.tscene"),
+      noImports,
+    );
+    const hit: string[] = [];
+    const walk = (list: any[]) => {
+      for (const m of list) {
+        if (m.kind !== "node") continue;
+        if (m.object.body.some((x: any) => x.kind === "prop" && x.name === "renderOrder")) hit.push(m.object.id ?? m.object.name);
+        walk(m.object.body);
+      }
+    };
+    walk(nodes);
+    return { hit, messages: diagnostics.map((d) => d.message) };
+  };
+  assert.deepEqual((await one("mesh")).hit, ["box"]);
+  assert.deepEqual((await one("#key")).hit, ["key"]);
+  assert.deepEqual((await one(".warm")).hit, ["key"]);
+  assert.deepEqual((await one("pointLight#key.warm")).hit, ["key"]);
+  assert.deepEqual((await one("group mesh")).hit, ["box"]);
+  assert.deepEqual((await one("group")).hit, ["s"]);
+  // a compound that does not fit the same node matches nothing, and the warning names the selector
+  const none = await one("mesh.warm");
+  assert.deepEqual(none.hit, []);
+  assert.deepEqual(none.messages, ["this @override matches no node"]);
+  // the names a selector picks by are resolved, so a typo is an error and not a silent no-match
+  assert.deepEqual((await one("#nope")).messages, ["unknown node #nope"]);
+  assert.deepEqual((await one(".nope")).messages, ["unknown template .nope"]);
+});
+
+test("@override reaches into repeat() and prints back the way it was written", async () => {
+  const src = `@override group mesh.hot#x {\n  renderOrder: 1;\n}\n`;
+  assert.equal(print(parse(src, "t.tscene")), src);
+  const { nodes, diagnostics } = await expand(parse(`group { repeat(3) { mesh #m { } } }\n@override mesh { renderOrder: 1; }`, "t.tscene"), noImports);
+  // three copies, three overrides — and each gets its own AST node, not one shared between them
+  const kids = (nodes[0] as any).object.body;
+  assert.equal(kids.length, 3);
+  assert.deepEqual(diagnostics.map((d) => d.message), []); // repeat() copies share the id on purpose
+  const orders = kids.map((m: any) => m.object.body.filter((x: any) => x.kind === "prop" && x.name === "renderOrder"));
+  assert.deepEqual(orders.map((o: any[]) => o.length), [1, 1, 1]);
+  assert.equal(new Set(orders.map((o: any[]) => o[0])).size, 3);
+});
+
 test("dotted property paths parse down to the leaf", () => {
   const sheet = parse(`mesh { material.color: color(#fff); position.x: 1; }`);
   const body = sheet.statements[0]!.kind === "node" ? sheet.statements[0]!.object.body : [];
@@ -280,8 +349,8 @@ test("syntax errors carry a position and the rest of the file still parses", () 
 const schema = loadSchema();
 
 const checkText = async (text: string) => {
-  const { nodes, diagnostics, templates } = await expand(parse(text, "t.tscene"), noImports);
-  return [...diagnostics, ...check(nodes, schema, templates)].map((d) => d.message);
+  const { nodes, diagnostics, templates, overrides } = await expand(parse(text, "t.tscene"), noImports);
+  return [...diagnostics, ...check(nodes, schema, templates, overrides)].map((d) => d.message);
 };
 
 test("schema reflects the installed three typings", () => {
@@ -350,6 +419,16 @@ test("checks value types, argument types and arity", async () => {
   assert.match((await checkText(`mesh { geometry: boxGeometry(1,1,1,1,1,1,1); }`))[0]!, /at most 6 argument/);
   assert.match((await checkText(`mesh { geometry: boxGeometry("x"); }`))[0]!, /argument width .* expects number, got string/);
   assert.match((await checkText(`mesh { position: vec3(0, 1, 0); id: 4; }`))[0]!, /read-only/);
+});
+
+test("a constructor is checked against every overload three declares", async () => {
+  const colour = (args: string) => checkText(`mesh { material: meshStandardMaterial { color: color(${args}); }; }`);
+  assert.deepEqual(await colour(`#ff8000`), []); // Color(color?: ColorRepresentation)
+  assert.deepEqual(await colour(`"red"`), []);
+  assert.deepEqual(await colour(`1, 0.5, 0`), []); // Color(r, g, b) — the second signature
+  // no overload fits, so the closest one reports: three arguments is nearer (r, g, b) than (color)
+  assert.match((await colour(`1, 0.5, 0, 2`))[0]!, /color\(\) takes at most 3 argument\(s\), got 4/);
+  assert.match((await colour(`1, "x", 0`))[0]!, /argument g of color\(\) expects number, got string/);
 });
 
 test("constants are checked against the enum the property declares", async () => {
@@ -514,6 +593,97 @@ test("the vite plugin emits one module per sheet, with its imports and assets", 
   assert.deepEqual(JSON.parse(/imports: (\{.*?\}),/.exec(code)![1]!), { "./lib/mats.tscene": `${dir}/lib/mats.tscene` });
   assert.match(code, /import\.meta\.hot\.accept/);
   assert.equal(JSON.parse(/source: (".*?"), file:/.exec(code)![1]!), src); // source is verbatim, so positions hold
+});
+
+test("the vite plugin follows a var into the sheet that declared it, and maps the lines that can fail", async () => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "tscene-vite-"));
+  const id = (p: string) => path.join(dir, p).split(path.sep).join("/");
+  fs.mkdirSync(path.join(dir, "theme"));
+  // the theme's urls are relative to the theme, which sits a directory away from the sheet that uses them
+  fs.writeFileSync(path.join(dir, "theme", "vars.tscene"), `--wall: "./w.png";\n--floor: "../f.png";\n`);
+
+  const plugin = (await import("./vite.ts")).default({ check: false }) as any;
+  plugin.configResolved({ command: "build" });
+  const src =
+    `@import "./theme/vars.tscene";\n` +
+    `mesh { material: meshBasicMaterial { map: texture(var(--wall)); }; }\n` +
+    `mesh { material: meshBasicMaterial { map: texture(var(--floor)); }; }\n`;
+  const { code, map } = await plugin.transform(src, id("main.tscene"));
+
+  assert.match(code, /import __asset0 from "\.\/theme\/w\.png\?url";/, "the theme's own directory is what ./ meant");
+  assert.match(code, /import __asset1 from "\.\/f\.png\?url";/, "and ../ climbs out of it, not out of this sheet");
+  // the runtime looks an asset up by the raw string it read, so that is what the map is keyed by
+  assert.match(code, /assets: \{ "\.\/w\.png": __asset0, "\.\.\/f\.png": __asset1 \}/);
+
+  // a var this sheet declares itself wins, exactly as it does at runtime
+  const own = await plugin.transform(`${src}--wall: "./mine.png";\n`, id("main.tscene"));
+  assert.match(own.code, /import __asset0 from "\.\/mine\.png\?url";/);
+  assert.doesNotMatch(own.code, /theme\/w\.png/);
+
+  // --- the source map: one segment on the lines that are transforms of the sheet, nothing on the rest
+  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const unvlq = (s: string): number[] => {
+    const out: number[] = [];
+    let value = 0;
+    let shift = 0;
+    for (const c of s) {
+      const d = B64.indexOf(c);
+      value |= (d & 31) << shift;
+      if (d & 32) { shift += 5; continue; }
+      out.push(value & 1 ? -(value >>> 1) : value >>> 1);
+      value = shift = 0;
+    }
+    return out;
+  };
+  assert.deepEqual(map.sources, [id("main.tscene")]);
+  assert.deepEqual(map.sourcesContent, [src]);
+  const groups = map.mappings.split(";");
+  const lines = code.split("\n");
+  assert.equal(groups.length, lines.length, "one group per generated line, mapped or not");
+
+  let line = 0;
+  let column = 0;
+  const at = new Map<string, [number, number]>();
+  groups.forEach((group: string, i: number) => {
+    if (!group) return;
+    const [genColumn, source, dLine, dColumn] = unvlq(group);
+    assert.equal(genColumn, 0, "a whole generated line stands for the construct, so the segment starts at 0");
+    assert.equal(source, 0, "there is only ever the one source");
+    line += dLine!;
+    column += dColumn!;
+    at.set(lines[i]!, [line, column]);
+  });
+
+  assert.deepEqual(at.get(`import "./theme/vars.tscene";`), [0, 0], "the @import it came from");
+  assert.deepEqual(
+    at.get(`import __asset0 from "./theme/w.png?url";`),
+    [1, src.split("\n")[1]!.indexOf("var(--wall)")],
+    "the loader argument that asked for it",
+  );
+  assert.equal(at.size, 3, "and nothing else is claimed to be a transform of the sheet");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("every loader is a texture the checker knows the class of, and its url is bundled", async () => {
+  // the class each one arrives as is what makes it assignable — an environment is a Texture like any other
+  assert.deepEqual(
+    await checkText(`scene { environment: hdr("./e.hdr"); background: exr("./b.exr");
+      mesh { material: meshStandardMaterial { map: ktx2("./m.ktx2"); normalMap: texture("./n.png"); }; } }`),
+    [],
+  );
+  assert.match((await checkText(`mesh { material: meshBasicMaterial { map: hdr(); }; }`))[0]!, /hdr\(\) needs 1 argument/);
+  assert.match((await checkText(`mesh { material: meshBasicMaterial { map: ktx2(3); }; }`))[0]!, /expects string, got number/);
+  // a texture is not an Object3D, so it can never stand in for a node
+  assert.match((await checkText(`hdr("./e.hdr") { }`))[0]!, /DataTexture/);
+
+  const plugin = (await import("./vite.ts")).default({ check: false }) as any;
+  plugin.configResolved({ command: "build" });
+  const src = `scene { environment: hdr("./e.hdr"); background: exr("./b.exr");\n  mesh { material: meshBasicMaterial { map: ktx2("./m.ktx2"); }; }\n}\n`;
+  const { code } = await plugin.transform(src, path.resolve("/p/main.tscene").split(path.sep).join("/"));
+  for (const [i, asset] of ["./e.hdr", "./b.exr", "./m.ktx2"].entries()) {
+    assert.match(code, new RegExp(`import __asset${i} from "${asset.replace(".", "\\.")}\\?url";`));
+  }
 });
 
 test("the vite plugin imports the three classes a sheet names, and only those", async () => {
@@ -891,9 +1061,9 @@ test("a mount disposed mid-build never puts its root on screen", async () => {
 });
 
 test("@bakery { lightmap } is applied to the sheet it names", async () => {
-  const { encodeFloats } = await import("./bakery/apply.ts");
+  const { encodeFloats, MANIFEST_VERSION } = await import("./bakery/apply.ts");
   const manifest = {
-    version: 1,
+    version: MANIFEST_VERSION,
     width: 1,
     height: 1,
     intensity: 2,

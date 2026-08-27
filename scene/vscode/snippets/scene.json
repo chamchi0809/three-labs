@@ -48,6 +48,15 @@
     ],
     "description": "Reusable property block for a node type, applied with .name"
   },
+  "override": {
+    "prefix": "override",
+    "body": [
+      "@override ${1:.name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A body appended to every node the selector matches — type, #id and .template, chained by descendant"
+  },
   "bakery": {
     "prefix": "bakery",
     "body": [

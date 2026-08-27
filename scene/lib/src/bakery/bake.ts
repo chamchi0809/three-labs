@@ -2,7 +2,7 @@
 // a WebGPURenderer, and `createHeadlessRenderer()` supplies one in Node.
 import * as THREE from "three/webgpu";
 import { unwrap, type Atlas, type UnwrapOptions } from "./atlas.ts";
-import { denoise, dilate } from "./filter.ts";
+import { denoise, dilate, fireflies } from "./filter.ts";
 import type { Texels } from "./raster.ts";
 import { rasterizeParallel } from "./raster.ts";
 import { collectScene, sampleTexture, type BakeScene, type CollectOptions } from "./scene.ts";
@@ -32,6 +32,11 @@ export type BakeOptions = Omit<UnwrapOptions, "onProgress"> &
     renderer: THREE.WebGPURenderer;
     /** 0 disables the edge-aware blur; 1 is a 3x3 kernel */
     denoiseRadius?: number;
+    /**
+     * How far above the median of its neighbours a texel may sit before it is clamped back to it.
+     * Runs before the blur, which would otherwise smear the spike rather than remove it. 0 disables.
+     */
+    fireflyThreshold?: number;
     /** texels of lit-region growth past the chart edges. The atlas padding follows this by default. */
     dilateRadius?: number;
     /** also build an ambient-occlusion atlas — {@link BakeResult.ao}, and `<name>.ao.png` on disk */
@@ -74,6 +79,9 @@ export type BakeResult = {
 };
 
 export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<BakeResult> {
+  // the trace checks the signal per batch; the stages around it are single calls that can each run for
+  // minutes (xatlas, the rasterizer, the filters), so the boundaries between them are the other chances
+  opts.signal?.throwIfAborted();
   opts.onProgress?.("collect", 0);
   const scene = collectScene(root, opts);
   if (!scene.meshes.length) throw new Error("tscene/bakery: nothing to bake — no visible meshes under the root");
@@ -90,7 +98,11 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
         padding: opts.padding ?? dilateRadius,
         onProgress: (fraction) => opts.onProgress?.("unwrap", fraction),
       });
+  // here rather than at the filter stage: a mismatch is knowable the moment the layout is, and finding
+  // it afterwards means the whole path trace ran — minutes to hours — to reach a throw
+  if (opts.previous) validatePrevious(opts.previous, atlas);
 
+  opts.signal?.throwIfAborted();
   opts.onProgress?.("rasterize", 0);
   const texels = await rasterizeParallel(scene.meshes, atlas, {
     jobs: opts.jobs,
@@ -99,6 +111,9 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
   if (!texels.index.length) throw new Error("tscene/bakery: the unwrap produced no usable texels");
 
   opts.onProgress?.("prepare", 0);
+  // before anything reads a normal: the trace samples its hemisphere around it, and both filters use it
+  // to decide which neighbours share a surface, so the bumped normal has to be the only one in play
+  applyNormalMaps(scene, texels);
   const index = opts.only?.length ? subset(texels, scene, opts.only) : texels.index;
   // both GPU stages run off one context. Building it walks and uploads every triangle in the scene, and
   // the probes used to build a second one after the atlas trace had already thrown the first away.
@@ -127,14 +142,12 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     context.dispose();
   }
 
+  opts.signal?.throwIfAborted();
   opts.onProgress?.("filter", 0);
   // a partial rebake starts from the atlas it is patching, so untouched charts keep their light
   // ponytail: the filters then run over the whole image again, so an old texel is blurred twice.
   // Harmless on converged, already-smooth values; mask the filters per chart if it ever shows.
   const image = opts.previous ? Float32Array.from(opts.previous.image) : new Float32Array(atlas.width * atlas.height * 4);
-  if (image.length !== atlas.width * atlas.height * 4) {
-    throw new Error("tscene/bakery: the previous image does not match its manifest — rebake the whole scene");
-  }
   let ao: Float32Array | undefined;
   if (opts.ao) {
     if (opts.previous && !opts.previous.ao && opts.only?.length) {
@@ -157,6 +170,8 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
     }
   }
 
+  // before the blur, and only on the irradiance: occlusion is an average of 0s and 1s and has no spikes
+  fireflies(image, texels, opts.fireflyThreshold ?? 4);
   if ((opts.denoiseRadius ?? 1) > 0) denoise(image, texels, opts.denoiseRadius ?? 1);
   dilate(image, texels.mask, atlas.width, atlas.height, dilateRadius);
   if (ao) {
@@ -191,6 +206,25 @@ export async function bake(root: THREE.Object3D, opts: BakeOptions): Promise<Bak
 }
 
 /**
+ * Both atlases a rebake patches have to be the shape the manifest describes. `image` was checked after
+ * the trace and `ao` was never checked at all — a short one takes the per-texel writes below silently,
+ * because a typed array drops an out-of-range store instead of throwing, and the occlusion comes out
+ * truncated with nothing said.
+ * @internal exported for the checks
+ */
+export function validatePrevious(previous: NonNullable<BakeOptions["previous"]>, atlas: Atlas): void {
+  const expected = atlas.width * atlas.height * 4;
+  for (const [what, buffer] of [["image", previous.image], ["occlusion atlas", previous.ao]] as const) {
+    if (buffer && buffer.length !== expected) {
+      throw new Error(
+        `tscene/bakery: the previous ${what} holds ${buffer.length} floats, not the ${expected} its manifest ` +
+          `describes (${atlas.width}x${atlas.height}) — rebake the whole scene`,
+      );
+    }
+  }
+}
+
+/**
  * The uv layout of a finished bake, so a rebake lands on the same texels instead of unwrapping again.
  * @internal exported for the checks
  */
@@ -220,6 +254,96 @@ export function subset(texels: Texels, scene: BakeScene, keys: string[]): Uint32
   const picked = [...texels.index].filter((at) => wanted.has(scene.meshes[texels.mesh[at]!]?.key ?? ""));
   if (!picked.length) throw new Error(`tscene/bakery: ${keys.join(", ")} covers no texel of the atlas`);
   return Uint32Array.from(picked);
+}
+
+/**
+ * Bends every covered texel's normal by its material's `normalMap`, in place, and answers how many it
+ * moved. The trace then casts its hemisphere around the bumped normal, so a brick wall's mortar catches
+ * its own shading instead of baking as flat as the geometry — and since three adds a lightmap without a
+ * normal term, the detail can only come from here.
+ *
+ * The tangent frame comes out of the atlas rather than out of per-vertex tangents: two texels apart in
+ * the atlas are two points whose world position and uv0 are both already in {@link Texels}, so the 2x2
+ * system relating one delta to the other *is* `[∂P/∂u, ∂P/∂v]`. No tangent attribute to compute, none to
+ * thread through the rasterizer's workers, and the frame lands at exactly the resolution the bake shades
+ * at. It needs two neighbours of the same mesh, which the interior of every chart has and its one-texel
+ * rim does not — those keep the geometry's own normal, and the dilation covers them anyway.
+ * @internal exported for the checks
+ */
+export function applyNormalMaps(scene: BakeScene, texels: Texels): number {
+  if (!scene.materials.some((m) => m.normalMap)) return 0;
+  const { width, height, position, normal, uv, mesh: owner } = texels;
+  const dpu = new Float64Array(3);
+  const dpv = new Float64Array(3);
+  const duu = new Float64Array(2);
+  const duv = new Float64Array(2);
+  let applied = 0;
+
+  // negating both sides of the system leaves its solution alone, so a backward step needs no sign undone
+  const delta = (at: number, x: number, y: number, dx: number, dy: number, dp: Float64Array, du: Float64Array) => {
+    for (const s of [1, -1]) {
+      const nx = x + dx * s;
+      const ny = y + dy * s;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const to = ny * width + nx;
+      if (owner[to] !== owner[at]) continue;
+      for (let k = 0; k < 3; k++) dp[k] = position[to * 4 + k]! - position[at * 4 + k]!;
+      for (let k = 0; k < 2; k++) du[k] = uv[to * 2 + k]! - uv[at * 2 + k]!;
+      return true;
+    }
+    return false;
+  };
+
+  for (const at of texels.index) {
+    const material = scene.materials[normal[at * 4 + 3]! | 0];
+    if (!material?.normalMap) continue;
+    const sample = sampleTexture(material.normalMap, uv[at * 2]!, uv[at * 2 + 1]!);
+    if (!sample) continue;
+
+    const x = at % width;
+    const y = (at - x) / width;
+    if (!delta(at, x, y, 1, 0, dpu, duu) || !delta(at, x, y, 0, 1, dpv, duv)) continue;
+    const det = duu[0]! * duv[1]! - duv[0]! * duu[1]!;
+    // a chart whose uv0 does not move across a texel — an untextured face, a degenerate island — has no
+    // frame to build, and 1/det would be an axis pointing anywhere
+    if (!(Math.abs(det) > 1e-20)) continue;
+    const r = 1 / det;
+
+    const n = [normal[at * 4]!, normal[at * 4 + 1]!, normal[at * 4 + 2]!];
+    const t = [0, 0, 0];
+    const bRef = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+      t[k] = (dpu[k]! * duv[1]! - dpv[k]! * duu[1]!) * r;
+      bRef[k] = (dpv[k]! * duu[0]! - dpu[k]! * duv[0]!) * r;
+    }
+    // orthonormalize against the interpolated normal, which is the one the bump is relative to
+    const along = t[0]! * n[0]! + t[1]! * n[1]! + t[2]! * n[2]!;
+    for (let k = 0; k < 3; k++) t[k]! -= n[k]! * along;
+    const length = Math.hypot(t[0]!, t[1]!, t[2]!);
+    if (!(length > 1e-9)) continue;
+    for (let k = 0; k < 3; k++) t[k]! /= length;
+    const b = [n[1]! * t[2]! - n[2]! * t[1]!, n[2]! * t[0]! - n[0]! * t[2]!, n[0]! * t[1]! - n[1]! * t[0]!];
+    // cross(N, T) is a bitangent; which of the two it is depends on how the chart was wound
+    if (b[0]! * bRef[0]! + b[1]! * bRef[1]! + b[2]! * bRef[2]! < 0) for (let k = 0; k < 3; k++) b[k]! = -b[k]!;
+
+    const [sx, sy] = material.normalScale ?? [1, 1];
+    const mx = (sample[0]! * 2 - 1) * sx;
+    const my = (sample[1]! * 2 - 1) * sy;
+    // a map whose blue channel decodes at or below the surface is not a tangent-space normal map; the
+    // floor keeps the frame on the outward side rather than turning the texel inside out
+    const mz = Math.max(sample[2]! * 2 - 1, 1e-3);
+
+    const out = [0, 0, 0];
+    for (let k = 0; k < 3; k++) out[k] = t[k]! * mx + b[k]! * my + n[k]! * mz;
+    const size = Math.hypot(out[0]!, out[1]!, out[2]!);
+    if (!(size > 1e-9)) continue;
+    for (let k = 0; k < 3; k++) out[k]! /= size;
+    // a `normalScale` past the point where the bump tips under the surface would start rays inside it
+    if (out[0]! * n[0]! + out[1]! * n[1]! + out[2]! * n[2]! < 0.05) continue;
+    for (let k = 0; k < 3; k++) normal[at * 4 + k] = out[k]!;
+    applied++;
+  }
+  return applied;
 }
 
 /**
@@ -259,19 +383,14 @@ export function albedoAtlas(scene: BakeScene, texels: Texels): Uint32Array | und
 }
 
 /**
- * The divisor that puts almost everything inside [0,1]. The 99th percentile rather than the maximum,
- * so one blown texel next to a lamp doesn't crush the whole atlas into the bottom of an 8-bit range.
- * Clipping above it is the intended trade — use the EXR output when clipping is unacceptable.
- */
-/**
  * The divisor that maps this atlas into [0,1] for the PNG. The 95th percentile, not the 99th: the top
  * few per cent of a scene with emissive props is their own noisy neighbourhood, and a percentile that
  * lands in it moves with the fireflies — pica came out 0.9, 1.6 and 2.1 across three bakes of the same
  * sheet, spending a stop of 8-bit range on texels the tone mapper rolls off anyway. What sits above the
  * divisor clips in the PNG and survives in the EXR.
  *
- * ponytail: still a percentile of raw texels, so it is only as steady as the noise floor. `@bakery
- * { exposure }` is the way to pin it; a firefly filter before the sort would fix the cause.
+ * `fireflies()` runs before this and takes the spikes that used to move it out; what is left is the
+ * noise floor, which a percentile is steady against. `@bakery { exposure }` still pins it outright.
  */
 function autoExposure(image: Float32Array, mask: Uint8Array): number {
   const luminance: number[] = [];
