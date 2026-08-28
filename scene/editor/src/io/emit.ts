@@ -1,0 +1,172 @@
+/**
+ * A node the editor made, turned back into tscene syntax.
+ *
+ * This is the *other* half of the round trip, and the smaller one. A node that came from a file is
+ * written by patching the ranges that changed, and never goes through here; this is for the solid the
+ * designer just drew, which has no ranges at all and has to be printed out in full.
+ *
+ * Nothing here decides formatting. It builds the AST the parser would have produced and hands it to
+ * tscene's own printer, so that a brush the editor wrote and a brush a person wrote come out of `print`
+ * looking the same — which is the only way a generated file stays a file anyone is willing to edit.
+ */
+import type { Member, ObjectValue, UvMode, Value, Vec3 } from "tscene";
+import { brushToFaces, type Brush } from "../brush/brush.ts";
+import { childrenOf, DEFAULT_LAYER, type GroupNode, type LayerNode, type Node, type World } from "../doc/document.ts";
+import { call, ident, num, setProp, str, SYNTHETIC, vec3 } from "../doc/props.ts";
+import { tidy } from "./literal.ts";
+
+// ---------------------------------------------------------------- pieces
+
+const record = (entries: [string, Value][]): Extract<Value, { kind: "record" }> => ({
+  ...SYNTHETIC,
+  kind: "record",
+  entries: entries.map(([name, value]) => ({ name, namePos: SYNTHETIC, value })),
+});
+
+const at = (name: string, entries: [string, Value][]): Member => ({
+  ...SYNTHETIC, kind: "at", name, value: record(entries),
+});
+
+const prop = (name: string, value: Value): Member => ({ ...SYNTHETIC, kind: "prop", name, value });
+const child = (object: ObjectValue): Member => ({ ...SYNTHETIC, kind: "node", object });
+
+/** `var(--wall)` — how a face says what it is made of, and the only value the editor ever writes by name */
+export const varOf = (name: string): Value => ({ ...SYNTHETIC, kind: "var", name, namePos: SYNTHETIC });
+
+/** degrees, because a sheet full of 0.7853981633974483 is a sheet nobody can read */
+const angle = (radians: number): Value => num(tidy((radians * 180) / Math.PI), "deg");
+
+const body = (o: ObjectValue, members: Member[]): ObjectValue => ({ ...o, body: members, hasBody: true });
+
+/** a `#id` is only written when the name is one the lexer would hand back whole */
+const isIdent = (name: string): boolean => /^[A-Za-z_][\w-]*$/.test(name);
+
+// ---------------------------------------------------------------- @broom
+
+/**
+ * The editor's own annotation on a node. Only the keys that are set are written: `@broom {}` on every
+ * node would be forty lines of nothing, and a key left out means the same as the default anyway.
+ */
+export function broomMember(broom: Node["broom"]): Member | undefined {
+  const entries: [string, Value][] = [];
+  if (broom.kind) entries.push(["kind", str(broom.kind)]);
+  if (broom.icon !== undefined) entries.push(["icon", str(broom.icon)]);
+  if (broom.color !== undefined) {
+    entries.push(["color", { ...SYNTHETIC, kind: "hex", value: broom.color, digits: 6 }]);
+  }
+  if (broom.layer !== undefined) entries.push(["layer", str(broom.layer)]);
+  // `false` is written out rather than dropped: a sheet that says `locked: false` said it on purpose, and
+  // a save that quietly deletes the line is a save that edits sentences nobody asked it to
+  if (broom.locked !== undefined) entries.push(["locked", ident(String(broom.locked))]);
+  if (broom.hidden !== undefined) entries.push(["hidden", ident(String(broom.hidden))]);
+  if (broom.size?.length === 6) {
+    entries.push(["size", { ...SYNTHETIC, kind: "array", items: broom.size.map((n) => num(tidy(n))) }]);
+  }
+  return entries.length ? at("broom", entries) : undefined;
+}
+
+/** the world's `@broom { grid, scale }`, which is a statement rather than a member of anything */
+export const worldBroom = (world: World): Member =>
+  at("broom", [["grid", num(world.broom.grid)], ["scale", num(tidy(world.broom.scale))]]);
+
+// ---------------------------------------------------------------- solids
+
+/**
+ * The `face(…)` nodes of a solid. Three points and, in the body, only what differs from the default —
+ * an untouched face is one line, which is what keeps a forty-brush room readable.
+ */
+export function faceMembers(brush: Brush): Member[] {
+  return brushToFaces(brush).map((f, i) => {
+    const inner: Member[] = [];
+    const material = brush.faces[i]?.material;
+    if (material) inner.push(prop("material", varOf(material)));
+    if (f.uv) inner.push(prop("uv", uvValue(f.uv)));
+    if (f.offset) inner.push(prop("offset", call("vec2", [num(tidy(f.offset[0])), num(tidy(f.offset[1]))])));
+    if (f.scale) inner.push(prop("scale", call("vec2", [num(tidy(f.scale[0])), num(tidy(f.scale[1]))])));
+    if (f.rotation) inner.push(prop("rotation", angle(f.rotation)));
+
+    const head = call("face", f.points.map((p) => vec3([tidy(p[0]), tidy(p[1]), tidy(p[2])])));
+    return child(inner.length ? body(head, inner) : head);
+  });
+}
+
+const tidyVec3 = (v: Vec3): Vec3 => [tidy(v[0]), tidy(v[1]), tidy(v[2])];
+
+const uvValue = (uv: UvMode): Value =>
+  uv.kind === "parallel" && uv.u && uv.v
+    ? call("parallel", [vec3(tidyVec3(uv.u)), vec3(tidyVec3(uv.v))])
+    : ident(uv.kind);
+
+// ---------------------------------------------------------------- naming a group
+
+/**
+ * Where a group's name is written.
+ *
+ * tscene has two ways to say it — `group #Hall` and `group { name: "Hall" }` — and which one a sheet used
+ * is the author's choice, not the editor's. Changing it would mean a file that reformats itself the first
+ * time it is opened, so the rule is: keep saying it the way it was already said, and only choose when
+ * nobody has chosen yet. A name with a space in it has to be a string whatever the sheet did.
+ */
+export type NameAt = "head" | "prop" | "nowhere";
+
+export function nameAt(node: GroupNode | LayerNode): NameAt {
+  const was = node.origin?.was;
+  if (was?.body.some((m) => m.kind === "prop" && m.name === "name")) return "prop";
+  if (was?.id !== undefined && was.id === node.name) return "head";
+  // the sheet named it nothing and the designer has not renamed it: the name is the reader's default
+  if (node.origin && was?.id === undefined && node.name === (node.kind === "layer" ? DEFAULT_LAYER : "Group")) {
+    return "nowhere";
+  }
+  return isIdent(node.name) ? "head" : "prop";
+}
+
+// ---------------------------------------------------------------- nodes
+
+/**
+ * A node's own members: everything in its body that is not a child node.
+ *
+ * The writer and the printer both go through here, so that "what this node says" has one definition. For
+ * a solid that includes its `face(…)` list, which is part of the solid rather than part of the tree.
+ */
+export function ownMembers(node: Node): Member[] {
+  const broom = broomMember(node.broom);
+  const head = broom ? [broom] : [];
+  if (node.kind === "group" || node.kind === "layer") {
+    const props = nameAt(node) === "prop" ? setProp(node.props, "name", str(node.name)) : node.props;
+    return [...head, ...props];
+  }
+  return [...head, ...node.props];
+}
+
+/** the head a node would be written with, and nothing else — the thing a save compares to decide */
+export function headOf(node: Node): ObjectValue {
+  const name =
+    node.kind === "brush" ? "brush"
+    : node.kind === "entity" ? node.type
+    : "group";
+  // a group whose name lives in a `name:` property still keeps whatever `#id` the sheet gave it: the two
+  // are different things to three, and only one of them is the editor's to rewrite
+  const id =
+    node.kind === "group" || node.kind === "layer"
+      ? nameAt(node) === "head" ? node.name : node.sheetId
+      : node.sheetId;
+  return {
+    ...call(name, node.kind === "entity" ? node.args : []),
+    classes: [...node.classes],
+    classSpans: node.classes.map(() => SYNTHETIC),
+    ...(id !== undefined ? { id } : {}),
+  };
+}
+
+/**
+ * A whole node as the parser would have produced it. Children come last, after the node's own settings,
+ * because that is how a sheet reads: what this thing is, then what is inside it.
+ */
+export function toObject(node: Node): ObjectValue {
+  const head = headOf(node);
+  const inside =
+    node.kind === "brush" ? faceMembers(node.brush) : childrenOf(node).map((k) => child(toObject(k)));
+  const members = [...ownMembers(node), ...inside];
+  // a node with nothing inside it is written as a call, which is how `pointLight(#fff, 2)` stays one line
+  return members.length ? body(head, members) : head;
+}

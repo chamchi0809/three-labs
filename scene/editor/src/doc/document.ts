@@ -17,6 +17,7 @@
 import type { Member, NodeBroom, Value, Vec3 } from "tscene";
 import type { Bounds } from "../brush/builder.ts";
 import { brushBounds, type Brush } from "../brush/brush.ts";
+import type { Origin } from "../io/origin.ts";
 import { vec3Of } from "./props.ts";
 
 export type NodeId = string;
@@ -25,11 +26,25 @@ let counter = 0;
 /** a fresh identity. Ids live in memory only — the sheet identifies a node by its `#id`, or by position */
 export const freshId = (): NodeId => `n${++counter}`;
 
-/** shared by every node: who it is, and how the editor is currently treating it */
+/** shared by every node: who it is, where it was written, and how the editor is currently treating it */
 type Base = {
   id: NodeId;
   /** the `@broom { … }` block, which is where `locked` and `hidden` are kept so a session survives saving */
   broom: NodeBroom;
+  /** the `#id` the sheet gave it. Names in a sheet are the designer's; `id` above is the session's */
+  sheetId?: string;
+  /**
+   * The `.class` templates written on its head. On every node rather than on entities alone, because
+   * `brush.wall { … }` is legal tscene and a solid that lost its template on the way in would lose it on
+   * the way out too.
+   */
+  classes: string[];
+  /**
+   * Where in which file this node was read from. Carried on the node rather than in a map beside the
+   * tree, so that it survives every move, group and undo without anything having to remember to carry it.
+   * Absent on a node the editor made, which is exactly how the writer knows to print it out in full.
+   */
+  origin?: Origin;
 };
 
 /** a solid */
@@ -43,9 +58,6 @@ export type EntityNode = Base & {
   kind: "entity";
   /** the node name as the sheet writes it: `mesh`, `pointLight`, or a template's name */
   type: string;
-  /** the `#id`, if it has one */
-  sheetId?: string;
-  classes: string[];
   args: Value[];
   props: Member[];
   children: Node[];
@@ -69,19 +81,19 @@ export const childrenOf = (node: Node): Node[] => (hasChildren(node) ? node.chil
 // ---------------------------------------------------------------- building
 
 export const brushNode = (brush: Brush, over: Partial<BrushNode> = {}): BrushNode => ({
-  kind: "brush", id: freshId(), broom: {}, props: [], brush, ...over,
+  kind: "brush", id: freshId(), broom: {}, classes: [], props: [], brush, ...over,
 });
 
 export const entityNode = (type: string, over: Partial<EntityNode> = {}): EntityNode => ({
-  kind: "entity", id: freshId(), broom: {}, type, classes: [], args: [], props: [], children: [], ...over,
+  kind: "entity", id: freshId(), broom: {}, classes: [], type, args: [], props: [], children: [], ...over,
 });
 
-export const groupNode = (name: string, children: Node[] = []): GroupNode => ({
-  kind: "group", id: freshId(), broom: {}, props: [], name, children,
+export const groupNode = (name: string, children: Node[] = [], over: Partial<GroupNode> = {}): GroupNode => ({
+  kind: "group", id: freshId(), broom: {}, classes: [], props: [], name, children, ...over,
 });
 
-export const layerNode = (name: string, children: Node[] = []): LayerNode => ({
-  kind: "layer", id: freshId(), broom: {}, props: [], name, children,
+export const layerNode = (name: string, children: Node[] = [], over: Partial<LayerNode> = {}): LayerNode => ({
+  kind: "layer", id: freshId(), broom: {}, classes: [], props: [], name, children, ...over,
 });
 
 /** a new, empty map: one layer, a 25 cm grid, one metre per texture tile */

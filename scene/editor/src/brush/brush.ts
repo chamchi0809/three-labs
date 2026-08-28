@@ -35,6 +35,16 @@ export type FaceAttributes = {
   scale: Vec2;
   /** radians */
   rotation: number;
+  /**
+   * The three points this face was written with, kept so a solid nobody moved comes back out of a save
+   * spelled the way it went in.
+   *
+   * Any three points on the plane say the same thing to the runtime, so the kernel is free to pick its own
+   * — but a file that renumbers every corner of every solid the first time it is opened is a file with a
+   * hundred-line diff and nothing changed in it. They are used again only while they still name the face's
+   * current plane; the moment it moves, they are stale and the kernel's own corners are written instead.
+   */
+  points?: [Vec3, Vec3, Vec3];
 };
 
 export type Brush = { poly: Polyhedron; faces: FaceAttributes[] };
@@ -130,6 +140,7 @@ export function brushFromFaces(faces: BrushFace[]): BrushEdit {
         offset: f.offset ? [...f.offset] : [0, 0],
         scale: f.scale ? [...f.scale] : [1, 1],
         rotation: f.rotation ?? 0,
+        points: copy3(f.points),
       }),
     ),
   };
@@ -143,7 +154,7 @@ export function brushFromFaces(faces: BrushFace[]): BrushEdit {
 export function brushToFaces(brush: Brush): BrushFace[] {
   return brush.poly.faces.map((f, i) => {
     const a = brush.faces[i] ?? DEFAULT_FACE;
-    const face: BrushFace = { points: facePoints(brush.poly, f) };
+    const face: BrushFace = { points: asWritten(a.points, f.plane) ?? facePoints(brush.poly, f) };
     if (a.uv.kind !== "paraxial") face.uv = a.uv;
     if (a.offset[0] || a.offset[1]) face.offset = [...a.offset];
     if (a.scale[0] !== 1 || a.scale[1] !== 1) face.scale = [...a.scale];
@@ -151,6 +162,23 @@ export function brushToFaces(brush: Brush): BrushFace[] {
     return face;
   });
 }
+
+/**
+ * The points a face was written with, if they still describe the plane it is on now.
+ *
+ * `settle` carries attributes from the face an edit grew out of, so points can outlive the plane they were
+ * measured on — a wall that was dragged a metre keeps the attributes of the wall it was, points included.
+ * Checking rather than trusting is what keeps a stale triple from silently moving a face back.
+ */
+function asWritten(points: [Vec3, Vec3, Vec3] | undefined, plane: Plane): [Vec3, Vec3, Vec3] | undefined {
+  if (!points) return undefined;
+  const was = planeFromPoints(points);
+  if (!was) return undefined;
+  const off = Math.abs(was.n[0] - plane.n[0]) + Math.abs(was.n[1] - plane.n[1]) + Math.abs(was.n[2] - plane.n[2]);
+  return off < EPSILON && Math.abs(was.d - plane.d) < EPSILON ? copy3(points) : undefined;
+}
+
+const copy3 = (p: [Vec3, Vec3, Vec3]): [Vec3, Vec3, Vec3] => [[...p[0]], [...p[1]], [...p[2]]];
 
 /** the mesh three renders, built by the same code the runtime uses so the editor cannot drift from it */
 export const brushToMesh = (brush: Brush): { mesh?: BrushMesh; problems: string[] } => {
