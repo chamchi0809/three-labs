@@ -1,20 +1,30 @@
 <script lang="ts">
-  // The shell. M0 is a single viewport and a status bar; M7 splits the centre into the three-pane
-  // layout and M10 hangs the inspectors off the right edge.
+  // The shell. M6 is a single viewport over the render scene and a status bar; M7 splits the centre into
+  // the three-pane layout and M10 hangs the inspectors off the right edge.
   import Viewport from "./viewport/Viewport.svelte";
-  import { DEFAULT_EXPONENT, clampExponent, formatSize, gridSize } from "./grid/snap.ts";
+  import { clampExponent, formatSize } from "./grid/snap.ts";
+  import { withGrid } from "./doc/editor.ts";
+  import { session } from "./session.svelte.ts";
 
-  let exponent = $state(DEFAULT_EXPONENT);
-  const size = $derived(gridSize(exponent));
+  const exponent = $derived(session.editor.world.broom.grid);
+  const selected = $derived(session.editor.selection.nodes.length);
 
-  // `[` and `]` step the grid, as they do in TrenchBroom. Bound on window rather than on the viewport
-  // so the grid still responds while the focus sits in a panel.
+  // `[` and `]` step the grid, as they do in TrenchBroom; ⌘/Ctrl+Z undoes. Bound on window rather than on
+  // the viewport so both still work while the focus sits in a panel.
   function onKeydown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return;
-    if (event.key === "[") exponent = clampExponent(exponent - 1);
-    else if (event.key === "]") exponent = clampExponent(exponent + 1);
-    else return;
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if (event.shiftKey) session.redo();
+      else session.undo();
+    } else if (event.key === "[") {
+      session.set((e) => withGrid(e, clampExponent(exponent - 1)));
+    } else if (event.key === "]") {
+      session.set((e) => withGrid(e, clampExponent(exponent + 1)));
+    } else {
+      return;
+    }
     event.preventDefault();
   }
 </script>
@@ -24,12 +34,13 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M0 · scaffold</span>
+    <span class="milestone">M6 · renderer</span>
   </header>
-  <main><Viewport {size} /></main>
+  <main><Viewport /></main>
   <footer>
-    <span>grid <b>{formatSize(size)}</b></span>
-    <span class="hint">[ / ] to change</span>
+    <span>grid <b>{formatSize(2 ** exponent)}</b></span>
+    <span>selected <b>{selected}</b></span>
+    <span class="hint">[ / ] grid · click to select · shift-click to add</span>
   </footer>
 </div>
 
