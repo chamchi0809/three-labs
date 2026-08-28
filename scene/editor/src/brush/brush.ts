@@ -39,8 +39,18 @@ export type FaceAttributes = {
 
 export type Brush = { poly: Polyhedron; faces: FaceAttributes[] };
 
-/** the result of any edit: the new brush, or nothing and the reasons */
-export type BrushEdit = { brush?: Brush; problems: string[] };
+/**
+ * The result of any edit: the new brush, or nothing and the reasons.
+ *
+ * `from[i]` is the face of the brush that went in which face `i` of the brush that came out grew from,
+ * or `-1` for a face the kernel invented. Attributes are already carried across — that is `settle`'s job
+ * — but uv lock needs to know which face *used to be* which in order to work out how far each one turned,
+ * and after `settle` the numbering has been reset and the answer is gone.
+ */
+export type BrushEdit = { brush?: Brush; problems: string[]; from?: number[] };
+
+/** which face of the previous brush each face came from, read off before `settle` renumbers them */
+export const sourcesOf = (poly: Polyhedron): number[] => poly.faces.map((f) => f.source);
 
 export const DEFAULT_FACE: FaceAttributes = {
   uv: { kind: "paraxial" },
@@ -123,7 +133,7 @@ export function brushFromFaces(faces: BrushFace[]): BrushEdit {
       }),
     ),
   };
-  return { brush: settle(before, built.poly), problems };
+  return { brush: settle(before, built.poly), problems, from: sourcesOf(built.poly) };
 }
 
 /**
@@ -186,7 +196,7 @@ const rebuild = (before: Brush, planes: SourcedPlane[], what: string): BrushEdit
   if (!built.poly) return { problems: [`${what} would leave nothing`] };
   const bad = integrity(built.poly);
   if (bad.length) return { problems: bad.map((b) => `${what}: ${b}`) };
-  return { brush: settle(before, built.poly), problems: [] };
+  return { brush: settle(before, built.poly), problems: [], from: sourcesOf(built.poly) };
 };
 
 /** every vertex moved; a mirroring transform reverses the winding rather than turning the brush inside out */
@@ -194,7 +204,7 @@ export function transformBrush(brush: Brush, m: Mat4): BrushEdit {
   const moved = transform(brush.poly, m, determinant(m) < 0);
   const bad = integrity(moved);
   if (bad.length) return { problems: bad };
-  return { brush: settle(brush, moved), problems: [] };
+  return { brush: settle(brush, moved), problems: [], from: sourcesOf(moved) };
 }
 
 /**
@@ -259,7 +269,7 @@ function hull(before: Brush, points: Vec3[], what: string): BrushEdit {
   if (!poly) return { problems: [`${what} would leave nothing`] };
   const bad = integrity(poly);
   if (bad.length) return { problems: bad.map((b) => `${what}: ${b}`) };
-  return { brush: settle(before, poly), problems: [] };
+  return { brush: settle(before, poly), problems: [], from: sourcesOf(poly) };
 }
 
 // ---------------------------------------------------------------- snapping
