@@ -7,6 +7,7 @@ import { AnimationClip, AnimationMixer, EquirectangularReflectionMapping, Group,
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
 import { className, LOADERS, math } from "./names.ts";
+import { buildBrush, type BrushFace, type UvMode } from "./brush.ts";
 
 /** What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet, one module. */
 export type SceneModule = {
@@ -452,6 +453,7 @@ function construct(o: ObjectValue, ctx: Ctx): Promise<any> {
 }
 
 async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
+  if (o.name === "brush") return brush(o, ctx);
   const args: unknown[] = [];
   for (const a of o.args) {
     // constructor arguments are needed before the node exists, so they cannot wait for a later ref()
@@ -503,6 +505,108 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   }
   for (const m of o.body) await apply(target, m, ctx);
   return target;
+}
+
+// ---------------------------------------------------------------- brush
+
+/** three's own, reached through the registry: a sheet with no brush in it must not import them */
+function brushClass(name: string, at: Pos, ctx: Ctx): any {
+  const cls = lookup(name, ctx);
+  if (typeof cls !== "function") fail(`a brush needs three's ${name}${HINT}`, at, ctx);
+  return cls;
+}
+
+const triple = (value: unknown): [number, number, number] | undefined => {
+  if (Array.isArray(value) && value.length === 3 && value.every((n) => typeof n === "number")) return value as [number, number, number];
+  const v = value as { x?: unknown; y?: unknown; z?: unknown } | null;
+  return v && typeof v.x === "number" && typeof v.y === "number" && typeof v.z === "number" ? [v.x, v.y, v.z] : undefined;
+};
+
+const couple = (value: unknown): [number, number] | undefined => {
+  if (Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === "number")) return value as [number, number];
+  const v = value as { x?: unknown; y?: unknown } | null;
+  return v && typeof v.x === "number" && typeof v.y === "number" ? [v.x, v.y] : undefined;
+};
+
+async function point(v: Value, ctx: Ctx): Promise<[number, number, number]> {
+  const out = triple(await evaluate(v, ctx));
+  return out ?? fail("a face() point is a vec3(x, y, z) or three numbers", v, ctx);
+}
+
+/**
+ * `uv: paraxial` / `parallel` / `parallel(u, v)`. Read from the AST rather than evaluated: `paraxial`
+ * is the language's own word here, and evaluating it would send the checker's own vocabulary through
+ * three's constant table.
+ */
+async function uvMode(v: Value, ctx: Ctx): Promise<UvMode> {
+  if (v.kind === "ident" && v.name === "paraxial") return { kind: "paraxial" };
+  if (v.kind === "ident" && v.name === "parallel") return { kind: "parallel" };
+  if (v.kind === "object" && v.name === "parallel" && v.args.length === 2) {
+    return { kind: "parallel", u: await point(v.args[0]!, ctx), v: await point(v.args[1]!, ctx) };
+  }
+  return fail("uv expects paraxial, parallel, or parallel(u, v)", v, ctx);
+}
+
+/**
+ * `brush { face(…) … }` — the half-spaces of the faces intersected into a solid, and that solid as one
+ * `Mesh` with a geometry group and a material slot per face (decision 10 of the editor's roadmap). Face
+ * count is not draw-call count.
+ */
+async function brush(o: ObjectValue, ctx: Ctx): Promise<any> {
+  const faces: BrushFace[] = [];
+  const materials: unknown[] = [];
+  for (const m of o.body) {
+    if (m.kind !== "node" || m.object.name !== "face") continue;
+    const f = m.object;
+    if (f.args.length !== 3) fail("face() takes three points, counter-clockwise seen from outside", f, ctx);
+    const face: BrushFace = { points: [await point(f.args[0]!, ctx), await point(f.args[1]!, ctx), await point(f.args[2]!, ctx)] };
+    let material: unknown;
+    for (const inner of f.body) {
+      if (inner.kind !== "prop") continue;
+      if (inner.name === "uv") { face.uv = await uvMode(inner.value, ctx); continue; }
+      const value = await evaluate(inner.value, ctx);
+      if (inner.name === "material") material = value;
+      else if (inner.name === "rotation") face.rotation = Number(value);
+      else if (inner.name === "offset" || inner.name === "scale") {
+        const pair = couple(value);
+        if (!pair) fail(`face ${inner.name} is a vec2(u, v) or two numbers`, inner.value, ctx);
+        face[inner.name] = pair;
+      }
+    }
+    faces.push(face);
+    materials.push(material);
+  }
+
+  const { mesh, problems } = buildBrush(faces);
+  // the checker says all of this at build time; a sheet loaded from a string has had no checker
+  if (!mesh) fail(problems[0]?.message ?? "these faces bound no volume", o, ctx);
+
+  const Attribute = brushClass("BufferAttribute", o, ctx);
+  const geometry = new (brushClass("BufferGeometry", o, ctx))();
+  geometry.setAttribute("position", new Attribute(mesh.positions, 3));
+  geometry.setAttribute("normal", new Attribute(mesh.normals, 3));
+  geometry.setAttribute("uv", new Attribute(mesh.uvs, 2));
+
+  // one slot per face that survived; the faces that bound nothing are already gone from `groups`
+  const slots: unknown[] = [];
+  let fallback: unknown;
+  for (const g of mesh.groups) {
+    geometry.addGroup(g.start, g.count, slots.length);
+    slots.push(materials[g.face] ?? (fallback ??= new (brushClass("MeshStandardMaterial", o, ctx))()));
+  }
+  geometry.computeBoundingSphere();
+
+  const node = new (brushClass("Mesh", o, ctx))(geometry, slots);
+  if (o.id) {
+    node.name = o.id;
+    ctx.ids.set(o.id, node);
+  }
+  // everything that is not a face is the Mesh's own: position, castShadow, a child node, @broom
+  for (const m of o.body) {
+    if (m.kind === "node" && m.object.name === "face") continue;
+    await apply(node, m, ctx);
+  }
+  return node;
 }
 
 /** textures from a `texture()` whose body did not state a `colorSpace`, so this module may pick one */

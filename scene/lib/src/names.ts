@@ -18,6 +18,24 @@ export const BUILTINS: Record<string, { signature: string; summary: string; topL
   repeat: { signature: "repeat(count) { … }", summary: "unrolls its body `count` times, binding `--index` and `--count` in each copy", topLevel: true },
   find: { signature: 'find(nodeType?, "name") { … }', summary: "reaches into a node built by a loader and applies the body to it", topLevel: false },
   play: { signature: 'play("clip") { … }', summary: "plays an animation clip of the model it sits in; the body configures the AnimationAction", topLevel: false },
+  brush: { signature: "brush { face(…) … }", summary: "a convex solid built from the half-spaces of its faces; becomes one Mesh with a material per face", topLevel: true },
+  face: { signature: "face(p1, p2, p3) { … }", summary: "one plane of a brush, through three points wound counter-clockwise seen from outside", topLevel: false },
+};
+
+/**
+ * What the runtime needs to turn a `brush` into a node. A sheet that writes one never names these, so
+ * the vite plugin imports them on the brush's behalf — the same deal every other three name in a sheet
+ * gets, and what keeps a brushless scene from paying for them.
+ */
+export const BRUSH_CLASSES = ["BufferAttribute", "BufferGeometry", "Mesh", "MeshStandardMaterial"];
+
+/** what a `face()` body may set — the rest of the face is its three points */
+export const FACE_PROPS: Record<string, { type: "material" | "uv" | "vec2" | "angle"; summary: string }> = {
+  material: { type: "material", summary: "the material this face renders with; share one with `var(--stone)`" },
+  uv: { type: "uv", summary: "paraxial (world-axis aligned, Quake's system) or parallel(u, v) (in the face's own plane)" },
+  offset: { type: "vec2", summary: "metres along the face's own u and v" },
+  scale: { type: "vec2", summary: "metres of world per full texture tile — not a multiplier" },
+  rotation: { type: "angle", summary: "degrees, about the uv basis normal" },
 };
 
 /**
@@ -250,6 +268,62 @@ export const BAKERY: Record<"scene" | "node" | "material", Record<string, Knob>>
     albedo: { type: "numbers", length: 3, min: 0, max: 1 },
   },
 };
+
+// ---------------------------------------------------------------- @broom
+
+/**
+ * A sheet's own `@broom { … }`: the editor workspace, not the scene. Kept in the sheet so reopening a
+ * map restores the session without a sidecar file next to it.
+ */
+export type SceneBroom = {
+  /** grid size as a power of two in metres — -2 is 25 cm, the default the editor opens on */
+  grid?: number;
+  /** metres per texture tile a new face is created with */
+  scale?: number;
+};
+
+/**
+ * A node's `@broom { … }`. On a `@template` it is the entity definition — what the editor puts in its
+ * browser and how it draws an instance. On a node it is that node's place in the workspace.
+ */
+export type NodeBroom = {
+  /** `point` is placed by clicking, `brush` is applied to a selection of solids */
+  kind?: "point" | "brush";
+  icon?: string;
+  /** the editor's tint for this entity, as a colour */
+  color?: number;
+  /** the editor's bounding box: min x y z, then max x y z, in metres */
+  size?: number[];
+  layer?: string;
+  locked?: boolean;
+  hidden?: boolean;
+};
+
+/**
+ * `@broom { … }` is settings for the editor, not for three, so the schema cannot type it — this table
+ * is what the checker validates against, exactly as {@link BAKERY} does for the baker. A knob added to
+ * {@link SceneBroom} or {@link NodeBroom} without a row here is rejected.
+ */
+export const BROOM: Record<"scene" | "node", Record<string, Knob>> = {
+  scene: {
+    // the ladder src/grid/snap.ts walks: 2^-6 (about 15 mm) to 2^3 (8 m)
+    grid: { type: "number", int: true, min: -6, max: 3 },
+    scale: { type: "number", min: 1e-4 },
+  },
+  node: {
+    kind: { type: "string", values: ["point", "brush"] },
+    icon: { type: "string" },
+    color: { type: "number", min: 0, max: 0xffffff },
+    // flat rather than two vec3()s: a knob is a plain value by design, and one row is not worth nesting
+    size: { type: "numbers", length: 6 },
+    layer: { type: "string" },
+    locked: { type: "boolean" },
+    hidden: { type: "boolean" },
+  },
+};
+
+/** the at-rules a body may hold, and which table checks each one */
+export const AT_RULES = ["bakery", "broom"] as const;
 
 export const className = (name: string) => ALIASES[name] ?? name[0]!.toUpperCase() + name.slice(1);
 export const nodeName = (cls: string) => cls[0]!.toLowerCase() + cls.slice(1);

@@ -52,6 +52,13 @@ mesh #ring {
 @override #ring mesh.glow {
   renderOrder: 1;
 }
+brush #pillar {
+  @broom { kind: brush };
+  face([0, 0, 0], [0, 0, 1], [1, 0, 0]) {
+    uv: paraxial;
+    scale: [2, 2];
+  }
+}
 `;
 
 // Tokenise every line, then look up the scope stack at the first offset of a given substring.
@@ -119,6 +126,11 @@ has("@override", "keyword.control.override");
 has("#ring", "entity.other.attribute-name.id", 25); // a selector's parts, not a node being declared
 has("mesh", "entity.name.tag", 25);
 has(".glow", "entity.other.attribute-name.class", 25);
+has("brush", "keyword.other.brush", 28);           // the language's own node, not one of three's classes
+has("#pillar", "entity.other.attribute-name.id");
+has("@broom", "keyword.control.broom");
+has("face", "keyword.other.face");
+has("paraxial", "support.constant.uv");
 
 // every path the manifest contributes must exist, and extension.js must at least parse
 const manifest = require("./package.json");

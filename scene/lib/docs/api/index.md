@@ -67,6 +67,112 @@ a resolved use site and the declaration it resolved to — what "find references
 
 ***
 
+### BrushFace
+
+```ts
+type BrushFace = {
+  offset?: Vec2;
+  points: [Vec3, Vec3, Vec3];
+  rotation?: number;
+  scale?: Vec2;
+  uv?: UvMode;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="offset"></a> `offset?` | [`Vec2`](#vec2) | metres along the face's own u and v |
+| <a id="points"></a> `points` | \[[`Vec3`](#vec3), [`Vec3`](#vec3), [`Vec3`](#vec3)\] | - |
+| <a id="rotation"></a> `rotation?` | `number` | radians, about the uv basis normal — a sheet writes `rotation: 30deg` |
+| <a id="scale"></a> `scale?` | [`Vec2`](#vec2) | metres of world per full texture tile — not a multiplier |
+| <a id="uv"></a> `uv?` | [`UvMode`](#uvmode) | - |
+
+***
+
+### BrushGroup
+
+```ts
+type BrushGroup = {
+  count: number;
+  face: number;
+  start: number;
+};
+```
+
+one contiguous run of the index-free vertex arrays, and the face it came from
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="count"></a> `count` | `number` |
+| <a id="face"></a> `face` | `number` |
+| <a id="start"></a> `start` | `number` |
+
+***
+
+### BrushMesh
+
+```ts
+type BrushMesh = {
+  groups: BrushGroup[];
+  normals: Float32Array;
+  polygons: (Vec3[] | undefined)[];
+  positions: Float32Array;
+  uvs: Float32Array;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="groups"></a> `groups` | [`BrushGroup`](#brushgroup)[] | in face order, skipping the faces that bound nothing |
+| <a id="normals"></a> `normals` | `Float32Array` | - |
+| <a id="polygons"></a> `polygons` | ([`Vec3`](#vec3)[] \| `undefined`)[] | the polygon each face turned into, in winding order — what vertex editing and the uv editor read |
+| <a id="positions"></a> `positions` | `Float32Array` | - |
+| <a id="uvs"></a> `uvs` | `Float32Array` | - |
+
+***
+
+### BrushProblem
+
+```ts
+type BrushProblem = {
+  face: number;
+  message: string;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="face-1"></a> `face` | `number` | the face this is about, or -1 for the solid as a whole |
+| <a id="message"></a> `message` | `string` | - |
+
+***
+
+### BrushResult
+
+```ts
+type BrushResult = {
+  mesh?: BrushMesh;
+  problems: BrushProblem[];
+};
+```
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="mesh"></a> `mesh?` | [`BrushMesh`](#brushmesh) |
+| <a id="problems"></a> `problems` | [`BrushProblem`](#brushproblem)[] |
+
+***
+
 ### Comment
 
 ```ts
@@ -425,6 +531,37 @@ A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a 
 
 ***
 
+### NodeBroom
+
+```ts
+type NodeBroom = {
+  color?: number;
+  hidden?: boolean;
+  icon?: string;
+  kind?: "point" | "brush";
+  layer?: string;
+  locked?: boolean;
+  size?: number[];
+};
+```
+
+A node's `@broom { … }`. On a `@template` it is the entity definition — what the editor puts in its
+browser and how it draws an instance. On a node it is that node's place in the workspace.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="color"></a> `color?` | `number` | the editor's tint for this entity, as a colour |
+| <a id="hidden"></a> `hidden?` | `boolean` | - |
+| <a id="icon"></a> `icon?` | `string` | - |
+| <a id="kind"></a> `kind?` | `"point"` \| `"brush"` | `point` is placed by clicking, `brush` is applied to a selection of solids |
+| <a id="layer"></a> `layer?` | `string` | - |
+| <a id="locked"></a> `locked?` | `boolean` | - |
+| <a id="size"></a> `size?` | `number`[] | the editor's bounding box: min x y z, then max x y z, in metres |
+
+***
+
 ### ObjectValue
 
 ```ts
@@ -469,6 +606,26 @@ type Override = Extract<Statement, {
 
 ***
 
+### Plane
+
+```ts
+type Plane = {
+  d: number;
+  n: Vec3;
+};
+```
+
+`n · x = d`, `n` unit length and pointing out of the solid
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="d"></a> `d` | `number` |
+| <a id="n"></a> `n` | [`Vec3`](#vec3) |
+
+***
+
 ### Pos
 
 ```ts
@@ -485,7 +642,7 @@ type Pos = {
 | ------ | ------ |
 | <a id="end"></a> `end` | `number` |
 | <a id="file"></a> `file?` | `string` |
-| <a id="start"></a> `start` | `number` |
+| <a id="start-1"></a> `start` | `number` |
 
 ***
 
@@ -550,8 +707,29 @@ What a sheet's own `@bakery { … }` block sets: every knob of `bakeSceneFile()`
 | <a id="out"></a> `out?` | `string` | where to write, relative to the sheet |
 | <a id="padding"></a> `padding?` | `number` | - |
 | <a id="samples"></a> `samples?` | `number` | - |
-| <a id="size"></a> `size?` | `number` | - |
+| <a id="size-1"></a> `size?` | `number` | - |
 | <a id="texelsperunit"></a> `texelsPerUnit?` | `number` | - |
+
+***
+
+### SceneBroom
+
+```ts
+type SceneBroom = {
+  grid?: number;
+  scale?: number;
+};
+```
+
+A sheet's own `@broom { … }`: the editor workspace, not the scene. Kept in the sheet so reopening a
+map restores the session without a sidecar file next to it.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="grid"></a> `grid?` | `number` | grid size as a power of two in metres — -2 is 25 cm, the default the editor opens on |
+| <a id="scale-1"></a> `scale?` | `number` | metres per texture tile a new face is created with |
 
 ***
 
@@ -670,6 +848,28 @@ type TokType = "ident" | "number" | "string" | "hash" | "at" | "var" | "punc" | 
 
 ***
 
+### UvMode
+
+```ts
+type UvMode = 
+  | {
+  kind: "paraxial";
+}
+  | {
+  kind: "parallel";
+  u?: Vec3;
+  v?: Vec3;
+};
+```
+
+How a face lays its material out.
+- `paraxial` — the axis pair of whichever world axis the normal is closest to, so a wall that is
+  nudged off-axis keeps the alignment of the wall it was cut from. Quake's system.
+- `parallel` — axes that lie in the face's own plane, either given or derived from the normal. Stays
+  put under rotation, which is what a non-axial face wants.
+
+***
+
 ### Value
 
 ```ts
@@ -755,6 +955,22 @@ type Value =
   | ObjectValue;
 ```
 
+***
+
+### Vec2
+
+```ts
+type Vec2 = [number, number];
+```
+
+***
+
+### Vec3
+
+```ts
+type Vec3 = [number, number, number];
+```
+
 ## Variables
 
 ### ALIASES
@@ -764,6 +980,16 @@ const ALIASES: Record<string, string>;
 ```
 
 call-name → three class. `texture`/`gltf` are loader-backed.
+
+***
+
+### AT\_RULES
+
+```ts
+const AT_RULES: readonly ["bakery", "broom"];
+```
+
+the at-rules a body may hold, and which table checks each one
 
 ***
 
@@ -784,6 +1010,30 @@ saying so an hour in.
 
 ***
 
+### BROOM
+
+```ts
+const BROOM: Record<"scene" | "node", Record<string, Knob>>;
+```
+
+`@broom { … }` is settings for the editor, not for three, so the schema cannot type it — this table
+is what the checker validates against, exactly as [BAKERY](#bakery) does for the baker. A knob added to
+[SceneBroom](#scenebroom) or [NodeBroom](#nodebroom) without a row here is rejected.
+
+***
+
+### BRUSH\_CLASSES
+
+```ts
+const BRUSH_CLASSES: string[];
+```
+
+What the runtime needs to turn a `brush` into a node. A sheet that writes one never names these, so
+the vite plugin imports them on the brush's behalf — the same deal every other three name in a sheet
+gets, and what keeps a brushless scene from paying for them.
+
+***
+
 ### BUILTINS
 
 ```ts
@@ -797,6 +1047,19 @@ const BUILTINS: Record<string, {
 Names that look like nodes but are handled by the language itself, never looked up in three.
 The checker dispatches on this table and `docs/language.md` is checked against it, so a new
 builtin cannot be added without a section in the docs.
+
+***
+
+### FACE\_PROPS
+
+```ts
+const FACE_PROPS: Record<string, {
+  summary: string;
+  type: "material" | "uv" | "vec2" | "angle";
+}>;
+```
+
+what a `face()` body may set — the rest of the face is its three points
 
 ***
 
@@ -860,6 +1123,84 @@ Apply non-overlapping single-range fixes to source text.
 #### Returns
 
 `string`
+
+***
+
+### boxFaces()
+
+```ts
+function boxFaces(min, max): [Vec3, Vec3, Vec3][];
+```
+
+A box brush: six faces, each three points wound counter-clockwise from outside. What the editor's
+draw-shape tool emits, and what every example in the docs is.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+\[[`Vec3`](#vec3), [`Vec3`](#vec3), [`Vec3`](#vec3)\][]
+
+***
+
+### brushBounds()
+
+```ts
+function brushBounds(faces): {
+  max: Vec3;
+  min: Vec3;
+};
+```
+
+The axis-aligned box of a brush, from its face points alone — cheap enough to call on every brush of
+a level, and the checker's answer to "is this thing anywhere near the rest of the map".
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `faces` | [`BrushFace`](#brushface)[] |
+
+#### Returns
+
+```ts
+{
+  max: Vec3;
+  min: Vec3;
+}
+```
+
+| Name | Type |
+| ------ | ------ |
+| `max` | [`Vec3`](#vec3) |
+| `min` | [`Vec3`](#vec3) |
+
+***
+
+### buildBrush()
+
+```ts
+function buildBrush(faces): BrushResult;
+```
+
+Turns a brush's faces into triangles, or into the reasons it is not a solid. Both at once is possible
+and deliberate: a brush with one redundant face still has a mesh, and the editor draws it while
+saying so.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `faces` | [`BrushFace`](#brushface)[] |
+
+#### Returns
+
+[`BrushResult`](#brushresult)
 
 ***
 
@@ -1189,6 +1530,27 @@ function parse(text, file?): Sheet;
 
 ***
 
+### planeFromPoints()
+
+```ts
+function planeFromPoints(p): Plane | undefined;
+```
+
+The plane through three points, wound counter-clockwise seen from outside — so the normal is the
+right-hand cross product and points away from the solid.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `p` | \[[`Vec3`](#vec3), [`Vec3`](#vec3), [`Vec3`](#vec3)\] |
+
+#### Returns
+
+[`Plane`](#plane) \| `undefined`
+
+***
+
 ### print()
 
 ```ts
@@ -1227,6 +1589,67 @@ Advances every clip play() started. Call it once per frame with the frame time i
 #### Returns
 
 `void`
+
+***
+
+### uvAt()
+
+```ts
+function uvAt(
+   p, 
+   basis, 
+   face): Vec2;
+```
+
+where a world point lands on a face's material, in tiles
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `p` | [`Vec3`](#vec3) |
+| `basis` | \{ `u`: [`Vec3`](#vec3); `v`: [`Vec3`](#vec3); \} |
+| `basis.u` | [`Vec3`](#vec3) |
+| `basis.v` | [`Vec3`](#vec3) |
+| `face` | [`BrushFace`](#brushface) |
+
+#### Returns
+
+[`Vec2`](#vec2)
+
+***
+
+### uvBasis()
+
+```ts
+function uvBasis(face, n): {
+  u: Vec3;
+  v: Vec3;
+};
+```
+
+The u/v axes a face projects world positions onto, with its rotation already applied.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `face` | [`BrushFace`](#brushface) |
+| `n` | [`Vec3`](#vec3) |
+
+#### Returns
+
+```ts
+{
+  u: Vec3;
+  v: Vec3;
+}
+```
+
+| Name | Type |
+| ------ | ------ |
+| `u` | [`Vec3`](#vec3) |
+| `v` | [`Vec3`](#vec3) |
 
 ## References
 

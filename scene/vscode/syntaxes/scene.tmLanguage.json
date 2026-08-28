@@ -6,6 +6,7 @@
     { "include": "#comment" },
     { "include": "#at-rule" },
     { "include": "#variable-declaration" },
+    { "include": "#brush" },
     { "include": "#selector" },
     { "include": "#property" },
     { "include": "#value" }
@@ -46,6 +47,7 @@
           ]
         },
         { "name": "keyword.control.bakery.scene", "match": "@bakery\\b" },
+        { "name": "keyword.control.broom.scene", "match": "@broom\\b" },
         { "name": "invalid.illegal.unknown-at-rule.scene", "match": "@[A-Za-z-]+" }
       ]
     },
@@ -55,6 +57,20 @@
         "1": { "name": "variable.other.custom-property.scene" },
         "2": { "name": "punctuation.separator.key-value.scene" }
       }
+    },
+    "brush": {
+      "comment": "a brush is the language's own node, not a three class, and `face` is the only thing its body opens",
+      "patterns": [
+        {
+          "match": "(?<![\\w.#-])(brush)((?:\\.[A-Za-z_][\\w-]*)*)(?:\\s*(#[A-Za-z_][\\w-]*))?(?=[^:;()]*\\{)",
+          "captures": {
+            "1": { "name": "keyword.other.brush.scene" },
+            "2": { "name": "entity.other.attribute-name.class.scene" },
+            "3": { "name": "entity.other.attribute-name.id.scene" }
+          }
+        },
+        { "name": "keyword.other.face.scene", "match": "(?<![\\w.#-])face(?=\\s*\\()" }
+      ]
     },
     "selector": {
       "match": "(?<![\\w.#-])([a-z][A-Za-z0-9]*)((?:\\.[A-Za-z_][\\w-]*)*)(?:\\s*(#[A-Za-z_][\\w-]*))?(?=[^:;()]*\\{)",
@@ -104,6 +120,7 @@
           }
         },
         { "name": "support.function.builtin.scene", "match": "\\b(find|play|repeat)(?=\\s*[#(])" },
+        { "comment": "the two uv coordinate systems a brush face takes — the language's words, not three's", "name": "support.constant.uv.scene", "match": "\\b(paraxial|parallel)\\b" },
         {
           "match": "(?<=[)\\]])\\s*(\\.)([A-Za-z_]\\w*)(?=\\s*\\()",
           "captures": {

@@ -64,6 +64,42 @@
     ],
     "description": "Lightmap baker settings — on the sheet, a node or a material"
   },
+  "broom": {
+    "prefix": "broom",
+    "body": [
+      "@broom { ${1|kind,icon,color,size,layer,locked,hidden,grid,scale|}: ${2} };"
+    ],
+    "description": "Editor settings — on the sheet, or on a node the editor treats as an entity"
+  },
+  "brush": {
+    "prefix": "brush",
+    "body": [
+      "brush #${1:solid} {",
+      "  --min-x: ${2:0}; --min-y: ${3:0}; --min-z: ${4:0};",
+      "  --max-x: ${5:2}; --max-y: ${6:2}; --max-z: ${7:2};",
+      "  --skin: meshStandardMaterial { color: color(#${8:cccccc}); };",
+      "",
+      "  face([var(--min-x), var(--max-y), var(--min-z)], [var(--min-x), var(--max-y), var(--max-z)], [var(--max-x), var(--max-y), var(--max-z)]) { material: var(--skin); }",
+      "  face([var(--min-x), var(--min-y), var(--min-z)], [var(--max-x), var(--min-y), var(--min-z)], [var(--max-x), var(--min-y), var(--max-z)]) { material: var(--skin); }",
+      "  face([var(--max-x), var(--min-y), var(--min-z)], [var(--max-x), var(--max-y), var(--min-z)], [var(--max-x), var(--max-y), var(--max-z)]) { material: var(--skin); }",
+      "  face([var(--min-x), var(--min-y), var(--min-z)], [var(--min-x), var(--min-y), var(--max-z)], [var(--min-x), var(--max-y), var(--max-z)]) { material: var(--skin); }",
+      "  face([var(--min-x), var(--min-y), var(--max-z)], [var(--max-x), var(--min-y), var(--max-z)], [var(--max-x), var(--max-y), var(--max-z)]) { material: var(--skin); }",
+      "  face([var(--min-x), var(--min-y), var(--min-z)], [var(--min-x), var(--max-y), var(--min-z)], [var(--max-x), var(--max-y), var(--min-z)]) { material: var(--skin); }",
+      "}"
+    ],
+    "description": "A box brush — six half-spaces, wound counter-clockwise seen from outside, sharing one material"
+  },
+  "face": {
+    "prefix": "face",
+    "body": [
+      "face([${1:0}, ${2:0}, ${3:0}], [${4:0}, ${5:0}, ${6:1}], [${7:1}, ${8:0}, ${9:0}]) {",
+      "  material: var(--${10:skin});",
+      "  uv: ${11|paraxial,parallel|};",
+      "  scale: [${12:1}, ${13:1}];",
+      "}"
+    ],
+    "description": "One plane of a brush, through three points wound counter-clockwise seen from outside"
+  },
   "import": {
     "prefix": "import",
     "body": [

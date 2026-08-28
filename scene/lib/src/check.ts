@@ -2,7 +2,8 @@
 // Pure (no typescript / no three import) so it runs in the browser too.
 import type { Diagnostic, Member, ObjectValue, Override, Pos, Template, Value } from "./parse.ts";
 import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
-import { ALIASES, BAKERY, BUILTINS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import { buildBrush, type BrushFace, type UvMode, type Vec3 } from "./brush.ts";
 
 /** Levenshtein distance, two rows at a time */
 function distance(a: string, b: string): number {
@@ -413,12 +414,18 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
   }
 
   /**
-   * `@bakery { … }` — settings for the baker, not for three, so the reflected schema has nothing to say
-   * about them. They are typed by the table in names.ts instead, per position.
+   * `@bakery { … }` and `@broom { … }` — settings for a tool, not for three, so the reflected schema has
+   * nothing to say about them. They are typed by the tables in names.ts instead, per position: the baker
+   * reads a sheet, a node and a material, the editor only a sheet and a node.
    */
-  function checkBakery(m: Member & { kind: "at" }, position: "scene" | "node" | "material" | undefined) {
-    if (!position) return err(`@${m.name} belongs on the sheet, a node or a material`, m);
-    const table = BAKERY[position];
+  function checkAtRule(m: Member & { kind: "at" }, position: "scene" | "node" | "material" | undefined) {
+    const table =
+      m.name === "broom"
+        ? position === "scene" || position === "node" ? BROOM[position] : undefined
+        : position ? BAKERY[position] : undefined;
+    if (!table) {
+      return err(`@${m.name} belongs on ${m.name === "broom" ? "the sheet or a node" : "the sheet, a node or a material"}`, m);
+    }
     for (const e of m.value.entries) {
       const knob = table[e.name];
       if (!knob) {
@@ -432,6 +439,122 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
       }
       checkKnob(e.value, knob, `@${m.name} ${e.name}`);
     }
+  }
+
+  // ---------------------------------------------------------------- brush
+
+  /** a literal `vec3(1, 2, 3)` or `[1, 2, 3]` — undefined for anything the checker cannot fold to numbers */
+  function literalVec3(v: Value | undefined): Vec3 | undefined {
+    if (!v) return undefined;
+    const items =
+      v.kind === "array" ? v.items
+        : v.kind === "object" && (v.name === "vec3" || v.name === "vector3") ? v.args
+          : undefined;
+    if (!items || items.length !== 3) return undefined;
+    const out: number[] = [];
+    for (const i of items) {
+      if (i.kind !== "number") return undefined;
+      out.push(i.value);
+    }
+    return out as Vec3;
+  }
+
+  function literalVec2(v: Value): [number, number] | undefined {
+    const items =
+      v.kind === "array" ? v.items
+        : v.kind === "object" && (v.name === "vec2" || v.name === "vector2") ? v.args
+          : undefined;
+    if (!items || items.length !== 2) return undefined;
+    return items.every((i) => i.kind === "number") ? [(items[0] as Value & { kind: "number" }).value, (items[1] as Value & { kind: "number" }).value] : undefined;
+  }
+
+  /** a coordinate: `vec3(…)` or the three-number array that reads the same */
+  const POINT: TypeRef = { kind: "union", of: [{ kind: "class", name: "Vector3" }, { kind: "array", of: { kind: "number" } }] };
+  const PAIR: TypeRef = { kind: "union", of: [{ kind: "class", name: "Vector2" }, { kind: "array", of: { kind: "number" } }] };
+
+  /** `uv: paraxial` / `uv: parallel` / `uv: parallel(vec3(…), vec3(…))` */
+  function checkUv(v: Value): UvMode | undefined {
+    if (v.kind === "ident" && (v.name === "paraxial" || v.name === "parallel")) {
+      return v.name === "paraxial" ? { kind: "paraxial" } : { kind: "parallel" };
+    }
+    if (v.kind === "object" && v.name === "parallel") {
+      if (v.args.length !== 2) {
+        err("parallel() takes a u axis and a v axis: parallel(vec3(1, 0, 0), vec3(0, 1, 0))", v);
+        return undefined;
+      }
+      for (const a of v.args) checkValue(a, { type: POINT, what: "a parallel() axis" });
+      const u = literalVec3(v.args[0]);
+      const w = literalVec3(v.args[1]);
+      return u && w ? { kind: "parallel", u, v: w } : { kind: "parallel" };
+    }
+    err("uv expects paraxial, parallel, or parallel(u, v)", v);
+    return undefined;
+  }
+
+  /** `face(p1, p2, p3) { material: …; uv: …; }` — one half-space of a brush */
+  function checkFace(o: ObjectValue): BrushFace | undefined {
+    if (o.args.length !== 3) {
+      err("face() takes three points, counter-clockwise seen from outside: face(vec3(…), vec3(…), vec3(…))", o);
+    }
+    for (const a of o.args) checkValue(a, { type: POINT, what: "a face() point" });
+
+    const face: BrushFace = { points: [[0, 0, 0], [0, 0, 0], [0, 0, 0]] };
+    for (const m of o.body) {
+      if (m.kind === "var") continue;
+      if (m.kind === "at") { err(`@${m.name} does not apply to a face`, m); continue; }
+      if (m.kind === "node") { err("a face has no children — it is one plane of the solid it sits in", m.object); continue; }
+      const knob = FACE_PROPS[m.name];
+      if (!knob) {
+        const alt = suggest(m.name, Object.keys(FACE_PROPS));
+        const range = { start: m.start, end: m.start + m.name.length, file: m.file };
+        err(`a face has no setting ${JSON.stringify(m.name)}` + (alt ? `; did you mean ${alt}?` : ""), range, alt ? { ...range, text: alt } : undefined);
+        continue;
+      }
+      if (knob.type === "material") checkValue(m.value, { type: { kind: "class", name: "Material" }, what: "face material" });
+      else if (knob.type === "angle") checkValue(m.value, { type: { kind: "number" }, what: "face rotation" });
+      else if (knob.type === "vec2") checkValue(m.value, { type: PAIR, what: `face ${m.name}` });
+      else face.uv = checkUv(m.value);
+
+      // the same reading every other angle in a sheet gets: `30deg` is degrees, a bare number is radians
+      if (knob.type === "angle" && m.value.kind === "number") face.rotation = m.value.unit === "deg" ? (m.value.value * Math.PI) / 180 : m.value.value;
+      if (knob.type === "vec2") {
+        const pair = literalVec2(m.value);
+        if (pair) face[m.name === "offset" ? "offset" : "scale"] = pair;
+      }
+    }
+
+    const points = o.args.map(literalVec3);
+    if (o.args.length !== 3 || points.some((p) => !p)) return undefined; // nothing to judge geometrically
+    face.points = points as [Vec3, Vec3, Vec3];
+    return face;
+  }
+
+  /**
+   * `brush { face(…) … }` — a convex solid. The faces are checked as a set, not one at a time: "these
+   * planes bound no volume" and "this face bounds nothing" are both statements about the whole solid,
+   * and they are exactly the mistakes a hand-written brush makes.
+   */
+  function checkBrush(o: ObjectValue) {
+    if (o.args.length) err("brush takes no arguments — its shape is its faces", o.args[0]!);
+    const faces: BrushFace[] = [];
+    const where: Pos[] = [];
+    const rest: Member[] = [];
+    let opaque = false;
+    for (const m of o.body) {
+      if (m.kind === "node" && m.object.name === "face") {
+        const face = checkFace(m.object);
+        if (face) { faces.push(face); where.push(m.object); }
+        else opaque = true;
+        continue;
+      }
+      rest.push(m);
+    }
+    // everything that is not a face is the Mesh's own: position, castShadow, a child node, @broom
+    checkBody("Mesh", rest);
+    // a coordinate the checker could not fold means the face set is incomplete, and every geometric
+    // verdict below would be about a solid the sheet never wrote
+    if (opaque) return;
+    for (const p of buildBrush(faces).problems) err(p.message, p.face === -1 ? o : where[p.face] ?? o);
   }
 
   function checkKnob(v: Value, knob: Knob, what: string) {
@@ -477,13 +600,19 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     for (const m of body) {
       if (m.kind === "var") continue;
       if (m.kind === "at") {
-        checkBakery(m, isA(cls, "Object3D") ? "node" : isA(cls, "Material") ? "material" : undefined);
+        checkAtRule(m, isA(cls, "Object3D") ? "node" : isA(cls, "Material") ? "material" : undefined);
         continue;
       }
       if (m.kind === "node") {
         const childCls = className(m.object.name);
         if (m.object.name === "find") { checkFind(m.object); continue; }
         if (m.object.name === "play") { checkPlay(m.object); continue; }
+        if (m.object.name === "brush") {
+          if (info(cls) && !isA(cls, "Object3D")) err(`${cls} cannot have children`, m.object);
+          checkBrush(m.object);
+          continue;
+        }
+        if (m.object.name === "face") { err("face() is one plane of a brush, so it only works inside one", m.object); continue; }
         // repeat() is unrolled by expand(); this only runs for template bodies, which are checked raw
         if (m.object.name === "repeat") { checkBody(cls, m.object.body); continue; }
         // `lookAt(0, 1, 0);` — a name that is a method of this class and not a class of its own
@@ -625,13 +754,14 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
         err(`${m.object.name}() only works inside a node`, m.object);
         continue;
       }
+      if (m.object.name === "brush") { checkBrush(m.object); continue; }
       const cls = className(m.object.name);
       if (info(cls) && !isA(cls, "Object3D")) err(`top-level ${cls} is not an Object3D`, m.object);
       checkObject(m.object);
     } else if (m.kind === "prop") {
       err(`property ${JSON.stringify(m.name)} must be inside a node`, m);
     } else if (m.kind === "at") {
-      checkBakery(m, "scene");
+      checkAtRule(m, "scene");
     }
   }
 

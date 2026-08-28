@@ -11,7 +11,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BUILTINS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Method, Param, Schema, TypeRef } from "./schema.ts";
 
@@ -214,7 +214,13 @@ function enclosingBlock(text: string, offset: number): { name: string | undefine
       const at = /@([a-zA-Z_]\w*)\s*$/.exec(header);
       if (at) return { name: `@${at[1]}`, brace: i };
       if (/:\s*$/.test(header)) return { name: ":record", brace: i }; // `userData: { … }` — a record literal
-      const outside = header.replace(/\([^)]*\)/g, "").replace(/[.#][\w-]+/g, "");
+      // innermost first, repeatedly, so `face(vec3(0, 0, 0), …)` loses both levels and leaves `face` behind
+      let outside = header;
+      for (let shorter = ""; shorter !== outside; ) {
+        shorter = outside;
+        outside = outside.replace(/\([^()]*\)/g, "");
+      }
+      outside = outside.replace(/[.#][\w-]+/g, "");
       // a `(` the strip above could not close is an argument list still open: `loftGeometry(sections, { …`
       if (outside.includes("(")) return { name: ":record", brace: i };
       return { name: /([a-zA-Z_]\w*)\s*$/.exec(outside)?.[1], brace: i };
@@ -282,10 +288,12 @@ connection.onCompletion((params) => {
   }
 
   const block = enclosingBlock(text, offset);
-  // `@bakery { … }` is not three's namespace: its keys are a fixed table, and no three name belongs in it
-  if (block?.name === "@bakery") return bakeryCompletions(bakeryPosition(text, block.brace), head);
+  // `@bakery { … }` and `@broom { … }` are not three's namespace: their keys are fixed tables, and no three name belongs in either
+  if (block?.name === "@bakery" || block?.name === "@broom") return knobCompletions(block.name, knobPosition(block.name, text, block.brace), head);
   // an options bag: its keys are the fields the slot declares. A record in an `any` slot (userData) has none
   if (block?.name === ":record") return recordCompletions(recordAt(text, block.brace), head);
+  // a `face` body is the brush's own table, not a three class — `face` names no class at all
+  if (block?.name === "face") return faceCompletions(head);
 
   const owner = block?.name;
   const cls = owner ? schema.classes[className(owner)] : undefined;
@@ -302,16 +310,21 @@ connection.onCompletion((params) => {
   return [...(cls ? propCompletions(cls) : []), ...objectCompletions()];
 });
 
-/** the at-rules legal here: a sheet takes all four, a body only takes `@bakery` */
+/** the at-rules legal here: a sheet takes all five, a body only takes the two knob tables */
 function atCompletions(doc: TextDocument, start: number, offset: number, block: string | undefined) {
-  if (block === "@bakery" || block === ":record") return []; // no at-rule nests inside a block of values
+  // no at-rule nests inside a block of values
+  if (block === "@bakery" || block === "@broom" || block === ":record" || block === "face") return [];
   const rules: [string, string][] = block
-    ? [["@bakery", "lightmap baker settings for this node or material"]]
+    ? [
+        ["@bakery", "lightmap baker settings for this node or material"],
+        ["@broom", "editor settings for this node"],
+      ]
     : [
         ["@import", "splice in another sheet"],
         ["@template", "a body applied by .name"],
         ["@override", "a body appended to every node a selector matches"],
         ["@bakery", "lightmap baker settings for the sheet"],
+        ["@broom", "editor settings for the sheet"],
       ];
   // `@` is not a word character, so the typed sigil has to be replaced explicitly
   return rules.map(([label, detail]) => ({
@@ -449,28 +462,54 @@ const propCompletions = (cls: ClassInfo) => [
   })),
 ];
 
-/** which of the three `@bakery` tables applies, decided by the block the `@bakery` block sits in */
-function bakeryPosition(text: string, brace: number): keyof typeof BAKERY {
+/**
+ * Which table of a knob at-rule applies, decided by the block that at-rule sits in.
+ * `@bakery` has three positions, `@broom` only two — a material has nothing to say to the editor.
+ */
+function knobPosition(rule: string, text: string, brace: number): string {
   const outer = enclosingBlock(text, brace)?.name;
   if (!outer) return "scene";
-  return isA(className(outer), "Material") ? "material" : "node";
+  return rule === "@bakery" && isA(className(outer), "Material") ? "material" : "node";
 }
+
+const knobTable = (rule: string, position: string): Record<string, Knob> => {
+  const tables: Record<string, Record<string, Knob>> = rule === "@broom" ? BROOM : BAKERY;
+  return tables[position] ?? {};
+};
 
 const knobType = (k: Knob) =>
   k.values ? k.values.join(" | ") : k.type === "numbers" ? `${k.length ?? ""} numbers`.trim() : k.type;
 
-/** the keys of one `@bakery` position, or — right after `key:` — the values that key accepts */
-function bakeryCompletions(position: keyof typeof BAKERY, head: string) {
-  const table = BAKERY[position];
+/** the keys of one knob at-rule's position, or — right after `key:` — the values that key accepts */
+function knobCompletions(rule: string, position: string, head: string) {
+  const table = knobTable(rule, position);
   const key = /([A-Za-z_]\w*)\s*:\s*[\w-]*$/.exec(head)?.[1];
   if (key) {
     const values = table[key]?.values ?? (table[key]?.type === "boolean" ? ["true", "false"] : []);
-    return values.map((label) => ({ label, kind: CompletionItemKind.Value, detail: `@bakery ${key}` }));
+    return values.map((label) => ({ label, kind: CompletionItemKind.Value, detail: `${rule} ${key}` }));
   }
   return Object.entries(table).map(([name, k]) => ({
     label: name,
     kind: CompletionItemKind.Property,
     detail: knobType(k),
+    insertText: `${name}: `,
+  }));
+}
+
+/** the properties a `face` body takes, or — right after `uv:` — the two coordinate systems */
+function faceCompletions(head: string) {
+  const key = /([A-Za-z_]\w*)\s*:\s*[\w-]*$/.exec(head)?.[1];
+  if (key === "uv") {
+    return [
+      { label: "paraxial", kind: CompletionItemKind.Value, detail: "world-axis aligned, Quake's system" },
+      { label: "parallel", kind: CompletionItemKind.Value, detail: "in the face's own plane; parallel(u, v) to pin the axes" },
+    ];
+  }
+  if (key) return [];
+  return Object.entries(FACE_PROPS).map(([name, p]) => ({
+    label: name,
+    kind: CompletionItemKind.Property,
+    detail: p.summary,
     insertText: `${name}: `,
   }));
 }
@@ -666,16 +705,20 @@ connection.onHover(async (params) => {
   if (word && schema.constants[word]) {
     return { contents: md("```ts", `${word}: ${show(schema.constants[word]!)}`, "```", `exported by ${schema.entry}`), range: here };
   }
-  // a `@bakery` key is a setting for a tool, so the schema knows nothing about it — the table does
-  const bakery = enclosingBlock(text, offset);
-  if (word && bakery?.name === "@bakery") {
-    const position = bakeryPosition(text, bakery.brace);
-    const knob = BAKERY[position][word];
-    return knob ? { contents: md("```scene", `@bakery ${word}: ${knobType(knob)}`, "```", `${position} setting`), range: here } : null;
+  // a `@bakery` or `@broom` key is a setting for a tool, so the schema knows nothing about it — the table does
+  const block = enclosingBlock(text, offset);
+  if (word && (block?.name === "@bakery" || block?.name === "@broom")) {
+    const position = knobPosition(block.name, text, block.brace);
+    const knob = knobTable(block.name, position)[word];
+    return knob ? { contents: md("```scene", `${block.name} ${word}: ${knobType(knob)}`, "```", `${position} setting`), range: here } : null;
+  }
+  // a `face` key is the brush's own, and the brush is the language's, not three's
+  if (word && block?.name === "face" && FACE_PROPS[word]) {
+    return { contents: md("```scene", `${word}: ${FACE_PROPS[word]!.type}`, "```", FACE_PROPS[word]!.summary), range: here };
   }
   // an options-bag key — `loftGeometry(sections, { capStart: true })`. A record in an `any` slot has no fields
-  if (word && bakery?.name === ":record") {
-    const shape = recordAt(text, bakery.brace);
+  if (word && block?.name === ":record") {
+    const shape = recordAt(text, block.brace);
     const field = shape?.fields[word];
     if (field) {
       const owner = shape!.name ? `${shape!.name}.` : "";

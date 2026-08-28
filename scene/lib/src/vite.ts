@@ -1,7 +1,7 @@
 // Vite plugin: `import scene from './main.tscene'` gives a SceneModule, checked at build time.
 import path from "node:path";
 import { lineCol, parse, type Member, type ObjectValue, type Statement, type Value } from "./parse.ts";
-import { BUILTINS, className, LOADERS } from "./names.ts";
+import { BRUSH_CLASSES, BUILTINS, className, LOADERS } from "./names.ts";
 import { checkSource, formatDiagnostic, fsLoader, loadSchema, resolveSheet } from "./tools.ts";
 import type { Schema, SchemaOptions } from "./schema.ts";
 
@@ -46,7 +46,9 @@ function threeNames(statements: Statement[]): Set<string> {
   };
   // a builtin is the language's own, never a class — but its body still names plenty of three
   const object = (o: ObjectValue): void => {
-    if (!BUILTINS[o.name]) out.add(className(o.name));
+    // a brush is the one builtin that builds three objects of its own, and it names none of them
+    if (o.name === "brush") for (const cls of BRUSH_CLASSES) out.add(cls);
+    else if (!BUILTINS[o.name]) out.add(className(o.name));
     o.args.forEach(value);
     o.body.forEach(member);
   };

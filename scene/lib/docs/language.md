@@ -397,6 +397,122 @@ pointLight #lamp(#fff2d8, 6) {
 The keys are fixed and checked per position — `@bakery { sise: 512 }` is an error with a fix, the way a
 misspelled property is. [`bakery.md`](./bakery.md) documents what each one does.
 
+## `@broom`
+
+The same shape as `@bakery`, for the editor rather than the baker. Valid at the top level and in a node —
+a material has nothing to say to an editor, so there is no material position.
+
+```css
+@broom { grid: 0; scale: 1 };
+
+group #torch {
+  @broom { kind: point; icon: "flame"; color: #ffb020; size: [-0.2, 0, -0.2, 0.2, 0.6, 0.2] };
+}
+```
+
+At the top level, `grid` is the power of two the editor snaps to (`0` is one metre, `-1` is half a metre)
+and `scale` is how many metres one unit of an imported map is worth. In a node, `kind` says whether the
+editor treats it as a point entity or a brush entity, `icon` and `color` are how a point entity draws when
+it has no geometry, `size` is its selection box as `min x y z, max x y z`, and `layer`, `locked` and
+`hidden` are the editor state that survives a round trip.
+
+Everything here is advisory: a sheet with no `@broom` in it still loads, and three never sees these keys.
+
+## Brushes
+
+A `brush { … }` is a convex solid, described the way Quake and TrenchBroom describe one — as the
+intersection of the half-spaces of its faces. Each `face(p1, p2, p3)` gives a plane through three points
+wound counter-clockwise seen from *outside* the solid, and the solid is everything behind all of them at
+once. Nothing lists the vertices; they are what the planes intersect at, which is why dragging a face
+never leaves a hole.
+
+The whole brush becomes one `Mesh`, with one geometry group and one material slot per face.
+
+```css
+--stone: meshStandardMaterial { color: color(#8a8a8a); roughness: 0.9; };
+
+brush #pillar {
+  castShadow: true;                                                  /* Mesh properties sit beside the faces */
+  face([0, 2, 0], [0, 2, 2], [2, 2, 2]) { material: var(--stone); }  /* +y */
+  face([0, 0, 0], [2, 0, 0], [2, 0, 2]) { material: var(--stone); }  /* -y */
+  face([2, 0, 0], [2, 2, 0], [2, 2, 2]) { material: var(--stone); }  /* +x */
+  face([0, 0, 0], [0, 0, 2], [0, 2, 2]) { material: var(--stone); }  /* -x */
+  face([0, 0, 2], [2, 0, 2], [2, 2, 2]) { material: var(--stone); }  /* +z */
+  face([0, 0, 0], [0, 2, 0], [2, 2, 0]) { material: var(--stone); }  /* -z */
+}
+```
+
+One `--stone` declaration is one material, so all six slots share it. A face that names none gets a plain
+`meshStandardMaterial`, and every such face shares that one too.
+
+Adding a plane clips the solid; there is no separate operation for it. This is the same box with a corner
+taken off, which is seven faces rather than six:
+
+```css
+brush #cut {
+  face([0, 2, 0], [0, 2, 2], [2, 2, 2]) {}
+  face([0, 0, 0], [2, 0, 0], [2, 0, 2]) {}
+  face([2, 0, 0], [2, 2, 0], [2, 2, 2]) {}
+  face([0, 0, 0], [0, 0, 2], [0, 2, 2]) {}
+  face([0, 0, 2], [2, 0, 2], [2, 2, 2]) {}
+  face([0, 0, 0], [0, 2, 0], [2, 2, 0]) {}
+  face([3, 0, 0], [1, 2, 2], [3, 0, 2]) {}   /* x + y <= 3 */
+}
+```
+
+### `face(p1, p2, p3)`
+
+The three points name a plane, not a triangle — how far apart they are makes no difference. A face body
+takes five keys of its own, and no three property:
+
+| Key | Meaning |
+| --- | --- |
+| `material` | the material this face renders with |
+| `uv` | `paraxial` (default) or `parallel`, described below |
+| `offset` | metres along the face's own u and v |
+| `scale` | **metres of world per full texture tile** — not a multiplier, so a bigger number means fewer tiles |
+| `rotation` | about the uv basis normal; write `30deg` |
+
+```css
+brush #floor {
+  face([0, 1, 0], [0, 1, 4], [4, 1, 4]) {
+    uv: paraxial;
+    scale: [2, 2];        /* one tile every two metres */
+    offset: [0.5, 0];
+    rotation: 30deg;
+  }
+  face([0, 0, 0], [4, 0, 0], [4, 0, 4]) { uv: parallel; }
+  face([4, 0, 0], [4, 1, 0], [4, 1, 4]) {}
+  face([0, 0, 0], [0, 0, 4], [0, 1, 4]) {}
+  face([0, 0, 4], [4, 0, 4], [4, 1, 4]) {}
+  face([0, 0, 0], [0, 1, 0], [4, 1, 0]) {}
+}
+```
+
+`paraxial` is Quake's system: the u and v axes are the two world axes the face's normal is furthest from,
+so a texture keeps sliding across a wall the same way however the wall is rotated, and neighbouring
+brushes line up without being told to. `parallel` puts the axes in the face's own plane instead, which is
+what you want on a slope that should carry its texture along the slope. `parallel(u, v)` pins the two
+axes explicitly.
+
+### What a brush is checked for
+
+The checker builds the solid at compile time whenever every coordinate is a literal, and reports what it
+finds — a plane the others already close, two faces on the same plane, three collinear points, and
+half-spaces that never close at all:
+
+```css error: do not close a solid
+brush #open {
+  face([0, 2, 0], [0, 2, 2], [2, 2, 2]) {}
+  face([0, 0, 0], [2, 0, 0], [2, 0, 2]) {}
+  face([2, 0, 0], [2, 2, 0], [2, 2, 2]) {}
+  face([0, 0, 0], [0, 0, 2], [0, 2, 2]) {}
+}
+```
+
+A face wound the wrong way is the mistake this catches most: its plane faces inward, and the four or six
+half-spaces then bound nothing.
+
 ## Builtins
 
 Names that are handled by the language itself rather than looked up in three.

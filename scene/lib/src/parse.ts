@@ -1,7 +1,7 @@
 // .tscene — CSS-like syntax for three.js scene graphs.
 //   nesting = children, `#id` = object.name, `.cls` = @template application.
 //   values are explicit calls: vec3(0,1,0), color(#ff8000), texture("./t.png"), DoubleSide.
-import { MATH, math } from "./names.ts";
+import { AT_RULES, MATH, math } from "./names.ts";
 
 export type Pos = { start: number; end: number; file?: string };
 
@@ -55,7 +55,11 @@ export type Member =
   | (Pos & { kind: "prop"; name: string; value: Value })
   | (Pos & { kind: "node"; object: ObjectValue })
   | (Pos & { kind: "var"; name: string; value: Value; namePos: Pos })
-  /** `@bakery { size: 512 }` — settings for a tool, not for three. Valid at the top level and in any node */
+  /**
+   * `@bakery { size: 512 }`, `@broom { grid: -2 }` — settings for a tool, not for three. Valid at the
+   * top level and in any node; which knobs are legal is decided by {@link AT_RULES} and the table each
+   * one names.
+   */
   | (Pos & { kind: "at"; name: string; value: RecordValue });
 
 export type RecordValue = Extract<Value, { kind: "record" }>;
@@ -261,7 +265,7 @@ export function parse(text: string, file?: string): Sheet {
     return out;
   }
 
-  // `@bakery` is a member, so it also works inside a node — the other three are top level only
+  // `@bakery` and `@broom` are members, so they also work inside a node — these three are top level only
   const TOP_LEVEL = ["import", "template", "override"];
 
   function parseStatement(): Statement {
@@ -341,7 +345,7 @@ export function parse(text: string, file?: string): Sheet {
     const t = peek();
     if (t.type === "at") {
       next();
-      if (t.value !== "bakery") return fail(`unknown at-rule @${t.value}`, t);
+      if (!AT_RULES.includes(t.value as (typeof AT_RULES)[number])) return fail(`unknown at-rule @${t.value}`, t);
       if (!at("punc", "{")) return fail(`@${t.value} takes a block: @${t.value} { size: 512 }`);
       const value = parseValue() as RecordValue;
       const end = at("punc", ";") ? next().end : value.end;

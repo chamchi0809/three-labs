@@ -69,7 +69,7 @@
     "prepack": "pnpm build",
     "docs": "typedoc",
     "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/docs.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/bake.check.ts",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/raster.test.ts"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/brush.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/raster.test.ts"
   },
   "peerDependencies": {
     "sharp": ">=0.34.0",

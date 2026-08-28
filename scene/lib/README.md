@@ -48,7 +48,33 @@ group #stage {
 | language functions | `var(--x, fallback)` `calc(...)` `each(--i, n, value)` `ref(#id)` `repeat(n){}` `find(mesh, "name"){}` `play("clip"){}` |
 | `calc()` | `+ - * /` and parens, plus `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `sqrt` `exp` `log` `pow` `abs` `sign` `min` `max` `mod` `clamp` `smoothstep` `floor` `ceil` `round` `pi` |
 | `@override sel { ... }` | a body appended to every node a selector reaches — `@override #arena mesh.enemy { castShadow: true; }` |
+| `brush { face(...) {} }` | a convex solid, described by the half-spaces of its faces the way Quake and TrenchBroom describe one — one `Mesh`, one material slot per face |
 | `@bakery { ... }` | settings for a tool rather than for three — the [lightmap baker](./docs/bakery.md)'s, on the sheet, a node or a material |
+| `@broom { ... }` | the same, for the editor — grid, entity kind, icon, selection box, layer |
+
+## Brushes
+
+Level geometry is written as solids rather than as meshes: each `face` gives a plane through three points
+wound counter-clockwise seen from outside, and the brush is everything behind all of them at once. No
+vertex is ever listed, so moving a face cannot tear the solid open.
+
+```css
+--stone: meshStandardMaterial { color: color(#8a8a8a); roughness: 0.9; };
+
+brush #pillar {
+  face([0, 2, 0], [0, 2, 2], [2, 2, 2]) { material: var(--stone); scale: [2, 2]; }
+  face([0, 0, 0], [2, 0, 0], [2, 0, 2]) { material: var(--stone); }
+  face([2, 0, 0], [2, 2, 0], [2, 2, 2]) { material: var(--stone); }
+  face([0, 0, 0], [0, 0, 2], [0, 2, 2]) { material: var(--stone); }
+  face([0, 0, 2], [2, 0, 2], [2, 2, 2]) { material: var(--stone); }
+  face([0, 0, 0], [0, 2, 0], [2, 2, 0]) { material: var(--stone); }
+}
+```
+
+The checker intersects the planes at compile time whenever the coordinates are literal, so a face wound
+the wrong way, a plane that bounds nothing, or a set of half-spaces that never closes is an error before
+anything runs. [`docs/language.md`](./docs/language.md) covers the face attributes and the two uv
+coordinate systems.
 
 ## Runtime
 

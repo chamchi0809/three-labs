@@ -60,9 +60,12 @@ for (const doc of docs) {
 
 // ---------------------------------------------------------------- coverage
 
+/** how a name is actually written, so the reference is searched for the real thing: `brush {`, not `brush(` */
+const written = (name: string) => (BUILTINS[name]?.signature.startsWith(`${name} {`) ? `${name} {` : `${name}(`);
+
 await check("the language reference covers every builtin, alias and loader", () => {
   const text = read("docs/language.md");
-  const missing = [...Object.keys(BUILTINS), ...Object.keys(ALIASES), ...Object.keys(LOADERS)].filter((name) => !text.includes(`${name}(`));
+  const missing = [...Object.keys(BUILTINS), ...Object.keys(ALIASES), ...Object.keys(LOADERS)].filter((name) => !text.includes(written(name)));
   assert.deepEqual(missing, [], `undocumented in docs/language.md: ${missing.join(", ")}`);
 });
 

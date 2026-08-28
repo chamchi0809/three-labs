@@ -12,6 +12,7 @@
     "check": "pnpm --filter tscene build && pnpm -r check",
     "dev:scene": "pnpm --filter tscene build && pnpm --filter scene-demo dev",
     "dev:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo dev",
+    "dev:editor": "pnpm --filter tscene build && pnpm --filter tscene-editor dev",
     "bake:bakery": "pnpm --filter tscene build && pnpm --filter bakery-demo bake",
     "bake:bakery:sponza": "pnpm --filter tscene build && pnpm --filter bakery-demo bake:sponza",
     "bake:bakery:pica": "pnpm --filter tscene build && pnpm --filter bakery-demo bake:pica",

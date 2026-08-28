@@ -401,9 +401,9 @@ await check("@ completes at-rules, never three's names", async () => {
   await new Promise((r) => setTimeout(r, 200));
 
   const sheet = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: 1 } });
-  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@import", "@override", "@template"]);
+  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@broom", "@import", "@override", "@template"]);
   assert.equal(sheet[0].textEdit.newText, sheet[0].label); // the typed `@` is replaced, not doubled
-  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery"]);
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery", "@broom"]);
   // a record literal takes any key, so it takes neither three's names nor an at-rule
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 5, character: 4 } })), []);
 
@@ -464,6 +464,29 @@ await check("semantic tokens classify a document the parser cannot finish", asyn
   assert.equal(typeAt("vec3"), "class");         // the alias resolves to Vector3
   assert.equal(typeAt("--tint"), "variable");
   assert.equal(typeAt("DoubleSide"), undefined, "the edited document has no DoubleSide left");
+});
+
+await check("a brush completes its faces, and a face body its own table", async () => {
+  const doc = `brush #pillar {\n  face([0, 0, 0], [0, 0, 1], [1, 0, 0]) {\n    \n  }\n}\n\nmesh #box {\n  @broom {\n    \n  }\n}\n`;
+  await edit(doc);
+
+  // a face body is the brush's own table — no three property belongs in it, and no three class either
+  const inFace = labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 2, character: 4 } }));
+  assert.deepEqual(inFace.sort(), ["material", "offset", "rotation", "scale", "uv"]);
+
+  const uv = doc.replace("    \n  }\n}", "    uv: \n  }\n}");
+  await edit(uv);
+  const modes = await request("textDocument/completion", { textDocument: { uri }, position: posIn(uv, "uv: ", "uv: ".length) });
+  assert.deepEqual(labels(modes), ["paraxial", "parallel"]);
+
+  await edit(doc);
+  // `@broom` reads its own table, exactly as `@bakery` does
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 8, character: 4 } })).sort(),
+    ["color", "hidden", "icon", "kind", "layer", "locked", "size"]);
+
+  const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, "brush", 2) });
+  assert.match(hover.contents.value, /convex solid/);
+  await edit(text);
 });
 
 await check("folding ranges cover blocks and block comments", async () => {
