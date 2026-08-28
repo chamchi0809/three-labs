@@ -1,16 +1,18 @@
 <script lang="ts">
-  // The shell. M6 is a single viewport over the render scene and a status bar; M7 splits the centre into
-  // the three-pane layout and M10 hangs the inspectors off the right edge.
-  import Viewport from "./viewport/Viewport.svelte";
+  // The shell. M7 fills the centre with the pane layout; M10 hangs the inspectors off the right edge.
+  import Views from "./viewport/Views.svelte";
   import { clampExponent, formatSize } from "./grid/snap.ts";
   import { withGrid } from "./doc/editor.ts";
+  import { LAYOUTS } from "./viewport/layout.ts";
+  import { panes } from "./viewport/views.svelte.ts";
   import { session } from "./session.svelte.ts";
 
   const exponent = $derived(session.editor.world.broom.grid);
   const selected = $derived(session.editor.selection.nodes.length);
 
   // `[` and `]` step the grid, as they do in TrenchBroom; ⌘/Ctrl+Z undoes. Bound on window rather than on
-  // the viewport so both still work while the focus sits in a panel.
+  // the viewport so both still work while the focus sits in a panel. Everything about *where* a view is
+  // looking is bound inside `Views.svelte`, which is the only thing that knows how big a pane is.
   function onKeydown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return;
@@ -34,13 +36,24 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M6 · renderer</span>
+    <span class="milestone">M7 · viewports</span>
+    <span class="layouts">
+      {#each LAYOUTS as kind, i (kind)}
+        <button
+          class:on={panes.layout === kind && !panes.maximised}
+          title="{kind} pane · ⌘{i + 1}"
+          onclick={() => panes.setLayout(kind)}>{i + 1}</button
+        >
+      {/each}
+    </span>
   </header>
-  <main><Viewport /></main>
+  <main><Views /></main>
   <footer>
     <span>grid <b>{formatSize(2 ** exponent)}</b></span>
     <span>selected <b>{selected}</b></span>
-    <span class="hint">[ / ] grid · click to select · shift-click to add</span>
+    <span class="hint">
+      [ / ] grid · ⌘1–4 panes · space maximise · f frame · rmb look · mmb pan · wasd fly
+    </span>
   </footer>
 </div>
 
@@ -58,4 +71,12 @@
   .milestone, .hint { color: #6d7480; }
   .hint { margin-left: auto; }
   b { color: #d6dae0; font-weight: 600; }
+  .layouts { display: flex; gap: 3px; }
+  .layouts button {
+    width: 20px; height: 18px; padding: 0; cursor: pointer;
+    background: #1b1e22; border: 1px solid #24272c; border-radius: 3px;
+    font: 11px ui-monospace, monospace; color: #6d7480;
+  }
+  .layouts button:hover { border-color: #3d4653; color: #9aa1ac; }
+  .layouts button.on { background: #2a3038; border-color: #3d4653; color: #d6dae0; }
 </style>

@@ -14,7 +14,7 @@
  */
 import {
   AmbientLight, BufferAttribute, BufferGeometry, DirectionalLight, Group, HemisphereLight, LineSegments,
-  Mesh, Points, Scene, type Object3D,
+  Mesh, PlaneGeometry, Points, Scene, type Object3D,
 } from "three/webgpu";
 import { brushToMesh } from "../brush/brush.ts";
 import type { Bounds } from "../brush/builder.ts";
@@ -34,7 +34,7 @@ import {
   spikeSegments, type LineBatch,
 } from "./lines.ts";
 import {
-  edgeMaterial, faceMaterial, handleMaterial, newGridUniforms, type GridUniforms,
+  edgeMaterial, faceMaterial, gridPlaneMaterial, handleMaterial, newGridUniforms, type GridUniforms,
 } from "./materials.ts";
 import { hideLabels, newLabels, setLabel, type Labels } from "./text.ts";
 
@@ -63,6 +63,8 @@ export type RenderScene = {
   edgeLines: LineSegments;
   decorLines: LineSegments;
   handlePoints: Points;
+  /** the backdrop an orthographic pane stands on; the 3D pane hides it and uses the grid on the faces */
+  gridPlane: Mesh;
 
   seen: Map<NodeId, Seen>;
   hover: Hover;
@@ -96,7 +98,15 @@ export function newRenderScene(gridSize = 1): RenderScene {
   handlePoints.renderOrder = 20;
   handlePoints.name = "broom:handles";
 
-  world.add(faceMesh, edgeLines);
+  // a unit quad the 2D panes stretch across their own frustum; ordered far below everything else so it is
+  // painted before the map rather than over it
+  const gridPlane = new Mesh(new PlaneGeometry(1, 1), gridPlaneMaterial(grid));
+  gridPlane.frustumCulled = false;
+  gridPlane.renderOrder = -1000;
+  gridPlane.visible = false;
+  gridPlane.name = "broom:grid-plane";
+
+  world.add(gridPlane, faceMesh, edgeLines);
   overlays.add(decorLines, handlePoints);
   scene.add(...editorLights());
 
@@ -107,7 +117,7 @@ export function newRenderScene(gridSize = 1): RenderScene {
     decor: newLines(),
     handles: newHandles(),
     labels: newLabels(overlays),
-    faceMesh, edgeLines, decorLines, handlePoints,
+    faceMesh, edgeLines, decorLines, handlePoints, gridPlane,
     seen: new Map(),
     hover: undefined,
     decorKeys: new Set(),

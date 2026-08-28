@@ -38,6 +38,8 @@ import { FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED } from "./batch.ts";
  * an unlit one.
  */
 export const COLOURS = {
+  /** what a viewport clears to, and what the 2D grid is drawn onto */
+  background: 0x1b1d21,
   face: 0x9a9a9e,
   edge: 0x24242a,
   selected: 0xd0402f,
@@ -138,7 +140,7 @@ function axisInk() {
  * in their own colours over both. The subdivision is what makes a size legible without counting — eight
  * cells is a glance.
  */
-function gridInk(grid: GridUniforms) {
+function gridInk(grid: GridUniforms, fade = true) {
   const fine = gridCoverage(grid.size).mul(0.45);
   const major = gridCoverage(grid.size.mul(8)).mul(0.9);
   const [ax, ay, az] = axisInk();
@@ -152,7 +154,7 @@ function gridInk(grid: GridUniforms) {
 
   // lines fade out with distance rather than aliasing into noise at the horizon
   const eye = positionWorld.sub(cameraPosition).length();
-  const near = float(1).sub(smoothstep(grid.reach.mul(0.4), grid.reach, eye));
+  const near = fade ? float(1).sub(smoothstep(grid.reach.mul(0.4), grid.reach, eye)) : float(1);
   return { amount: max(max(fine, major), axis).mul(grid.strength).mul(near), tint };
 }
 
@@ -171,6 +173,28 @@ export function faceMaterial(grid: GridUniforms): MeshStandardNodeMaterial {
   const { amount, tint } = gridInk(grid);
   material.colorNode = mix(tinted(color(COLOURS.face)), tint, amount);
   material.name = "broom:face";
+  return material;
+}
+
+/**
+ * The grid an orthographic pane stands on.
+ *
+ * The face grid alone is not enough in a 2D view: a designer laying a corridor out is looking mostly at
+ * empty space, and empty space with no grid in it has no scale and no origin. So the 2D panes draw a plane
+ * through their own centre, behind everything, with the same lines and the same world axes on it — which
+ * is exactly what TrenchBroom's 2D views show and the reason they can be built in at all.
+ *
+ * No depth test and no depth write: it is a backdrop, painted first and then covered by whatever is in
+ * front of it, rather than a surface competing with the map for the depth buffer.
+ */
+export function gridPlaneMaterial(grid: GridUniforms): MeshBasicNodeMaterial {
+  // opaque, not transparent: three draws every transparent object *after* every opaque one, so a
+  // transparent backdrop with no depth test would end up painted over the map instead of under it. An
+  // opaque quad that writes no depth and is ordered first is a backdrop in the only way that works.
+  const material = new MeshBasicNodeMaterial({ depthTest: false, depthWrite: false, toneMapped: false });
+  const { amount, tint } = gridInk(grid, false);
+  material.colorNode = mix(color(COLOURS.background), tint, amount.mul(1.6).clamp(0, 1));
+  material.name = "broom:grid-plane";
   return material;
 }
 
