@@ -2,20 +2,11 @@
 // simply offset, and a size that is not a power of two only shows up as drift a hundred operations in.
 // Run with: node --experimental-strip-types src/grid/snap.check.ts
 import assert from "node:assert/strict";
+import { report, test } from "../check.ts";
 import {
   DEFAULT_EXPONENT, MAX_EXPONENT, MIN_EXPONENT, clampExponent, exponents, formatSize, gridExtent,
   gridSize, isMajor, snap, snapDelta, snapDown, snapTowards, snapUp,
 } from "./snap.ts";
-
-let failed = 0;
-const test = (name: string, fn: () => void) => {
-  try {
-    fn();
-  } catch (e) {
-    failed++;
-    console.error(`✗ ${name}\n  ${(e as Error).message.split("\n")[0]}`);
-  }
-};
 
 test("every rung of the ladder is an exact power of two", () => {
   for (const e of exponents()) {
@@ -120,9 +111,4 @@ test("sizes are written exactly, never rounded", () => {
   assert.equal(formatSize(gridSize(MIN_EXPONENT)), "15.625 mm");
 });
 
-if (failed > 0) {
-  console.error(`\n${failed} grid check(s) failed`);
-  process.exitCode = 1;
-} else {
-  console.log("grid: ok");
-}
+report("grid");
