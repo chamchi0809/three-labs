@@ -217,13 +217,73 @@ test("what is not repeatable is not repeated", () => {
   assert.equal(h.repeat.length, 0);
 });
 
-test("a repeated gesture drops the collation of the gesture it came from", () => {
+// ---------------------------------------------------------------- repeating a gesture
+
+/** one frame of a drag: sixty of these a second is what the collapsing below is for */
+const frame = (n: number) => ({
+  name: "drag a wall out",
+  collate: "drag:move",
+  repeatable: true,
+  apply: (e: Editor): Editor => ({ ...e, world: insertNodes(e.world, e.layer, [box([n, 0, 0], [n + 1, 1, 1])]) }),
+});
+
+test("the frames of one drag are one thing to repeat, not a hundred and twenty", () => {
   let h = history(start());
-  h = run(h, { ...nudge(0), repeatable: true });
-  h = run(h, { ...nudge(1), repeatable: true });
-  const entries = h.past.length;
+  for (let i = 0; i < 40; i++) h = run(h, frame(i));
+  assert.equal(h.repeat.length, 1, "replaying every frame of a drag would replay the drag forty times");
+  assert.equal(repeatName(h), "drag a wall out");
+});
+
+test("a repeated gesture is its own entry rather than a continuation of the drag it came from", () => {
+  let h = history(start());
+  h = run(h, frame(0));
+  h = run(h, frame(1));
+  assert.equal(h.past.length, 1, "the drag itself is one entry");
+  h = separate(h);
+  const solids = h.editor.world.layers[0]!.children.length;
   h = repeat(h);
-  assert.equal(h.past.length, entries + 1, "the replay is its own entry, not a continuation of the drag");
+  assert.equal(h.past.length, 2);
+  assert.equal(h.editor.world.layers[0]!.children.length, solids + 1);
+});
+
+test("letting go of a drag means the next one is recorded after it, not over it", () => {
+  let h = history(start());
+  h = run(h, frame(0));
+  h = separate(h);
+  h = run(h, frame(5));
+  assert.equal(h.repeat.length, 2, "two drags are two things to repeat");
+  assert.equal(repeatName(h), "2 actions");
+});
+
+test("repeat runs a drag's `again`, because its `apply` would rewind the world to before it", () => {
+  let h = history(start());
+  const before = h.editor.world;
+  h = run(h, {
+    name: "move",
+    collate: "drag:move",
+    repeatable: true,
+    // written against the world the drag started from, which is how a drag avoids accumulating rounding
+    apply: (e) => ({ ...e, world: insertNodes(before, e.layer, [box([0, 0, 0], [1, 1, 1])]) }),
+    again: (e) => ({ ...e, world: insertNodes(e.world, e.layer, [box([9, 0, 0], [10, 1, 1])]) }),
+  });
+  h = separate(h);
+  const solids = h.editor.world.layers[0]!.children.length;
+  h = repeat(h);
+  assert.equal(h.editor.world.layers[0]!.children.length, solids + 1,
+    "replaying `apply` would have thrown away everything since the drag began");
+});
+
+test("a drag that came back to where it started leaves nothing behind, not an entry that does nothing", () => {
+  let h = history(start());
+  const before = h.editor;
+  h = run(h, { ...nudge(0), repeatable: true });
+  h = run(h, { ...nudge(3), repeatable: true });
+  assert.equal(h.past.length, 1);
+  // the last frame of an escaped drag: the same collate key, putting the world back as it was
+  h = run(h, { name: "nudge", collate: "nudge", apply: () => before });
+  assert.equal(h.past.length, 0, "undo has nothing to do, so there is nothing on the stack");
+  assert.equal(h.repeat.length, 0, "and nothing to repeat either — the gesture was cancelled");
+  assert.equal(grid(h.editor), -2);
 });
 
 test("the editor is settled after every command, so nothing points at what is gone", () => {

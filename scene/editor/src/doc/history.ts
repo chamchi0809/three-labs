@@ -36,6 +36,16 @@ export type Command = {
   collate?: string;
   /** whether "repeat" should do this again — a move, yes; a selection change, no */
   repeatable?: boolean;
+  /**
+   * What {@link repeat} runs in place of `apply`.
+   *
+   * A drag's `apply` is written against the world the drag started from — that is what stops sixty frames
+   * a second from accumulating rounding — so replaying it later would put the world back to where the drag
+   * began and undo everything since. `again` is the same change written against whatever is there now,
+   * which is what a designer means by "do that again". Most commands have no use for it and repeat as
+   * themselves.
+   */
+  again?: (editor: Editor) => Editor;
 };
 
 type Entry = { name: string; before: Editor; after: Editor; collate?: string };
@@ -70,11 +80,19 @@ export const redoName = (h: History): string | undefined => h.future.at(-1)?.nam
 export function run(h: History, command: Command): History {
   const after = settleEditor(command.apply(h.editor));
   if (untouched(h.editor, after)) return h; // a command that changed nothing does not deserve an entry
-  const repeat = command.repeatable ? [...h.repeat, command] : h.repeat;
+  const repeat = command.repeatable ? recorded(h.repeat, command) : h.repeat;
   if (h.open.length) return { ...h, editor: after, repeat };
 
   const top = h.past.at(-1);
   if (command.collate && top?.collate === command.collate) {
+    if (untouched(top.before, after)) {
+      // the gesture came back to where it started, which is what escaping out of a drag does. An entry
+      // whose two ends are the same state is an undo step that undoes nothing, and a designer who
+      // cancelled a drag should not then have to press undo to be rid of it — nor to be rid of the
+      // repeat it would otherwise have left behind
+      const forgotten = repeat.at(-1)?.collate === command.collate ? repeat.slice(0, -1) : repeat;
+      return { ...h, editor: after, past: h.past.slice(0, -1), future: [], repeat: forgotten };
+    }
     // the gesture continues: the entry keeps the state it started from and takes on the newest end
     const merged: Entry = { ...top, after, name: command.name };
     return { ...h, editor: after, past: [...h.past.slice(0, -1), merged], future: [], repeat };
@@ -82,6 +100,19 @@ export function run(h: History, command: Command): History {
   const entry: Entry = { name: command.name, before: h.editor, after, collate: command.collate };
   return { ...h, editor: after, past: trim([...h.past, entry], h.limit), future: [], repeat };
 }
+
+/**
+ * The repeat list with one more command on it — or with its last one replaced, when the two are frames of
+ * the same gesture.
+ *
+ * Without this a two-second drag records a hundred and twenty commands and "repeat" replays every frame of
+ * it. The frames collapse for exactly the reason the undo entries do, and by exactly the same rule.
+ */
+const recorded = (list: Command[], command: Command): Command[] => {
+  const top = list.at(-1);
+  const same = command.collate !== undefined && top?.collate === command.collate;
+  return same ? [...list.slice(0, -1), command] : [...list, command];
+};
 
 /** field by field, so a tool that spread the editor and then changed its mind is still a no-op */
 const untouched = (a: Editor, b: Editor): boolean =>
@@ -102,7 +133,14 @@ export const change = (h: History, name: string, apply: (e: Editor) => Editor, o
  */
 export function separate(h: History): History {
   const top = h.past.at(-1);
-  return top?.collate ? { ...h, past: [...h.past.slice(0, -1), { ...top, collate: undefined }] } : h;
+  const lastRepeat = h.repeat.at(-1);
+  // the repeat list forgets the key too, or the next drag of the same kind would replace this one's
+  // record instead of being added after it
+  const repeat = lastRepeat?.collate
+    ? [...h.repeat.slice(0, -1), { ...lastRepeat, collate: undefined }]
+    : h.repeat;
+  if (!top?.collate) return repeat === h.repeat ? h : { ...h, repeat };
+  return { ...h, repeat, past: [...h.past.slice(0, -1), { ...top, collate: undefined }] };
 }
 
 // ---------------------------------------------------------------- transactions
@@ -163,7 +201,9 @@ export function repeat(h: History): History {
   const name = h.repeat.length === 1 ? h.repeat[0]!.name : `repeat ${h.repeat.length} actions`;
   // the recorded commands are replayed as themselves, but their collate keys belong to the gesture that
   // is over, so they are dropped and the whole replay becomes one entry
-  return transact(h, name, (inner) => h.repeat.reduce((acc, c) => run(acc, { ...c, collate: undefined }), inner));
+  return transact(h, name, (inner) =>
+    h.repeat.reduce((acc, c) => run(acc, { ...c, collate: undefined, apply: c.again ?? c.apply }), inner),
+  );
 }
 
 export const clearRepeat = (h: History): History => (h.repeat.length ? { ...h, repeat: [] } : h);

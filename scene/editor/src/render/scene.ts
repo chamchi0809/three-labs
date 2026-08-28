@@ -148,7 +148,7 @@ function editorLights(): Object3D[] {
  * inherited, and asking `isLocked(world, id)` per node would walk the tree once per node — and it decides
  * flags and geometry in the same visit, because both are answered by the node in front of it.
  */
-export function syncScene(rs: RenderScene, editor: Editor): void {
+export function syncScene(rs: RenderScene, editor: Editor, dragging = false): void {
   rs.grid.size.value = 2 ** editor.world.broom.grid;
 
   const alive = new Set<NodeId>();
@@ -165,7 +165,7 @@ export function syncScene(rs: RenderScene, editor: Editor): void {
     dropLines(rs.edges, id);
   }
 
-  syncDecor(rs, editor);
+  syncDecor(rs, editor, dragging);
   syncLabels(rs, editor);
   upload(rs);
 }
@@ -261,8 +261,12 @@ const same = (a: number[], b: number[]): boolean => a.length === b.length && a.e
  * keeps the last selection's box from staying on screen after the selection has moved on. Tools add their
  * own keys through {@link setDecor} under a `tool:` prefix, and those are exempt: a tool owns the whole
  * life of what it draws, and a sync happening mid-drag must not take a guide away from underneath it.
+ *
+ * `dragging` is passed in rather than read off the document because whether a gesture is running is the
+ * host's business, not the level's. Keeping it in the editor state meant redo brought it back — spikes
+ * standing around a solid nobody was touching, because the state redo restored had been mid-drag once.
  */
-function syncDecor(rs: RenderScene, editor: Editor): void {
+function syncDecor(rs: RenderScene, editor: Editor, dragging: boolean): void {
   const written = new Set<string>();
   const write = (key: string, segments: Float32Array, flags: Flags) => {
     if (!segments.length) return;
@@ -274,7 +278,7 @@ function syncDecor(rs: RenderScene, editor: Editor): void {
   if (box) {
     write("bounds", boxSegments(box.min, box.max), SELECTED);
     // spikes only while something is actually being moved; standing still they are visual noise
-    if (editor.note === "dragging") write("spikes", spikeSegments(box.min, box.max, 500), SELECTED);
+    if (dragging) write("spikes", spikeSegments(box.min, box.max, 500), SELECTED);
   }
 
   const links = linksOf(editor.world);

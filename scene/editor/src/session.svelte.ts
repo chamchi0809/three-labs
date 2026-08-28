@@ -11,7 +11,8 @@
  */
 import { newEditor, type Editor } from "./doc/editor.ts";
 import {
-  canRedo, canUndo, change, history, redo, redoName, undo, undoName, type History,
+  canRedo, canUndo, change, history, redo, redoName, repeat, repeatName, separate, undo, undoName,
+  type Command, type History,
 } from "./doc/history.ts";
 import { demoMap } from "./doc/demo.ts";
 
@@ -42,9 +43,26 @@ class Session {
     return redoName(this.#history);
   }
 
-  /** an edit, named for the undo stack */
-  run(name: string, apply: (e: Editor) => Editor): void {
-    this.#history = change(this.#history, name, apply);
+  get repeatName(): string | undefined {
+    return repeatName(this.#history);
+  }
+
+  /** an edit, named for the undo stack; `over` carries a gesture's collate key and its repeat form */
+  run(name: string, apply: (e: Editor) => Editor, over: Partial<Command> = {}): void {
+    this.#history = change(this.#history, name, apply, over);
+  }
+
+  /**
+   * The gesture is over. The next command with the same collate key starts a fresh undo entry instead of
+   * joining this one — mouse up, tool changed, focus lost.
+   */
+  separate(): void {
+    this.#history = separate(this.#history);
+  }
+
+  /** the last repeatable thing, done again to whatever is selected now */
+  repeat(): void {
+    this.#history = repeat(this.#history);
   }
 
   /**

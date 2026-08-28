@@ -4,7 +4,7 @@ import type { Vec3 } from "tscene";
 import { report, test } from "../check.ts";
 import {
   MAX_REACH, MIN_REACH, basisOf, eyeOf, flyView, frameView, lookView, metresPerPixel, newView,
-  orbitView, panView, pointOnPlane, rayThrough, zoomView, type View, type ViewKind,
+  orbitView, panView, pointOnPlane, projectPoint, rayThrough, zoomView, type View, type ViewKind,
 } from "./view.ts";
 
 const SIZE = { width: 800, height: 400 };
@@ -195,6 +195,44 @@ test("a 2D ray starts behind the map and a 3D ray starts at the eye", () => {
 
   const view = newView("3d");
   nearVec(rayThrough(view, { x: 10, y: 10 }, SIZE).origin, eyeOf(view), 1e-9);
+});
+
+test("projecting a point and reading it back is the same point, in every kind of pane", () => {
+  const at = { x: 260, y: 310 };
+  for (const kind of KINDS) {
+    const view = orbitView({ ...newView(kind), target: [1, 2, -3] as Vec3 }, 24, -15);
+    // a point that is definitely on screen: whatever the pane shows at those pixels
+    const world = pointOnPlane(view, at, SIZE);
+    const back = projectPoint(view, world, SIZE)!;
+    assert.ok(back, `${kind} lost a point it had just shown`);
+    near(back.x, at.x, 1e-6);
+    near(back.y, at.y, 1e-6);
+  }
+});
+
+test("the pivot projects to the middle of the pane", () => {
+  for (const kind of KINDS) {
+    const view = orbitView({ ...newView(kind), target: [4, -1, 2] as Vec3 }, 40, 20);
+    const middle = projectPoint(view, view.target, SIZE)!;
+    near(middle.x, SIZE.width / 2, 1e-6);
+    near(middle.y, SIZE.height / 2, 1e-6);
+  }
+});
+
+test("screen y runs down while world up runs up, which is the sign every tool depends on", () => {
+  const view = { ...newView("front"), target: [0, 0, 0] as Vec3, reach: 40 };
+  const high = projectPoint(view, [0, 5, 0], SIZE)!;
+  const low = projectPoint(view, [0, -5, 0], SIZE)!;
+  assert.ok(high.y < low.y, "dragging the pointer up would push geometry down");
+  near(low.y - high.y, 10 / metresPerPixel(view, SIZE), 1e-9);
+});
+
+test("a point behind the eye has no place on screen, so a band cannot swallow it", () => {
+  const view = { ...newView("3d"), target: [0, 0, 0] as Vec3, yaw: 0, pitch: 0, reach: 10 };
+  assert.equal(projectPoint(view, [0, 0, 20], SIZE), undefined);
+  assert.ok(projectPoint(view, [0, 0, -20], SIZE), "and one in front does have one");
+  // an orthographic pane sees along its whole axis, so nothing there is ever behind the eye
+  assert.ok(projectPoint({ ...newView("top"), target: [0, 0, 0] }, [0, 9999, 0], SIZE));
 });
 
 report("view");

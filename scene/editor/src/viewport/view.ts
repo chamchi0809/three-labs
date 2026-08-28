@@ -312,9 +312,44 @@ export function rayThrough(view: View, at: Point, size: Size): Ray {
   return { origin: eye, direction };
 }
 
+/**
+ * A world point put back on the screen — the inverse of {@link pointOnPlane}, and the only thing a tool
+ * needs that a pick pass cannot answer.
+ *
+ * A rubber band asks "is this solid inside the rectangle I dragged", and there is no pixel to read for a
+ * question about a box rather than a point. Projecting the box's corners answers it in both kinds of pane
+ * with one piece of arithmetic, which is worth more here than the frustum clipping it replaces.
+ *
+ * `undefined` means the point is behind the eye, where a perspective projection would put it on screen
+ * mirrored — a rubber band that swallowed what was behind the designer would be a very strange tool.
+ */
+export function projectPoint(view: View, p: Vec3, size: Size): Point | undefined {
+  const { right, up, forward } = basisOf(view);
+  const eye = eyeOf(view);
+  const d: Vec3 = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+  const across = dot(d, right);
+  const along = dot(d, up);
+
+  if (view.kind !== "3d") {
+    const scale = metresPerPixel(view, size);
+    return { x: size.width / 2 + across / scale, y: size.height / 2 - along / scale };
+  }
+
+  const depth = dot(d, forward);
+  if (depth <= 1e-6) return undefined;
+  const half = Math.tan(((view.fov * Math.PI) / 180) / 2);
+  const aspect = size.width / Math.max(size.height, 1);
+  return {
+    x: (across / (depth * half * aspect) / 2 + 0.5) * size.width,
+    y: (0.5 - along / (depth * half) / 2) * size.height,
+  };
+}
+
 // ---------------------------------------------------------------- odds and ends
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+
+const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 const cross = (a: Vec3, b: Vec3): Vec3 => [
   a[1] * b[2] - a[2] * b[1],

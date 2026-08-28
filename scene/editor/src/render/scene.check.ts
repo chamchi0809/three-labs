@@ -266,8 +266,12 @@ test("spikes appear while dragging and not otherwise", () => {
   const selected = { ...editorOf(world), selection: { ...editorOf(world).selection, nodes: [a.id] } };
   syncScene(rs, selected);
   assert.equal(rs.decor.entries.has("spikes"), false);
-  syncScene(rs, { ...selected, note: "dragging" });
+  syncScene(rs, selected, true);
   assert.equal(rs.decor.entries.get("spikes")!.count, 6, "three lines through the centre");
+  // and they go again the moment the gesture is over, rather than riding along in the document where a
+  // redo could bring them back around a solid nobody is touching
+  syncScene(rs, selected);
+  assert.equal(rs.decor.entries.has("spikes"), false);
 });
 
 test("a tool's own lines survive a sync, because a sync happens mid-drag", () => {

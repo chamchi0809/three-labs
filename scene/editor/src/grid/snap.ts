@@ -56,8 +56,12 @@ export const snapTowards = (value: number, size: number, sign: number): number =
 
 /**
  * A translation snapped so that `origin + delta` lands on the grid, rather than the translation itself
- * being a multiple of the grid. Moving a brush whose corner sits at 0.1 by one cell has to keep the
- * 0.1 — otherwise the first move of anything off-grid silently re-aligns it.
+ * being a multiple of the grid.
+ *
+ * `origin` is the point being made to land — a corner of what is moving, not its centre — so dragging a
+ * box towards a wall puts its side on a grid line where the wall is. The price is that something built
+ * off-grid is pulled onto it the first time it is moved, and that is the right price: a grid that only
+ * ever moved things by whole cells would preserve every misalignment it was ever given.
  */
 export const snapDelta = (origin: number, delta: number, size: number): number =>
   snap(origin + delta, size) - origin;

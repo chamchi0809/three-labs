@@ -17,17 +17,20 @@
   import { newCompass, updateCompass } from "../render/compass.ts";
   import { COLOURS } from "../render/materials.ts";
   import { newPicker, pickAt } from "../render/pick.ts";
-  import { newRenderScene, sceneBounds, setHover, syncScene } from "../render/scene.ts";
+  import { clearDecor, newRenderScene, sceneBounds, setDecor, setHover, syncHandles, syncScene } from "../render/scene.ts";
   import { layoutLabels } from "../render/text.ts";
   import type { Bounds } from "../brush/builder.ts";
   import { nodeById, nodeBounds, union } from "../doc/document.ts";
-  import { selectNodes } from "../doc/selection.ts";
   import { session } from "../session.svelte.ts";
+  import { meetPlane } from "../tools/drag.ts";
+  import { newInput, type Hit, type InputState } from "../tools/input.ts";
+  import type { Outcome } from "../tools/tool.ts";
+  import { tools } from "../tools/tools.svelte.ts";
   import { applyCamera, gridReach, newCamera, placeGridPlane, type ViewCamera } from "./camera.ts";
   import { LAYOUTS, cellAt, rectOf, type Cell } from "./layout.ts";
   import { panes, views } from "./views.svelte.ts";
   import {
-    VIEW_KINDS, VIEW_TITLES, flyView, frameView, lookView, orbitView, panView, zoomView,
+    VIEW_KINDS, VIEW_TITLES, flyView, frameView, lookView, orbitView, panView, rayThrough, zoomView,
     type Size, type ViewKind,
   } from "./view.ts";
 
@@ -52,6 +55,14 @@
 
   type Mode = "pan" | "orbit" | "look";
   let drag: { view: ViewKind; mode: Mode; x: number; y: number } | undefined;
+  /**
+   * The pane a left press landed in, and where its corner is.
+   *
+   * Kept for the whole gesture rather than looked up per move, because a drag that started in the top
+   * pane and wandered into the side one is still a drag in the top pane — the pointer is captured, and
+   * re-deriving the pane every frame would make a tool change its mind halfway through.
+   */
+  let toolPane: { view: ViewKind; left: number; top: number } | undefined;
   let splitting: "x" | "y" | undefined;
   let pointer: { view: ViewKind; x: number; y: number } | undefined;
   let picked: { view: ViewKind; x: number; y: number } | undefined;
@@ -80,7 +91,7 @@
         // every pane clears and draws inside its own rectangle, so the scissor stays on for good
         renderer.setScissorTest(true);
         resize(renderer);
-        syncScene(rs, session.editor);
+        syncScene(rs, session.editor, tools.box.dragging);
         frameAll();
         backend = forceWebGL ? "WebGL" : "WebGPU";
         status = "";
@@ -107,7 +118,8 @@
 
   // The scene follows the document; the diff inside `syncScene` is what keeps that cheap.
   $effect(() => {
-    syncScene(rs, session.editor);
+    syncScene(rs, session.editor, tools.box.dragging);
+    syncHandles(rs, session.editor, tools.current.handles);
     moved = true;
   });
 
@@ -191,13 +203,79 @@
     try {
       const found = await pickAt(renderer, picker, rs, cameras[at.view], at.x, at.y, sizes[at.view]);
       const id = found.ordinal === undefined ? undefined : idOf(rs.brushes, found.ordinal);
-      if (setHover(rs, id ? { node: id, face: found.face } : undefined)) syncScene(rs, session.editor);
+      const hovering = id ? { node: id, face: found.face } : undefined;
+      if (setHover(rs, hovering)) syncScene(rs, session.editor, tools.box.dragging);
       const says = id ? `${id} · face ${found.face}` : "";
       if (readout[at.view] !== says) readout = { ...readout, [at.view]: says };
     } finally {
       picking = false;
     }
   }
+
+  // ---------------------------------------------------------------- the tools
+
+  /**
+   * What the last pick pass found, in the shape a tool reads.
+   *
+   * The pick answers with a solid and a face; the world point is worked out here by meeting the pointer
+   * ray with that face's own plane. Exact, free, and it avoids the alternative — reading the depth buffer
+   * back, which is another asynchronous round trip in the middle of a gesture that has to feel immediate.
+   */
+  function hitOf(kind: ViewKind, x: number, y: number): Hit | undefined {
+    const found = rs.hover;
+    if (!found) return undefined;
+    const node = nodeById(session.editor.world, found.node);
+    const face = found.face;
+    if (node?.kind !== "brush" || face === undefined) return { node: found.node, face };
+    const plane = node.brush.poly.faces[face]?.plane;
+    if (!plane) return { node: found.node, face };
+    const origin: [number, number, number] = [plane.n[0] * plane.d, plane.n[1] * plane.d, plane.n[2] * plane.d];
+    const point = meetPlane(rayThrough(views[kind], { x, y }, sizes[kind]), { origin, normal: plane.n });
+    return { node: found.node, face, point };
+  }
+
+  const inputAt = (kind: ViewKind, x: number, y: number, event: PointerEvent | KeyboardEvent): InputState =>
+    newInput({
+      camera: views[kind],
+      size: sizes[kind],
+      at: { x, y },
+      mods: { shift: event.shiftKey, ctrl: event.ctrlKey || event.metaKey, alt: event.altKey },
+      button: "button" in event ? event.button : undefined,
+      hit: hitOf(kind, x, y),
+    });
+
+  /**
+   * The input a key press means.
+   *
+   * The pointer if it is in a pane, and the middle of the active pane if it is not — because a keyboard
+   * command that stops working when the mouse is over the tool bar is a keyboard command with a bug.
+   */
+  function inputFor(event: KeyboardEvent): InputState {
+    if (pointer) return inputAt(pointer.view, pointer.x, pointer.y, event);
+    const kind = panes.active;
+    const size = sizes[kind];
+    return inputAt(kind, size.width / 2, size.height / 2, event);
+  }
+
+  /** an outcome carried out: everything but the lines, which are the only part this file owns */
+  function run(outcome: Outcome | undefined): boolean {
+    const decor = tools.apply(outcome);
+    if (decor) {
+      for (const [key, segments] of Object.entries(decor)) {
+        setDecor(rs, key, segments ?? new Float32Array(0));
+      }
+      moved = true;
+    }
+    return outcome !== undefined;
+  }
+
+  // a tool change puts back whatever the last one was drawing, and changes which handles are shown
+  $effect(() => {
+    void tools.current;
+    clearDecor(rs);
+    syncHandles(rs, session.editor, tools.current.handles);
+    moved = true;
+  });
 
   // ---------------------------------------------------------------- framing
 
@@ -286,6 +364,16 @@
     const found = paneAt(p.fx, p.fy);
     if (!found) return;
     panes.active = found.cell.view;
+
+    if (event.button === 0) {
+      // the tools own the left button; the pointer is captured so a drag survives leaving the pane
+      toolPane = { view: found.cell.view, left: found.left, top: found.top };
+      run(tools.box.down(inputAt(found.cell.view, p.x - found.left, p.y - found.top, event), session.editor));
+      host.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+
     const mode = modeFor(found.cell.view, event);
     if (!mode) return;
     drag = { view: found.cell.view, mode, x: event.clientX, y: event.clientY };
@@ -320,6 +408,12 @@
       return;
     }
 
+    if (toolPane) {
+      pointer = { view: toolPane.view, x: p.x - toolPane.left, y: p.y - toolPane.top };
+      run(tools.box.move(inputAt(toolPane.view, pointer.x, pointer.y, event), session.editor));
+      return;
+    }
+
     const splitter = splitterAt(p.x, p.y);
     cursor = splitter === "x" ? "col-resize" : splitter === "y" ? "row-resize" : "default";
 
@@ -331,6 +425,7 @@
     // the pane the mouse is in is the one a key press means, which is how `F` frames what you are looking at
     panes.active = found.cell.view;
     pointer = { view: found.cell.view, x: p.x - found.left, y: p.y - found.top };
+    run(tools.box.move(inputAt(pointer.view, pointer.x, pointer.y, event), session.editor));
   }
 
   function onPointerUp(event: PointerEvent): void {
@@ -343,18 +438,17 @@
       drag = undefined;
       return;
     }
-    // Selection on click, still in the crudest possible form — M8 replaces this with the select tool.
-    if (event.button !== 0 || !rs.hover) return;
-    const id = rs.hover.node;
-    session.set((e) => ({
-      ...e,
-      selection: selectNodes(e.world, e.selection, [id], event.shiftKey ? "toggle" : "replace", e.open),
-    }));
+    if (toolPane) {
+      const pane = toolPane;
+      toolPane = undefined;
+      const p = at(event);
+      run(tools.box.up(inputAt(pane.view, p.x - pane.left, p.y - pane.top, event), session.editor));
+    }
   }
 
   function leave(): void {
     pointer = undefined;
-    if (setHover(rs, undefined)) syncScene(rs, session.editor);
+    if (setHover(rs, undefined)) syncScene(rs, session.editor, tools.box.dragging);
     if (Object.values(readout).some(Boolean)) readout = {};
   }
 
@@ -413,7 +507,11 @@
       event.preventDefault();
       return;
     }
-    if (event.ctrlKey || event.metaKey) return;
+    // a ctrl combo still reaches the tool — ctrl-a is the select tool's "everything" — but nothing else
+    if (event.ctrlKey || event.metaKey) {
+      if (run(tools.box.press(key, inputFor(event), session.editor))) event.preventDefault();
+      return;
+    }
 
     if (key === " ") {
       panes.toggleMaximised();
@@ -428,6 +526,18 @@
       event.preventDefault();
       return;
     }
+
+    // a tool's own letter, then the tool's own keys. Neither set touches wasd/qe, so flying is never
+    // something a tool can quietly take away
+    if (tools.useKey(key)) {
+      event.preventDefault();
+      return;
+    }
+    if (run(tools.box.press(key, inputFor(event), session.editor))) {
+      event.preventDefault();
+      return;
+    }
+
     if ("wasdqe".includes(key) && key.length === 1) {
       held.add(key);
       event.preventDefault();
@@ -465,6 +575,16 @@
     >
       <span class="title">{VIEW_TITLES[cell.view]}</span>
       {#if readout[cell.view]}<span class="over">{readout[cell.view]}</span>{/if}
+      {#if tools.band?.view === cell.view}
+        <!-- the rubber band is measured in pixels and has no depth, so it is a div and not geometry -->
+        <div
+          class="band"
+          style:left="{tools.band.rect.left}px"
+          style:top="{tools.band.rect.top}px"
+          style:width="{tools.band.rect.right - tools.band.rect.left}px"
+          style:height="{tools.band.rect.bottom - tools.band.rect.top}px"
+        ></div>
+      {/if}
     </div>
   {/each}
 
@@ -483,6 +603,10 @@
   .pane.active { border-color: #3d4653; }
   .title { position: absolute; left: 7px; top: 5px; }
   .over { position: absolute; left: 7px; bottom: 5px; color: #9aa1ac; }
+  .band {
+    position: absolute; pointer-events: none;
+    border: 1px solid #8fb8ff; background: #8fb8ff1a;
+  }
   .status { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
   .backend {
     position: absolute; right: 8px; top: 5px; pointer-events: none;
