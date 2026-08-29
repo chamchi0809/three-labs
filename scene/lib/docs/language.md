@@ -134,6 +134,39 @@ value like any other — `loftGeometry`, `roundedBoxGeometry`, `roomEnvironment`
 plugin imports each one from the module it is declared in, not from the barrel, so a sheet that names one
 addon bundles one addon. `tscene check --no-addons` turns the reflection off.
 
+### tscene/height
+
+`tscene/height` is an opt-in module — `tscene check --module tscene/height`, or `modules` in the vite
+plugin — that adds one class: `heightMaterial`. It is everything `meshStandardMaterial` is, plus a
+`heightMap` and a `depth` in metres, and it puts brick, stone, panelling and damage on a flat wall by
+marching a ray through the height field instead of by modelling any of it.
+
+```css +height
+--brick: heightMaterial {
+  map: texture("./brick.png");
+  normalMap: texture("./brick_n.png");
+  heightMap: texture("./brick_h.png");
+  depth: 0.03;
+}
+
+mesh #wall {
+  geometry: boxGeometry(4, 3, 0.2);
+  material: var(--brick);
+}
+```
+
+`depth` is the only number worth setting. How the surface is shaded is decided per pixel from how far
+away it is and how square-on it is: a normal map alone out at the fade distance, a marched ray through
+the middle, and up close the fragment also writes the depth it appears to have, so the relief intersects
+other geometry and catches shadows instead of being painted on. The tiers are a ramp rather than a
+switch, so nothing pops as a camera walks towards a wall, and `tuning` moves the ramp for a project whose
+idea of "close" is not a few metres.
+
+Because `depth` is a length, the material has to know how much wall one texture tile covers — and it
+reads that off the geometry rather than being told, so three centimetres of relief is three centimetres
+on a one-metre tile and on a four-metre one alike. A `heightMaterial` with no `heightMap` on it costs
+what a standard material costs; the map is what turns the machinery on.
+
 ### Constructor aliases
 
 `vec2()` `vec3()` `vec4()` `color()` `euler()` `quat()` `matrix4()` are aliases for the matching three

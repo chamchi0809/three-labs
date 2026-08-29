@@ -47,15 +47,50 @@ export type EntityDef = {
   file?: string;
 };
 
+/**
+ * The texture slots the editor draws with.
+ *
+ * A short list on purpose. A sheet may hang anything three understands off a material, and the runtime
+ * will honour all of it; these seven are the ones the *viewport* knows what to do with, and a slot the
+ * editor cannot draw is better left to the runtime than approximated in the preview.
+ */
+export const MAP_SLOTS = [
+  "map", "normalMap", "roughnessMap", "metalnessMap", "aoMap", "emissiveMap", "heightMap",
+] as const;
+
+export type MapSlot = (typeof MAP_SLOTS)[number];
+
 export type MaterialDef = {
   /** the `--var`'s name, without the dashes — what a face's `material:` names */
   name: string;
-  /** the node it is declared as: `meshStandardMaterial`, `meshPhysicalMaterial`, … */
+  /** the node it is declared as: `meshStandardMaterial`, `heightMaterial`, … */
   type: string;
   /** its `color`, when it wrote a literal one — the swatch the browser shows */
   colour?: number;
+  /**
+   * The url each slot's `texture(…)` names, exactly as the sheet wrote it.
+   *
+   * As written rather than resolved, because resolving is the loader's business and it needs to know
+   * which file the declaration came from — which is what {@link MaterialDef.file} is for.
+   */
+  maps: Partial<Record<MapSlot, string>>;
+  /** the literal scalars it wrote; anything computed is left standing for the runtime to fold */
+  roughness?: number;
+  metalness?: number;
+  /**
+   * Metres of relief, from a `heightMaterial`'s `depth`.
+   *
+   * The one knob the height material gives a level designer. Everything else about the three tiers —
+   * whether a pixel is normal-mapped, marched, or writing its own depth — follows from how far away the
+   * camera is, and a designer who had to choose that per material would be choosing wrong at every
+   * distance but one.
+   */
+  depth?: number;
   file?: string;
 };
+
+/** a material declared with a `heightMap`, whatever it calls itself — the tier machinery follows the map */
+export const hasRelief = (def: MaterialDef): boolean => def.maps.heightMap !== undefined;
 
 export type Catalogue = { entities: EntityDef[]; materials: MaterialDef[] };
 
@@ -135,13 +170,25 @@ export function materialOf(member: Extract<Member, { kind: "var" }>, file?: stri
   const v = member.value;
   if (v.kind !== "object" || !MATERIAL.test(v.name)) return undefined;
   const colour = colourOf(v.body);
+  const maps: Partial<Record<MapSlot, string>> = {};
+  for (const slot of MAP_SLOTS) {
+    const url = urlOf(v.body, slot);
+    if (url !== undefined) maps[slot] = url;
+  }
   return {
     name: member.name,
     type: v.name,
     ...(colour !== undefined ? { colour } : {}),
+    maps,
+    ...literal(v.body, "roughness"),
+    ...literal(v.body, "metalness"),
+    ...literal(v.body, "depth"),
     ...(file !== undefined ? { file } : {}),
   };
 }
+
+const propIn = (body: Member[], name: string): Value | undefined =>
+  body.find((m): m is Extract<Member, { kind: "prop" }> => m.kind === "prop" && m.name === name)?.value;
 
 /** a material's `color`, when it wrote a literal one — a swatch is worth more than a name in a list */
 function colourOf(body: Member[]): number | undefined {
@@ -151,6 +198,26 @@ function colourOf(body: Member[]): number | undefined {
     if (m.value.kind === "number") return m.value.value;
   }
   return undefined;
+}
+
+/**
+ * The file a slot's `texture("…")` names.
+ *
+ * Only the literal form is read. `map: var(--atlas)` and `map: texture(calc(…))` are perfectly good
+ * tscene and the runtime resolves both, but the editor cannot know what they come out as without running
+ * the sheet — and a preview that guessed would be a preview that showed the wrong wall.
+ */
+function urlOf(body: Member[], name: string): string | undefined {
+  const v = propIn(body, name);
+  if (v?.kind !== "object" || v.name !== "texture") return undefined;
+  const first = v.args[0];
+  return first?.kind === "string" ? first.value : undefined;
+}
+
+/** a scalar the declaration wrote as a plain number, as a spreadable fragment so undefined stays absent */
+function literal(body: Member[], name: "roughness" | "metalness" | "depth"): { [k in typeof name]?: number } {
+  const v = propIn(body, name);
+  return v?.kind === "number" ? { [name]: v.value } : {};
 }
 
 // ---------------------------------------------------------------- assembling

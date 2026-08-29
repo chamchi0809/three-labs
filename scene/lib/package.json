@@ -41,6 +41,10 @@
       "types": "./dist/addons.d.ts",
       "import": "./dist/addons.js"
     },
+    "./height": {
+      "types": "./dist/height.d.ts",
+      "import": "./dist/height.js"
+    },
     "./bakery": {
       "types": "./dist/bakery/index.d.ts",
       "import": "./dist/bakery/index.js"
@@ -69,7 +73,7 @@
     "prepack": "pnpm build",
     "docs": "typedoc",
     "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/docs.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/bake.check.ts",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/brush.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/raster.test.ts"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/scene.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/brush.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/height.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/lsp.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/bakery/raster.test.ts"
   },
   "peerDependencies": {
     "sharp": ">=0.34.0",

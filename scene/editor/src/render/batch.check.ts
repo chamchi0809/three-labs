@@ -7,8 +7,8 @@ import { boxFaces, buildBrush, type BrushMesh, type Vec3 } from "tscene";
 import { report, test } from "../check.ts";
 import { overlaps } from "./arena.ts";
 import {
-  batchBounds, clearBatch, dropBrush, entryOf, flagsOf, flushBatch, idOf, newBatch, setBrush, setFlags,
-  FACE_SELECTED, HOVERED, SELECTED,
+  batchBounds, clearBatch, dropBrush, entryOf, flagsOf, flushBatch, idOf, materialGroups, newBatch,
+  setBrush, setFlags, FACE_SELECTED, HOVERED, SELECTED,
 } from "./batch.ts";
 
 /** a solid, built the way the kernel builds one, so the checks are about real vertex counts */
@@ -39,8 +39,8 @@ test("two solids sit end to end and each knows where its own faces are", () => {
   assert.deepEqual(b.span, { start: 36, count: 36 });
 
   assert.equal(a.faces.length, 6);
-  assert.deepEqual(a.faces[0], { face: 0, start: 0, count: 6 });
-  assert.deepEqual(b.faces[0], { face: 0, start: 36, count: 6 }, "face spans are absolute, not per-solid");
+  assert.deepEqual(a.faces[0], { face: 0, start: 0, count: 6, slot: 0 });
+  assert.deepEqual(b.faces[0], { face: 0, start: 36, count: 6, slot: 0 }, "face spans are absolute, not per-solid");
   assert.deepEqual(overlaps(batch.arena), []);
 });
 
@@ -223,6 +223,60 @@ test("flags survive a re-set of the same solid only if they are asked for again"
 test("flags on a solid the batch never had are a no-op rather than a throw", () => {
   const batch = newBatch();
   assert.equal(setFlags(batch, "gone", () => SELECTED), false);
+});
+
+// ---------------------------------------------------------------- material groups
+
+test("faces of one material next to each other are one group, not six", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT, undefined, () => 2);
+  assert.deepEqual(materialGroups(batch), [{ start: 0, count: 36, materialIndex: 2 }]);
+});
+
+test("a run breaks where the slot changes and picks up again after it", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT, undefined, (face) => (face === 3 ? 1 : 0));
+  assert.deepEqual(materialGroups(batch), [
+    { start: 0, count: 18, materialIndex: 0 },
+    { start: 18, count: 6, materialIndex: 1 },
+    { start: 24, count: 12, materialIndex: 0 },
+  ]);
+});
+
+test("groups are in draw order across solids, whatever order they went in", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT, undefined, () => 0);
+  setBrush(batch, "b", UNIT, undefined, () => 0);
+  setBrush(batch, "a", UNIT, undefined, () => 1); // rewritten last, still first in the buffer
+  assert.deepEqual(materialGroups(batch), [
+    { start: 0, count: 36, materialIndex: 1 },
+    { start: 36, count: 36, materialIndex: 0 },
+  ]);
+});
+
+test("a hole left by a dropped solid does not join the runs either side of it", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT, undefined, () => 1);
+  setBrush(batch, "b", UNIT, undefined, () => 1);
+  setBrush(batch, "c", UNIT, undefined, () => 1);
+  dropBrush(batch, "b");
+  assert.deepEqual(materialGroups(batch), [
+    { start: 0, count: 36, materialIndex: 1 },
+    { start: 72, count: 36, materialIndex: 1 },
+  ], "the hole is collapsed geometry, and drawing it would draw a point at the origin");
+});
+
+test("only the things that move a face into a different run mark the groups stale", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT);
+  assert.equal(batch.groupsDirty, true);
+  materialGroups(batch);
+  assert.equal(batch.groupsDirty, false);
+
+  setFlags(batch, "a", () => SELECTED);
+  assert.equal(batch.groupsDirty, false, "hovering and selecting must never re-sort the groups");
+  dropBrush(batch, "a");
+  assert.equal(batch.groupsDirty, true);
 });
 
 // ---------------------------------------------------------------- starting over

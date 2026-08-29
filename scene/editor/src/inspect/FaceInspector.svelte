@@ -12,6 +12,7 @@
    * set of faces first.
    */
   import type { UvMode } from "tscene";
+  import { hasRelief, materialByName } from "../doc/catalogue.ts";
   import { faceInfo, facesInScope } from "../doc/inspect.ts";
   import {
     fitUv, flipUv, justifyUv, nudgeUv, resetUv, rotateUv, setUvScale, withFace, type Justify,
@@ -68,6 +69,19 @@
 
   const setMaterial = (material: string) =>
     edit("set material", (b, i) => withFace(b, i, { material }), material);
+
+  /**
+   * The relief the picked faces are made of, when they agree on one material and it has a height map.
+   *
+   * Deliberately not shown for a mixed selection. Depth belongs to the material, so dragging it with two
+   * materials picked would change both, and a slider that silently edits something not in front of you is
+   * worse than no slider.
+   */
+  const relief = $derived.by(() => {
+    if (!info || info.material.mixed || !info.material.value) return undefined;
+    const def = materialByName(library.catalogue, info.material.value);
+    return def && hasRelief(def) ? def : undefined;
+  });
 </script>
 
 {#if !info}
@@ -121,6 +135,24 @@
     </span>
   </div>
 
+  {#if relief}
+    <!-- one knob, because there is one thing to decide. Whether a pixel is normal-mapped, marched, or
+         writing its own depth follows from how far the camera is, and a designer choosing that per
+         material would be choosing wrong at every distance but one -->
+    <div class="relief">
+      <label for="face-depth">depth</label>
+      <input id="face-depth" type="range" min="0" max="0.12" step="0.001"
+        value={library.depthOf(relief.name) ?? 0.03}
+        oninput={(e) => library.setDepth(relief.name, Number((e.target as HTMLInputElement).value))} />
+      <span class="unit">{Math.round((library.depthOf(relief.name) ?? 0.03) * 1000)} mm</span>
+      {#if library.overridden(relief.name)}
+        <button class="revert" title="back to the {relief.depth ?? 0.03} m the sheet declares"
+          onclick={() => library.setDepth(relief.name, undefined)}>sheet</button>
+      {/if}
+    </div>
+    <p class="none">{relief.name} has relief · the slider is this session only, not the sheet</p>
+  {/if}
+
   <div class="tools">
     <button onclick={() => edit("reset material", (b, i) => resetUv(b, i), "reset")} title="offset 0, scale 1, no rotation">reset</button>
     <button onclick={() => edit("fit material", (b, i) => fitUv(b, i), "fitted")} title="one tile across the whole face">fit</button>
@@ -157,12 +189,18 @@
   .unit { color: var(--dim); font: var(--mono); align-self: center; }
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
   .tools { display: flex; flex-wrap: wrap; gap: 3px; margin: 6px 0; }
-  .tools button, .modes button {
+  .relief {
+    display: grid; grid-template-columns: 56px 1fr auto auto; gap: 4px; align-items: center;
+    margin-top: 6px;
+  }
+  .relief label { color: var(--dim); font: var(--mono); }
+  .relief input { width: 100%; accent-color: var(--edge); }
+  .tools button, .modes button, .relief .revert {
     padding: 2px 7px; cursor: pointer;
     background: var(--raised); border: 1px solid var(--line); border-radius: 3px;
     font: var(--mono); color: var(--text);
   }
-  .tools button:hover, .modes button:hover { border-color: var(--edge); color: var(--ink); }
+  .tools button:hover, .modes button:hover, .relief .revert:hover { border-color: var(--edge); color: var(--ink); }
   .modes button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
   h3 {
     margin: 12px 0 4px; padding-top: 8px; border-top: 1px solid var(--line);

@@ -15,11 +15,14 @@
   import * as THREE from "three/webgpu";
   import { idOf } from "../render/batch.ts";
   import { newCompass, updateCompass } from "../render/compass.ts";
+  import { look } from "../render/look.svelte.ts";
   import { COLOURS } from "../render/materials.ts";
   import { newPicker, pickAt } from "../render/pick.ts";
   import {
-    clearDecor, newRenderScene, sceneBounds, setDecor, setHover, setHoverHandle, syncHandles, syncScene,
+    clearDecor, newRenderScene, sceneBounds, setDecor, setHover, setHoverHandle, syncHandles, syncLook,
+    syncScene,
   } from "../render/scene.ts";
+  import { library } from "../library.svelte.ts";
   import { layoutLabels } from "../render/text.ts";
   import type { Bounds } from "../brush/builder.ts";
   import { nodeById, nodeBounds, union } from "../doc/document.ts";
@@ -122,6 +125,15 @@
   $effect(() => {
     syncScene(rs, session.editor, tools.box.dragging);
     syncHandles(rs, session.editor, tools.current.handles);
+    moved = true;
+  });
+
+  // The look gets an effect of its own rather than a line inside the one above, because hovering a wall
+  // runs `syncScene` sixty times a second and rebuilding the map's materials at that rate would recompile
+  // every shader in the level between two mouse positions. `syncLook` guards both halves on identity, so
+  // this being reached often is fine and this being *in* the hot path would not be.
+  $effect(() => {
+    syncLook(rs, session.editor, library.catalogue, look.current);
     moved = true;
   });
 

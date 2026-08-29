@@ -10,6 +10,7 @@
   import { clampExponent, formatSize } from "./grid/snap.ts";
   import { withGrid } from "./doc/editor.ts";
   import { isEmpty } from "./doc/selection.ts";
+  import { look } from "./render/look.svelte.ts";
   import { LAYOUTS } from "./viewport/layout.ts";
   import { panes } from "./viewport/views.svelte.ts";
   import { session } from "./session.svelte.ts";
@@ -71,7 +72,7 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M11 · groups, layers, tags, issues</span>
+    <span class="milestone">M12 · materials, relief, real lights</span>
     <span class="tools">
       {#each tools.all as tool (tool.id)}
         <button
@@ -80,6 +81,20 @@
           onclick={() => tools.use(tool.id)}>{tool.title}</button
         >
       {/each}
+    </span>
+    <!-- two states, not a slider: "classic" is what a level is built in and "modern" is what it will look
+         like, and anything in between is a third thing a designer has to think about for no gain -->
+    <span class="looks">
+      <button
+        class:on={!look.pbr}
+        title="flat shading, one material, one draw call — the shape of the level"
+        onclick={() => (look.current = "classic")}>classic</button
+      >
+      <button
+        class:on={look.pbr}
+        title="the sheet's own materials and the map's own lights — what a player will see"
+        onclick={() => (look.current = "pbr")}>modern</button
+      >
     </span>
     <span class="layouts">
       {#each LAYOUTS as kind, i (kind)}
@@ -121,14 +136,16 @@
     color: var(--text);
   }
   b { color: var(--ink); font-weight: 600; }
-  .layouts, .tools { display: flex; gap: 3px; }
-  .layouts { margin-left: auto; }
-  .layouts button, .tools button {
+  .layouts, .tools, .looks { display: flex; gap: 3px; }
+  .looks { margin-left: auto; }
+  .layouts button, .tools button, .looks button {
     height: 18px; padding: 0 6px; cursor: pointer;
     background: var(--raised); border: 1px solid var(--line); border-radius: 3px;
     font: var(--mono); color: var(--dim);
   }
   .layouts button { width: 20px; padding: 0; }
-  .layouts button:hover, .tools button:hover { border-color: var(--edge); color: var(--text); }
-  .layouts button.on, .tools button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
+  .layouts button:hover, .tools button:hover, .looks button:hover { border-color: var(--edge); color: var(--text); }
+  .layouts button.on, .tools button.on, .looks button.on {
+    background: var(--on); border-color: var(--edge); color: var(--ink);
+  }
 </style>

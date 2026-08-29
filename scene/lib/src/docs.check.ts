@@ -42,13 +42,24 @@ function examples(file: string): Example[] {
 const noImports: Loader = async (spec, from) => ({ text: "", file: path.resolve(path.dirname(from ?? "."), spec) });
 
 const schema = loadSchema();
+
+/**
+ * The schema an example marked `+height` is checked against.
+ *
+ * `heightMaterial` is not part of three, and `tscene/height` is an opt-in module rather than something
+ * every project pays for — so documenting it means documenting the opt-in too. Reflected from the source
+ * rather than from `dist`, so this check does not need a build to have happened first.
+ */
+const withHeight = loadSchema({ modules: ["./src/height.ts"], cwd: root, cache: false });
+
 const docs = ["README.md", "docs/language.md", "docs/bakery.md"];
 
 for (const doc of docs) {
   for (const example of examples(doc)) {
     const where = `${example.file}:${example.line}`;
     await check(`${where} compiles`, async () => {
-      const diagnostics = await checkSource(example.source, `${where}.tscene`, schema, noImports);
+      const against = example.flags.includes("+height") ? withHeight : schema;
+      const diagnostics = await checkSource(example.source, `${where}.tscene`, against, noImports);
       const errors = diagnostics.filter((d) => d.severity === "error").map((d) => d.message);
       const expected = /^error\b/.test(example.flags) ? example.flags.replace(/^error:?\s*/, "") : undefined;
       if (expected === undefined) return assert.deepEqual(errors, [], `example should compile clean`);

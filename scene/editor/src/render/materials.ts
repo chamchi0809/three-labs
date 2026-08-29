@@ -24,8 +24,8 @@ import {
 import type { Node } from "three/webgpu";
 import {
   attribute, bitAnd, cameraPosition, cameraProjectionMatrix, color, float, floor, fwidth, int, max, mix,
-  mod, modelViewMatrix, normalWorld, positionGeometry, positionWorld, screenDPR, select, smoothstep,
-  uniform, vec3, vec4, viewportSize,
+  mod, modelViewMatrix, normalWorld, oneMinus, positionGeometry, positionWorld, screenDPR, select,
+  smoothstep, uniform, vec3, vec4, viewportSize,
 } from "three/tsl";
 import { FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED } from "./batch.ts";
 import { HANDLE_PIXELS } from "./handles.ts";
@@ -72,18 +72,68 @@ const pick = /*@__PURE__*/ attribute<"vec2">("pick", "vec2");
 const has = (bit: number) => select(bitAnd(int(flag), int(bit)).greaterThan(int(0)), float(1), float(0));
 
 /**
- * A base colour put through everything the flags say about it, in the order a designer expects to see:
- * lock and out-of-group first because they are about what is *reachable*, then selection, then hover on
- * top because hover is feedback about right now and must never be hidden by state.
+ * Everything the flags say about a surface, in the order a designer expects to see: lock and out-of-group
+ * first because they are about what is *reachable*, then selection, then hover on top because hover is
+ * feedback about right now and must never be hidden by state.
  */
-function tinted(base: Node<"color">) {
-  let out = mix(base, color(COLOURS.outside), has(OUTSIDE).mul(0.55));
-  out = mix(out, color(COLOURS.locked), has(LOCKED).mul(0.7));
-  out = mix(out, color(COLOURS.selected), has(SELECTED).mul(0.55));
-  out = mix(out, color(COLOURS.faceSelected), has(FACE_SELECTED).mul(0.75));
-  out = mix(out, color(COLOURS.hovered), has(HOVERED).mul(0.35));
-  return out;
+const FLAG_LAYERS: { colour: number; amount: number; bit: number }[] = [
+  { bit: OUTSIDE, colour: COLOURS.outside, amount: 0.55 },
+  { bit: LOCKED, colour: COLOURS.locked, amount: 0.7 },
+  { bit: SELECTED, colour: COLOURS.selected, amount: 0.55 },
+  { bit: FACE_SELECTED, colour: COLOURS.faceSelected, amount: 0.75 },
+  { bit: HOVERED, colour: COLOURS.hovered, amount: 0.35 },
+];
+
+/**
+ * One layer of the editor's marks: a colour, and how much of it to lay over what is underneath.
+ *
+ * Untyped nodes, deliberately. The TSL typings separate `color` from `vec3` and the arithmetic below —
+ * multiply, add, divide — is the same operation on both; typing it either way turns this fold into a
+ * chain of conversions that generate no code and say nothing.
+ */
+type AnyNode = any;
+type Ink = { tint: AnyNode; amount: AnyNode };
+
+/**
+ * Every mark the editor makes on a surface, collapsed into one colour and one amount.
+ *
+ * A chain of `mix`es is the obvious way to write this and it is what the classic look used, but it needs
+ * the base colour to chain *onto* — and the height material's base colour does not exist until after the
+ * parallax march has run, inside a graph this file has no business rebuilding. So the layers are folded
+ * from the top down instead: the amount is what is left after each layer has taken its bite, and the tint
+ * is the layers' colours weighted by the bite each one actually got. Applying it is one `mix`, which is
+ * exactly the hook `HeightMaterial.tint` takes, and the result is identical to the chain it replaces.
+ *
+ * Passing the grid in draws it here too, so a brick wall gets the same lines a grey one does. That is the
+ * point of an on-face grid: it says where the floor is, and a floor with a material on it is still a floor.
+ */
+export function editorInk(grid?: GridUniforms): Ink {
+  const layers: Ink[] = FLAG_LAYERS.map((l) => ({
+    tint: color(l.colour),
+    amount: has(l.bit).mul(l.amount),
+  }));
+  if (grid) layers.push(gridInk(grid));
+
+  // `keep` is how much of the base survives everything after this layer, which is the weight this layer's
+  // colour is actually seen at — walking backwards is what makes that available before it is needed
+  let keep: AnyNode = float(1);
+  let weighted: AnyNode = vec3(0);
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i]!;
+    weighted = weighted.add(vec3(layer.tint).mul(layer.amount).mul(keep));
+    keep = keep.mul(oneMinus(layer.amount));
+  }
+  const amount = oneMinus(keep);
+  // nothing marked means nothing to divide by; the amount is zero there, so what the colour is cannot
+  // be seen — but a NaN in an unseen colour is still a NaN, and some drivers propagate it
+  return { tint: color(weighted.div(max(amount, float(1e-4)))), amount };
 }
+
+/** a base colour with the editor's marks over it — the classic look, and the graph everything else copies */
+const tinted = (base: AnyNode, grid?: GridUniforms): AnyNode => {
+  const { tint, amount } = editorInk(grid);
+  return mix(base, tint, amount);
+};
 
 // ---------------------------------------------------------------- the grid
 
@@ -166,14 +216,15 @@ function gridInk(grid: GridUniforms, fade = true) {
  * The brush faces.
  *
  * Standard rather than basic even in the "classic" look, because a map with no shading at all reads as one
- * flat blue-grey mass and a designer cannot tell a wall from a floor. M12 replaces the colour node with
- * real PBR and the Height Material; the flag and grid parts of this graph survive that unchanged, which is
- * why they are written as separate pieces here.
+ * flat blue-grey mass and a designer cannot tell a wall from a floor.
+ *
+ * This is what the classic look *is*: one material for the whole map, one draw call, and no textures to
+ * load or wait for. The modern look in `palette.ts` builds a material per declaration instead and reuses
+ * {@link editorInk} for the marks, so the two looks put selection and grid in exactly the same places.
  */
 export function faceMaterial(grid: GridUniforms): MeshStandardNodeMaterial {
   const material = new MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
-  const { amount, tint } = gridInk(grid);
-  material.colorNode = mix(tinted(color(COLOURS.face)), tint, amount);
+  material.colorNode = tinted(color(COLOURS.face), grid);
   material.name = "broom:face";
   return material;
 }

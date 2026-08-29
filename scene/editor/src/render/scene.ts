@@ -13,24 +13,25 @@
  * numbers to get out of step.
  */
 import {
-  AmbientLight, BufferAttribute, BufferGeometry, DirectionalLight, Group, HemisphereLight,
-  InstancedBufferAttribute, InstancedBufferGeometry, LineSegments, Mesh, PlaneGeometry, Scene,
-  type Object3D,
+  BufferAttribute, BufferGeometry, Group, InstancedBufferAttribute, InstancedBufferGeometry, LineSegments,
+  Mesh, PlaneGeometry, Scene, type Material, type Object3D,
 } from "three/webgpu";
 import { brushToMesh } from "../brush/brush.ts";
 import type { Bounds } from "../brush/builder.ts";
+import type { Catalogue } from "../doc/catalogue.ts";
 import type { BrushNode, Node, NodeId, World } from "../doc/document.ts";
 import { boundsCentre, childrenOf, nodeById, nodeBounds } from "../doc/document.ts";
 import type { Editor } from "../doc/editor.ts";
 import { isFaceSelected, isSelected, type Selection } from "../doc/selection.ts";
 import type { Upload } from "./arena.ts";
 import {
-  batchBounds, clearBatch, dropBrush, entryOf, flushBatch, newBatch, setBrush, setFlags, FACE_SELECTED,
-  HOVERED, LOCKED, OUTSIDE, SELECTED, type BrushBatch, type Flags,
+  batchBounds, clearBatch, dropBrush, entryOf, flushBatch, materialGroups, newBatch, setBrush, setFlags,
+  FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED, type BrushBatch, type Flags,
 } from "./batch.ts";
 import {
   brushHandles, newHandles, setHandleFlags, setHandles, type Handle, type HandleSet,
 } from "./handles.ts";
+import { editorLights, mapLights } from "./lights.ts";
 import { linkSegments, linksOf } from "./links.ts";
 import {
   boxSegments, clearLines, dropLines, edgeSegments, flushLines, newLines, setLineFlags, setLines,
@@ -39,6 +40,7 @@ import {
 import {
   edgeMaterial, faceMaterial, gridPlaneMaterial, handleMaterial, newGridUniforms, type GridUniforms,
 } from "./materials.ts";
+import { newPalette, setMaterials, slotOf, type Look, type Palette } from "./palette.ts";
 import { hideLabels, newLabels, setLabel, type Labels } from "./text.ts";
 
 /** what the mouse is currently over, which is the one piece of state the renderer owns itself */
@@ -53,8 +55,14 @@ export type RenderScene = {
   world: Group;
   /** the things drawn over the map — bounds, guides, spikes, links, handles, labels */
   overlays: Group;
+  /** whatever is currently lighting the map: the editor's fixed rig, or the level's own lights */
+  lights: Group;
 
   grid: GridUniforms;
+  /** the one grey material the classic look draws the whole map with */
+  classic: Material;
+  /** the modern look's material per declaration; the slot numbering is shared by both looks */
+  palette: Palette;
   brushes: BrushBatch;
   edges: LineBatch;
   /** bounds, spikes, guides and links all share one buffer; they are all just lines */
@@ -82,6 +90,15 @@ export type RenderScene = {
   hoverHandle: number | undefined;
   /** the decor keys the last sync wrote, so the ones it did not renew can be dropped in one pass */
   decorKeys: Set<string>;
+  /**
+   * What the look was last applied for.
+   *
+   * Both halves matter and both are compared by identity. Rebuilding the palette recompiles every shader in
+   * the map, and rebuilding the lights allocates a light per torch — neither is something to do because the
+   * mouse moved, and the mouse moving is most of what makes the renderer run.
+   */
+  looked: { look: Look; catalogue: Catalogue } | undefined;
+  lit: { look: Look; world: World; catalogue: Catalogue } | undefined;
 };
 
 export function newRenderScene(gridSize = 1): RenderScene {
@@ -91,8 +108,13 @@ export function newRenderScene(gridSize = 1): RenderScene {
   scene.add(world, overlays);
 
   const grid = newGridUniforms(gridSize);
+  const palette = newPalette(grid);
 
-  const faceMesh = new Mesh(new BufferGeometry(), faceMaterial(grid));
+  // the classic material is built here and kept for the life of the scene, separately from the palette's
+  // own slot 0 — the palette is rebuilt and disposed whenever the catalogue changes, and the material the
+  // classic look is holding must not be one of the casualties
+  const classic = faceMaterial(grid);
+  const faceMesh = new Mesh(new BufferGeometry(), classic);
   faceMesh.frustumCulled = false; // one mesh holds the whole map, so its box is always on screen
   faceMesh.name = "broom:faces";
 
@@ -121,10 +143,16 @@ export function newRenderScene(gridSize = 1): RenderScene {
 
   world.add(gridPlane, faceMesh, edgeLines);
   overlays.add(decorLines, handleMesh);
-  scene.add(...editorLights());
+
+  // a group of its own, so swapping what lights the map is one `clear` and one `add` rather than a search
+  // through the scene for which children happened to be lights
+  const lights = new Group();
+  lights.name = "broom:lights";
+  lights.add(...editorLights());
+  scene.add(lights);
 
   return {
-    scene, world, overlays, grid,
+    scene, world, overlays, lights, grid, classic, palette,
     brushes: newBatch(),
     edges: newLines(),
     decor: newLines(),
@@ -135,22 +163,68 @@ export function newRenderScene(gridSize = 1): RenderScene {
     hover: undefined,
     hoverHandle: undefined,
     decorKeys: new Set(),
+    looked: undefined,
+    lit: undefined,
   };
 }
 
+// ---------------------------------------------------------------- the look
+
 /**
- * The editor's own lighting, which is not the map's.
+ * The classic/modern switch, and everything that follows from it.
  *
- * A brush editor is not a preview — the light here exists so that a wall, a floor and a ceiling look like
- * three different things, and for no other reason. So it is fixed to the world rather than authored: a sky
- * fill that separates up-facing surfaces from down-facing ones, one key from over the designer's left
- * shoulder, and enough ambient that nothing is ever unreadably dark. M12's PBR look brings the map's real
- * lights; this stays as what "classic" means.
+ * Both halves are guarded on identity rather than done every sync, because both are expensive in ways that
+ * a mouse move must not be: the palette recompiles a shader per material, and the lights allocate one
+ * object per light in the map. The catalogue is in both guards because a sheet that declared a new material
+ * changes what the modern look draws, and the world is in the lighting's because moving a torch moves a
+ * light.
+ *
+ * Kept out of {@link syncScene} on purpose. The document knows nothing about which look is showing and the
+ * look knows nothing about undo — the two meet here and nowhere else.
  */
-function editorLights(): Object3D[] {
-  const key = new DirectionalLight(0xffffff, 1.6);
-  key.position.set(-0.6, 1, 0.45);
-  return [new HemisphereLight(0xcfd6e0, 0x2a2c30, 1.1), key, new AmbientLight(0xffffff, 0.35)];
+export function syncLook(rs: RenderScene, editor: Editor, catalogue: Catalogue, look: Look): void {
+  if (rs.looked?.look !== look || rs.looked.catalogue !== catalogue) {
+    setMaterials(rs.palette, catalogue.materials);
+    rs.faceMesh.material = look === "pbr" ? rs.palette.materials : rs.classic;
+    applyGroups(rs, look);
+    rs.looked = { look, catalogue };
+  }
+  syncLights(rs, editor.world, catalogue, look);
+}
+
+/**
+ * The draw groups on the face mesh, or none at all.
+ *
+ * None at all is the classic look and it is not an omission: three ignores `geometry.groups` entirely when
+ * the material is not an array, so clearing them is what keeps the classic look at literally one draw call
+ * — and what keeps the pick pass at one, since it swaps a single material in over whatever is there.
+ */
+function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "classic"): void {
+  const geometry = rs.faceMesh.geometry;
+  geometry.clearGroups();
+  if (look !== "pbr") {
+    rs.brushes.groupsDirty = false;
+    return;
+  }
+  for (const group of materialGroups(rs.brushes)) {
+    geometry.addGroup(group.start, group.count, group.materialIndex);
+  }
+}
+
+/** the map's own lights when it has any, and the editor's rig when it has not */
+function syncLights(rs: RenderScene, world: World, catalogue: Catalogue, look: Look): void {
+  if (rs.lit?.look === look && rs.lit.world === world && rs.lit.catalogue === catalogue) return;
+  rs.lit = { look, world, catalogue };
+
+  rs.lights.clear();
+  const own = look === "pbr" ? mapLights(world, catalogue) : [];
+  for (const light of own.length ? own : editorLights()) {
+    rs.lights.add(light);
+    // a directional or spot light aims at an Object3D, and an Object3D outside the scene graph never gets
+    // a world matrix — so the target has to be in the tree even though it draws nothing
+    const target = (light as { target?: Object3D }).target;
+    if (target && !target.parent) rs.lights.add(target);
+  }
 }
 
 // ---------------------------------------------------------------- the diff
@@ -235,7 +309,16 @@ function syncBrush(rs: RenderScene, node: BrushNode, selection: Selection, conte
     return;
   }
 
-  setBrush(rs.brushes, node.id, mesh, (face) => flags[face] ?? 0);
+  // the slot is claimed by name whether or not the catalogue has the declaration yet: a face that names a
+  // material nobody has read draws grey, and starts drawing brick the moment the sheet it came from is
+  // loaded — without a single vertex being rewritten
+  setBrush(
+    rs.brushes,
+    node.id,
+    mesh,
+    (face) => flags[face] ?? 0,
+    (face) => slotOf(rs.palette, node.brush.faces[face]?.material),
+  );
   const { segments, faces } = edgeSegments(mesh.polygons);
   const ordinal = entryOf(rs.brushes, node.id)!.ordinal;
   setLines(rs.edges, node.id, segments, solidFlags(flags), {
@@ -483,6 +566,9 @@ export function upload(rs: RenderScene): void {
     ],
     flushBatch(rs.brushes),
   );
+  // only geometry moving can change which vertices belong to which material, and only the modern look
+  // reads the answer — so this costs nothing at all in the classic one
+  if (rs.brushes.groupsDirty) applyGroups(rs);
 
   applyBatch(
     rs.edgeLines.geometry,

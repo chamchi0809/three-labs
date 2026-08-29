@@ -40,8 +40,14 @@ export type Flags = number;
 
 // ---------------------------------------------------------------- the batch
 
-/** where one face's vertices ended up, in the batch's own numbering rather than the mesh's */
-export type FaceSpan = { face: number; start: number; count: number };
+/**
+ * Where one face's vertices ended up, in the batch's own numbering rather than the mesh's.
+ *
+ * `slot` is which material the face draws with — an index into the palette, not a name. A number because
+ * that is what `geometry.groups` takes, and because the whole point of assigning it once is that changing
+ * how the map is *shaded* never has to walk the geometry again.
+ */
+export type FaceSpan = { face: number; start: number; count: number; slot: number };
 
 type Entry = {
   span: Span;
@@ -69,6 +75,15 @@ export type BrushBatch = {
   /** ordinals given back, so a map edited all afternoon does not run its numbering into the millions */
   spare: number[];
   nextOrdinal: number;
+  /**
+   * Whether the draw groups have to be worked out again.
+   *
+   * A separate flag rather than a read of the arena's dirty ranges, because those are marked by
+   * {@link setFlags} on every mouse move and rebuilding a sorted, merged group list at that rate would cost
+   * more than the shading it pays for. Only geometry moving — a solid added, dropped, or written with
+   * different materials — can change which vertices belong to which material.
+   */
+  groupsDirty: boolean;
 };
 
 export const newBatch = (): BrushBatch => ({
@@ -82,6 +97,7 @@ export const newBatch = (): BrushBatch => ({
   byOrdinal: new Map(),
   spare: [],
   nextOrdinal: 1, // 0 is "nothing", which is what an empty pick buffer reads as
+  groupsDirty: false,
 });
 
 export const entryOf = (batch: BrushBatch, id: NodeId): Entry | undefined => batch.entries.get(id);
@@ -93,13 +109,15 @@ export const idOf = (batch: BrushBatch, ordinal: number): NodeId | undefined => 
  * One solid's geometry written into the batch.
  *
  * `flags` is asked per face rather than taken as one value, because a solid with one face selected is the
- * ordinary case in a brush editor and the alternative is two passes over the same vertices.
+ * ordinary case in a brush editor and the alternative is two passes over the same vertices. `slots` is
+ * asked the same way and for the same reason — the six sides of a room are routinely six materials.
  */
 export function setBrush(
   batch: BrushBatch,
   id: NodeId,
   mesh: BrushMesh,
   flags: (face: number) => Flags = () => 0,
+  slots: (face: number) => number = () => 0,
 ): void {
   const count = mesh.positions.length / 3;
   const span = reserve(batch.arena, id, count);
@@ -124,7 +142,7 @@ export function setBrush(
   const faces: FaceSpan[] = [];
   for (const group of mesh.groups) {
     const start = span.start + group.start;
-    faces.push({ face: group.face, start, count: group.count });
+    faces.push({ face: group.face, start, count: group.count, slot: slots(group.face) });
     const flag = flags(group.face);
     for (let i = start; i < start + group.count; i++) {
       batch.flag[i] = flag;
@@ -134,6 +152,7 @@ export function setBrush(
   }
 
   batch.entries.set(id, { span, ordinal, faces, bounds: { min, max } });
+  batch.groupsDirty = true;
 }
 
 /** a solid taken out: its space goes back and its ordinal is available again */
@@ -143,6 +162,7 @@ export function dropBrush(batch: BrushBatch, id: NodeId): void {
   batch.entries.delete(id);
   batch.byOrdinal.delete(entry.ordinal);
   batch.spare.push(entry.ordinal);
+  batch.groupsDirty = true;
 
   // A hole in the middle is still inside the draw range, and the vertices in it are the ones this solid
   // left behind — so a deleted wall would go on being drawn until something else claimed its space.
@@ -162,6 +182,7 @@ export function clearBatch(batch: BrushBatch): void {
   batch.byOrdinal.clear();
   batch.spare.length = 0;
   batch.nextOrdinal = 1;
+  batch.groupsDirty = true;
 }
 
 function nextOrdinal(batch: BrushBatch, id: NodeId): number {
@@ -191,6 +212,36 @@ export function setFlags(batch: BrushBatch, id: NodeId, flags: (face: number) =>
     changed = true;
   }
   return changed;
+}
+
+/**
+ * The draw groups the batch's faces make up: one run of vertices per material, in vertex order.
+ *
+ * three draws one group at a time, so the count here is the map's draw call count — which is why adjacent
+ * runs of the same slot are merged rather than emitted per face. A solid's six sides land next to each
+ * other in the arena and are usually one material, so the merge typically turns six groups into one, and a
+ * map with two materials in it draws in nearly two calls rather than in thousands.
+ *
+ * Sorted by start because the arena hands out space in whatever order solids arrived and three walks the
+ * index buffer forwards; an unsorted group list would draw the same map with the vertices in it visited out
+ * of order, which is slower for no reason at all.
+ */
+export function materialGroups(batch: BrushBatch): { start: number; count: number; materialIndex: number }[] {
+  const spans: FaceSpan[] = [];
+  for (const entry of batch.entries.values()) spans.push(...entry.faces);
+  spans.sort((a, b) => a.start - b.start);
+
+  const groups: { start: number; count: number; materialIndex: number }[] = [];
+  for (const span of spans) {
+    const last = groups[groups.length - 1];
+    if (last && last.materialIndex === span.slot && last.start + last.count === span.start) {
+      last.count += span.count;
+      continue;
+    }
+    groups.push({ start: span.start, count: span.count, materialIndex: span.slot });
+  }
+  batch.groupsDirty = false;
+  return groups;
 }
 
 /** the flags one face is currently drawn with — what the renderer's own checks compare against */
