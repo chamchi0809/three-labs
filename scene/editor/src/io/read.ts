@@ -197,10 +197,19 @@ export function readBroom(record: Value): NodeBroom {
   if (locked !== undefined) out.locked = locked;
   const hidden = literalBool(entryOf(record, "hidden"));
   if (hidden !== undefined) out.hidden = hidden;
+  const link = literalString(entryOf(record, "link"));
+  if (link !== undefined) out.link = link;
+  const protect = literalString(entryOf(record, "protect"));
+  if (protect !== undefined) out.protect = protect;
   const size = entryOf(record, "size");
   if (size?.kind === "array" && size.items.length === 6) {
     const numbers = size.items.map(literalNumber);
     if (numbers.every((n): n is number => n !== undefined)) out.size = numbers;
+  }
+  const at = entryOf(record, "at");
+  if (at?.kind === "array" && at.items.length === 12) {
+    const numbers = at.items.map(literalNumber);
+    if (numbers.every((n): n is number => n !== undefined)) out.at = numbers;
   }
   return out;
 }

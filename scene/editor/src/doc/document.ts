@@ -198,10 +198,19 @@ export function replaceNode(world: World, id: NodeId, to: Node | undefined): Wor
   return layers ? { ...world, layers: layers.filter((n): n is LayerNode => n.kind === "layer") } : world;
 }
 
-/** a node changed by a function of itself — the shape almost every tool wants */
+/**
+ * A node changed by a function of itself — the shape almost every tool wants.
+ *
+ * A function that hands back the node it was given means no change, and the world comes back as the same
+ * value rather than as an identical copy. Tools rely on that: "add this tag to every selected node" runs
+ * over nodes that already have it, and a copy per no-op would defeat the identity checks the renderer and
+ * the undo stack are built on.
+ */
 export function updateNode<T extends Node>(world: World, id: NodeId, fn: (node: T) => Node): World {
   const node = nodeById(world, id) as T | undefined;
-  return node ? replaceNode(world, id, fn(node)) : world;
+  if (!node) return world;
+  const to = fn(node);
+  return to === node ? world : replaceNode(world, id, to);
 }
 
 /** several nodes removed at once, so a multi-selection delete is one pass and one new tree */
@@ -241,6 +250,19 @@ export function moveNodes(world: World, ids: NodeId[], parent: NodeId, at?: numb
 export function* subtreeIds(node: Node): Generator<NodeId> {
   yield node.id;
   for (const kid of childrenOf(node)) yield* subtreeIds(kid);
+}
+
+/**
+ * A node and everything under it, as a second node.
+ *
+ * Fresh ids all the way down, and no `#id`: an id is a name in the level, `ref(#lamp)` names one thing by
+ * it, and a copy that took the name with it would leave two nodes answering to it and a sheet that reads
+ * back wrong. Everything else is shared rather than cloned, because every part of it is immutable.
+ */
+export function copyNode(node: Node): Node {
+  const { sheetId: _named, ...rest } = node;
+  const made = { ...rest, id: freshId() } as Node;
+  return hasChildren(made) ? { ...made, children: made.children.map(copyNode) } : made;
 }
 
 /** a group made of the given nodes, in the layer the first of them was on */

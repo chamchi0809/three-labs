@@ -535,12 +535,15 @@ A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a 
 
 ```ts
 type NodeBroom = {
+  at?: number[];
   color?: number;
   hidden?: boolean;
   icon?: string;
   kind?: "point" | "brush";
   layer?: string;
+  link?: string;
   locked?: boolean;
+  protect?: string;
   size?: number[];
 };
 ```
@@ -552,12 +555,15 @@ browser and how it draws an instance. On a node it is that node's place in the w
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="at"></a> `at?` | `number`[] | This copy's place in its link set, as 12 row-major numbers of a 4×3 affine transform. A copy's children are stored in world coordinates like everything else, so this is not what draws them — it is what carries an edit from one copy into the others, and it is written down rather than derived because two copies of the same room can sit at the same place in different orientations. |
 | <a id="color"></a> `color?` | `number` | the editor's tint for this entity, as a colour |
 | <a id="hidden"></a> `hidden?` | `boolean` | - |
 | <a id="icon"></a> `icon?` | `string` | - |
 | <a id="kind"></a> `kind?` | `"point"` \| `"brush"` | `point` is placed by clicking, `brush` is applied to a selection of solids |
 | <a id="layer"></a> `layer?` | `string` | - |
+| <a id="link"></a> `link?` | `string` | The link set this group belongs to: every group carrying the same `link` is the same group, and an edit to one is an edit to all of them. A name rather than a generated id so that a designer can read a diff and see that two copies are the same room. |
 | <a id="locked"></a> `locked?` | `boolean` | - |
+| <a id="protect"></a> `protect?` | `string` | Property names this copy keeps to itself, space separated: `protect: "name visible"`. TrenchBroom's protected properties, and the reason linked groups are usable at all — two copies of a door are the same door except for the one thing that makes them two doors, which is usually a target name. |
 | <a id="size"></a> `size?` | `number`[] | the editor's bounding box: min x y z, then max x y z, in metres |
 
 ***

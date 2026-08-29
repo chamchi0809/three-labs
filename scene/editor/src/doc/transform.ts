@@ -21,7 +21,7 @@
 import type { Vec3 } from "tscene";
 import { transformBrush, type Brush } from "../brush/brush.ts";
 import { transformLocked } from "../brush/uv.ts";
-import { transformPoint, translation, type Mat4 } from "../brush/vec.ts";
+import { IDENTITY, multiply, transformPoint, translation, type Mat4 } from "../brush/vec.ts";
 import {
   childrenOf, hasChildren, replaceNode, type Node, type NodeId, type World,
 } from "./document.ts";
@@ -29,6 +29,10 @@ import { setVec3, vec3Of } from "./props.ts";
 import type { Selection } from "./selection.ts";
 
 export type Transformed = { world: World; problems: string[] };
+
+/** where a linked group stands after being moved: its old place in the set, then the move */
+const placed = (m: Mat4, at: number[] | undefined): Mat4 =>
+  multiply(m, at?.length === 12 ? (at as Mat4) : IDENTITY);
 
 /** one solid moved, with the material either riding along or staying put on the wall */
 export function transformBrushLocked(brush: Brush, m: Mat4, lockUv: boolean) {
@@ -54,7 +58,12 @@ export function transformNode(node: Node, m: Mat4, lockUv: boolean): { node?: No
   }
   if (problems.length) return { problems };
 
-  if (node.kind !== "entity") return { node: { ...node, children }, problems: [] };
+  if (node.kind !== "entity") {
+    // a linked group that moves as a whole has moved *within its set*, and `at` is the record of where it
+    // stands. Left behind, the next propagation would snap the copy back to where it was made
+    const broom = node.broom.link === undefined ? node.broom : { ...node.broom, at: [...placed(m, node.broom.at)] };
+    return { node: { ...node, broom, children }, problems: [] };
+  }
   // an entity with no position is one that has never been placed; giving it one here would invent a
   // property the sheet never had, so it moves only its children and stays where it was written
   const at = vec3Of(node.props, "position");

@@ -1,9 +1,15 @@
 <script lang="ts">
-  // The shell. M7 fills the centre with the pane layout; M10 hangs the inspectors off the right edge.
+  // The shell. M7 fills the centre with the pane layout; M10 hangs the inspectors off the right edge;
+  // M11 gives the structure commands their keys.
   import Views from "./viewport/Views.svelte";
   import Inspector from "./inspect/Inspector.svelte";
+  import {
+    duplicate, group, hideSelection, isolateSelection, leaveGroup, lockSelection, showEverything,
+    ungroup, unlockEverything,
+  } from "./actions.ts";
   import { clampExponent, formatSize } from "./grid/snap.ts";
   import { withGrid } from "./doc/editor.ts";
+  import { isEmpty } from "./doc/selection.ts";
   import { LAYOUTS } from "./viewport/layout.ts";
   import { panes } from "./viewport/views.svelte.ts";
   import { session } from "./session.svelte.ts";
@@ -17,16 +23,38 @@
   // `[` and `]` step the grid, as they do in TrenchBroom; ⌘/Ctrl+Z undoes. Bound on window rather than on
   // the viewport so both still work while the focus sits in a panel. Everything about *where* a view is
   // looking is bound inside `Views.svelte`, which is the only thing that knows how big a pane is.
+  //
+  // The structure keys are here rather than in the viewport for the same reason: grouping is a thing done
+  // to the document, not to a pane, and it should work with the focus in the inspector.
   function onKeydown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return;
+    const command = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
 
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+    if (command && key === "z") {
       if (event.shiftKey) session.redo();
       else session.undo();
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") {
+    } else if (command && key === "r") {
       // TrenchBroom's "repeat last actions", and the reason `again` exists on a command
       session.repeat();
+    } else if (command && key === "g") {
+      if (event.shiftKey) ungroup();
+      else group();
+    } else if (command && key === "d") {
+      duplicate();
+    } else if (command && key === "h") {
+      if (event.altKey) showEverything();
+      else if (event.shiftKey) isolateSelection();
+      else hideSelection();
+    } else if (command && key === "l") {
+      if (event.shiftKey) unlockEverything();
+      else lockSelection();
+    } else if (key === "escape" && session.editor.open && isEmpty(session.editor.selection)) {
+      // escape belongs to the tool while there is a selection to drop — stepping out of a group is what it
+      // means once there is nothing left to drop, which is the order a designer presses it in anyway
+      leaveGroup();
+      event.stopImmediatePropagation();
     } else if (event.key === "[") {
       session.set((e) => withGrid(e, clampExponent(exponent - 1)));
     } else if (event.key === "]") {
@@ -43,7 +71,7 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M10 · inspectors</span>
+    <span class="milestone">M11 · groups, layers, tags, issues</span>
     <span class="tools">
       {#each tools.all as tool (tool.id)}
         <button
@@ -70,7 +98,7 @@
          that is exactly the whitespace the compiler is entitled to drop -->
     <span>selected <b>{selected}</b>{#if faces}{" · "}faces <b>{faces}</b>{/if}</span>
     <span class="note">{note}</span>
-    <span class="hint">[ / ] grid · space maximise · f frame · rmb look · wasd fly</span>
+    <span class="hint">[ / ] grid · ⌘G group · ⌘D duplicate · ⌘H hide · space maximise · f frame · wasd fly</span>
   </footer>
 </div>
 

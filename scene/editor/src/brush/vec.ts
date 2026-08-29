@@ -178,3 +178,30 @@ export const determinant = (m: Mat4): number =>
   m[0] * (m[5] * m[10] - m[6] * m[9]) -
   m[1] * (m[4] * m[10] - m[6] * m[8]) +
   m[2] * (m[4] * m[9] - m[5] * m[8]);
+
+/**
+ * The transform that undoes this one, or nothing when it flattens space.
+ *
+ * Linked groups need it and nothing else does: a copy's edit has to be carried back into the set's own
+ * space before it can be replayed into the others, and "back" is exactly this. It is the general inverse
+ * rather than the rigid-motion shortcut because a linked group may well have been mirrored, and a
+ * transpose would quietly get that case wrong.
+ */
+export function invert(m: Mat4): Mat4 | undefined {
+  const det = determinant(m);
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return undefined;
+  const k = 1 / det;
+  // the adjugate of the linear part, scaled — the classic cofactor formula, written out because three by
+  // three is small enough that a loop would only hide it
+  const a: Mat4 = [
+    (m[5] * m[10] - m[6] * m[9]) * k, (m[2] * m[9] - m[1] * m[10]) * k, (m[1] * m[6] - m[2] * m[5]) * k, 0,
+    (m[6] * m[8] - m[4] * m[10]) * k, (m[0] * m[10] - m[2] * m[8]) * k, (m[2] * m[4] - m[0] * m[6]) * k, 0,
+    (m[4] * m[9] - m[5] * m[8]) * k, (m[1] * m[8] - m[0] * m[9]) * k, (m[0] * m[5] - m[1] * m[4]) * k, 0,
+  ];
+  // the translation of the inverse is the inverse linear part applied to the negated translation
+  const t = transformDirection(a, [-m[3], -m[7], -m[11]]);
+  a[3] = t[0];
+  a[7] = t[1];
+  a[11] = t[2];
+  return a;
+}

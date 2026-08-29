@@ -15,10 +15,13 @@
   import { session } from "../session.svelte.ts";
   import EntityInspector from "./EntityInspector.svelte";
   import FaceInspector from "./FaceInspector.svelte";
+  import IssueBrowser from "./IssueBrowser.svelte";
   import MapInspector from "./MapInspector.svelte";
 
-  type Tab = "map" | "entity" | "face";
-  const TABS: Tab[] = ["map", "entity", "face"];
+  // the issue browser is never *suggested*, only chosen: a panel that jumped to the checker because the
+  // solid being dragged is briefly off the grid would be unusable
+  type Tab = "map" | "entity" | "face" | "issues";
+  const TABS: Tab[] = ["map", "entity", "face", "issues"];
 
   let chosen = $state<Tab | undefined>(undefined);
 
@@ -37,6 +40,7 @@
   <div class="body">
     {#if tab === "map"}<MapInspector />
     {:else if tab === "entity"}<EntityInspector />
+    {:else if tab === "issues"}<IssueBrowser />
     {:else}<FaceInspector />{/if}
   </div>
 </aside>

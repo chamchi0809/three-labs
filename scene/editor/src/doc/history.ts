@@ -17,6 +17,7 @@
  * the one operation nobody wrote a check for — the vertex drag that merged two faces has no inverse drag.
  */
 import { settleEditor, type Editor } from "./editor.ts";
+import { keepInStep } from "./groups.ts";
 
 /** a change to the editor, as a function of it. Pure: the processor decides what to keep */
 export type Command = {
@@ -76,9 +77,14 @@ export const redoName = (h: History): string | undefined => h.future.at(-1)?.nam
 /**
  * One command run. Inside a transaction the change is applied and nothing is pushed — the transaction
  * pushes one entry when it commits.
+ *
+ * Every command passes through {@link keepInStep} on the way, which is what makes an edit to one copy of a
+ * linked group an edit to all of them. It belongs here rather than in each tool for the obvious reason:
+ * there are thirty tools and one processor, and the tool that forgets is the one nobody notices until a
+ * designer has built half a level out of copies that quietly stopped matching.
  */
 export function run(h: History, command: Command): History {
-  const after = settleEditor(command.apply(h.editor));
+  const after = settleEditor(keepInStep(h.editor, command.apply(h.editor)));
   if (untouched(h.editor, after)) return h; // a command that changed nothing does not deserve an entry
   const repeat = command.repeatable ? recorded(h.repeat, command) : h.repeat;
   if (h.open.length) return { ...h, editor: after, repeat };

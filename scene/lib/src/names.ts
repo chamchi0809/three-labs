@@ -297,6 +297,28 @@ export type NodeBroom = {
   layer?: string;
   locked?: boolean;
   hidden?: boolean;
+  /**
+   * The link set this group belongs to: every group carrying the same `link` is the same group, and an
+   * edit to one is an edit to all of them. A name rather than a generated id so that a designer can read
+   * a diff and see that two copies are the same room.
+   */
+  link?: string;
+  /**
+   * This copy's place in its link set, as 12 row-major numbers of a 4×3 affine transform.
+   *
+   * A copy's children are stored in world coordinates like everything else, so this is not what draws
+   * them — it is what carries an edit from one copy into the others, and it is written down rather than
+   * derived because two copies of the same room can sit at the same place in different orientations.
+   */
+  at?: number[];
+  /**
+   * Property names this copy keeps to itself, space separated: `protect: "name visible"`.
+   *
+   * TrenchBroom's protected properties, and the reason linked groups are usable at all — two copies of a
+   * door are the same door except for the one thing that makes them two doors, which is usually a target
+   * name.
+   */
+  protect?: string;
 };
 
 /**
@@ -319,6 +341,9 @@ export const BROOM: Record<"scene" | "node", Record<string, Knob>> = {
     layer: { type: "string" },
     locked: { type: "boolean" },
     hidden: { type: "boolean" },
+    link: { type: "string" },
+    at: { type: "numbers", length: 12 },
+    protect: { type: "string" },
   },
 };
 

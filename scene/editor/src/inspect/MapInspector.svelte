@@ -10,14 +10,21 @@
    * eye and its lock are the two controls a designer reaches for a hundred times a day: hide the detail
    * pass to work on the blockout, lock the blockout so the detail pass cannot nudge it.
    */
-  import { layerNode, updateNode, type LayerNode, type NodeId } from "../doc/document.ts";
+  import {
+    deleteLayer, hideNode, lockNode, moveSelectionToLayer, nameLayer, newLayer, showEverything,
+    unlockEverything, useLayer,
+  } from "../actions.ts";
+  import type { LayerNode } from "../doc/document.ts";
   import { withGrid } from "../doc/editor.ts";
   import { mapStats } from "../doc/inspect.ts";
+  import { isEmpty } from "../doc/selection.ts";
   import { clampExponent, exponents, formatSize } from "../grid/snap.ts";
   import { session } from "../session.svelte.ts";
+  import TagList from "./TagList.svelte";
 
   const world = $derived(session.editor.world);
   const stats = $derived(mapStats(world));
+  const holding = $derived(!isEmpty(session.editor.selection));
 
   const setGrid = (exponent: number) => session.set((e) => withGrid(e, clampExponent(exponent)));
 
@@ -27,30 +34,10 @@
       world: { ...e.world, broom: { ...e.world.broom, scale: scale > 0 ? scale : 1 } },
     }));
 
-  const flag = (layer: LayerNode, key: "hidden" | "locked") =>
-    session.run(`${layer.broom[key] ? "show" : key === "hidden" ? "hide" : "lock"} layer`, (e) => ({
-      ...e,
-      world: updateNode<LayerNode>(e.world, layer.id, (n) => ({
-        ...n,
-        broom: { ...n.broom, [key]: !n.broom[key] },
-      })),
-    }));
-
   const rename = (layer: LayerNode, name: string) => {
     if (!name || name === layer.name) return;
-    session.run("rename layer", (e) => ({
-      ...e,
-      world: updateNode<LayerNode>(e.world, layer.id, (n) => ({ ...n, name })),
-    }));
+    nameLayer(layer.id, name);
   };
-
-  const use = (id: NodeId) => session.set((e) => ({ ...e, layer: id, note: "current layer" }));
-
-  const add = () =>
-    session.run("new layer", (e) => ({
-      ...e,
-      world: { ...e.world, layers: [...e.world.layers, layerNode(`layer ${e.world.layers.length + 1}`)] },
-    }));
 </script>
 
 <div class="fields">
@@ -74,16 +61,32 @@
   {#each world.layers as layer (layer.id)}
     <li class:on={session.editor.layer === layer.id}>
       <button class="eye" class:off={layer.broom.hidden} title={layer.broom.hidden ? "hidden" : "visible"}
-        onclick={() => flag(layer, "hidden")}>{layer.broom.hidden ? "·" : "●"}</button>
+        onclick={() => hideNode(layer.id)}>{layer.broom.hidden ? "·" : "●"}</button>
       <button class="eye" class:off={!layer.broom.locked} title={layer.broom.locked ? "locked" : "unlocked"}
-        onclick={() => flag(layer, "locked")}>{layer.broom.locked ? "▪" : "▫"}</button>
+        onclick={() => lockNode(layer.id)}>{layer.broom.locked ? "▪" : "▫"}</button>
       <input class="name" value={layer.name} onchange={(e) => rename(layer, (e.target as HTMLInputElement).value.trim())}
-        onfocus={() => use(layer.id)} />
+        onfocus={() => useLayer(layer.id)} />
       <span class="count">{layer.children.length}</span>
+      {#if holding}
+        <!-- the selection moved here, which is the only thing a layer list is for that a name is not -->
+        <button class="small" title="move the selection to {layer.name}"
+          onclick={() => moveSelectionToLayer(layer.id)}>←</button>
+      {/if}
+      {#if world.layers.length > 1}
+        <button class="small" title="delete {layer.name}; what is in it goes to the next layer"
+          onclick={() => deleteLayer(layer.id)}>×</button>
+      {/if}
     </li>
   {/each}
 </ul>
-<button class="add" onclick={add}>new layer</button>
+<p class="row">
+  <button class="add" onclick={() => newLayer()}>new layer</button>
+  <button class="add" onclick={showEverything}>show all</button>
+  <button class="add" onclick={unlockEverything}>unlock all</button>
+</p>
+
+<h3>tags</h3>
+<TagList />
 
 <h3>counts</h3>
 <dl>
@@ -113,9 +116,11 @@
     background: transparent; border: 0; font: var(--mono); color: var(--ink);
   }
   .eye.off { color: var(--dim); }
-  .add { margin-top: 4px; padding: 2px 7px; cursor: pointer;
+  .row { display: flex; gap: 4px; margin: 4px 0 0; }
+  .add, .small { padding: 2px 7px; cursor: pointer;
     background: var(--raised); border: 1px solid var(--line); border-radius: 3px; font: var(--mono); color: var(--text); }
-  .add:hover { border-color: var(--edge); color: var(--ink); }
+  .small { flex: none; padding: 0 4px; color: var(--dim); }
+  .add:hover, .small:hover { border-color: var(--edge); color: var(--ink); }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; margin: 0; font: var(--mono); }
   dt { color: var(--dim); }
   dd { margin: 0; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
