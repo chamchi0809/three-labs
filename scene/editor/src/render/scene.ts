@@ -13,8 +13,9 @@
  * numbers to get out of step.
  */
 import {
-  AmbientLight, BufferAttribute, BufferGeometry, DirectionalLight, Group, HemisphereLight, LineSegments,
-  Mesh, PlaneGeometry, Points, Scene, type Object3D,
+  AmbientLight, BufferAttribute, BufferGeometry, DirectionalLight, Group, HemisphereLight,
+  InstancedBufferAttribute, InstancedBufferGeometry, LineSegments, Mesh, PlaneGeometry, Scene,
+  type Object3D,
 } from "three/webgpu";
 import { brushToMesh } from "../brush/brush.ts";
 import type { Bounds } from "../brush/builder.ts";
@@ -27,7 +28,9 @@ import {
   batchBounds, clearBatch, dropBrush, entryOf, flushBatch, newBatch, setBrush, setFlags, FACE_SELECTED,
   HOVERED, LOCKED, OUTSIDE, SELECTED, type BrushBatch, type Flags,
 } from "./batch.ts";
-import { brushHandles, newHandles, setHandles, type Handle, type HandleSet } from "./handles.ts";
+import {
+  brushHandles, newHandles, setHandleFlags, setHandles, type Handle, type HandleSet,
+} from "./handles.ts";
 import { linkSegments, linksOf } from "./links.ts";
 import {
   boxSegments, clearLines, dropLines, edgeSegments, flushLines, newLines, setLineFlags, setLines,
@@ -62,12 +65,21 @@ export type RenderScene = {
   faceMesh: Mesh;
   edgeLines: LineSegments;
   decorLines: LineSegments;
-  handlePoints: Points;
+  /** one instanced quad per handle; the vertex graph blows each centre up to a fixed size in pixels */
+  handleMesh: Mesh;
   /** the backdrop an orthographic pane stands on; the 3D pane hides it and uses the grid on the faces */
   gridPlane: Mesh;
 
   seen: Map<NodeId, Seen>;
   hover: Hover;
+  /**
+   * Which handle the mouse is over, as an index into the current set.
+   *
+   * An index rather than the handle itself because the set is rebuilt wholesale whenever the selection or
+   * the tool changes, and a held reference to a handle from the previous set is a reference to something
+   * that is no longer drawn. The index is cleared at the same moment the set is replaced.
+   */
+  hoverHandle: number | undefined;
   /** the decor keys the last sync wrote, so the ones it did not renew can be dropped in one pass */
   decorKeys: Set<string>;
 };
@@ -93,10 +105,11 @@ export function newRenderScene(gridSize = 1): RenderScene {
   decorLines.renderOrder = 10;
   decorLines.name = "broom:decor";
 
-  const handlePoints = new Points(new BufferGeometry(), handleMaterial());
-  handlePoints.frustumCulled = false;
-  handlePoints.renderOrder = 20;
-  handlePoints.name = "broom:handles";
+  const handleMesh = new Mesh(handleGeometry(), handleMaterial());
+  handleMesh.frustumCulled = false;
+  handleMesh.renderOrder = 20;
+  handleMesh.visible = false;
+  handleMesh.name = "broom:handles";
 
   // a unit quad the 2D panes stretch across their own frustum; ordered far below everything else so it is
   // painted before the map rather than over it
@@ -107,7 +120,7 @@ export function newRenderScene(gridSize = 1): RenderScene {
   gridPlane.name = "broom:grid-plane";
 
   world.add(gridPlane, faceMesh, edgeLines);
-  overlays.add(decorLines, handlePoints);
+  overlays.add(decorLines, handleMesh);
   scene.add(...editorLights());
 
   return {
@@ -117,9 +130,10 @@ export function newRenderScene(gridSize = 1): RenderScene {
     decor: newLines(),
     handles: newHandles(),
     labels: newLabels(overlays),
-    faceMesh, edgeLines, decorLines, handlePoints, gridPlane,
+    faceMesh, edgeLines, decorLines, handleMesh, gridPlane,
     seen: new Map(),
     hover: undefined,
+    hoverHandle: undefined,
     decorKeys: new Set(),
   };
 }
@@ -364,11 +378,79 @@ export function syncHandles(
       const node = nodeById(editor.world, id);
       if (node?.kind !== "brush") continue;
       const { mesh } = brushToMesh(node.brush);
-      if (mesh) out.push(...brushHandles(id, mesh.polygons, kinds));
+      if (!mesh) continue;
+      const made = brushHandles(id, mesh.polygons, kinds);
+      markPicked(made, node.brush, id, editor.selection);
+      out.push(...made);
     }
   }
   setHandles(rs.handles, out);
+  // the set the index pointed into no longer exists, so the hover starts again from the next pick
+  rs.hoverHandle = undefined;
   applyHandles(rs);
+}
+
+/** the grid is never finer than a micrometre, so anything closer than this is the same corner */
+const NEAR = 1e-6;
+
+const nearby = (a: readonly number[], b: readonly number[]): boolean =>
+  Math.abs(a[0]! - b[0]!) < NEAR && Math.abs(a[1]! - b[1]!) < NEAR && Math.abs(a[2]! - b[2]!) < NEAR;
+
+/**
+ * The handles that stand for something already picked, lit up.
+ *
+ * Vertices and edges are matched by position rather than by index, because `brushHandles` deduplicates them
+ * across the faces that share them and its numbering has nothing to do with the polyhedron's. A handle sits
+ * exactly on the corner it names, so comparing positions is not an approximation — it is the same float.
+ * Faces are the exception: a face handle's `part` *is* the face.
+ */
+function markPicked(handles: Handle[], brush: BrushNode["brush"], id: NodeId, s: Selection): void {
+  const corners: number[][] = [];
+  for (const r of s.vertices) {
+    if (r.node !== id) continue;
+    const v = brush.poly.vertices[r.vertex];
+    if (v) corners.push(v);
+  }
+  const midpoints: number[][] = [];
+  for (const r of s.edges) {
+    if (r.node !== id) continue;
+    const a = brush.poly.vertices[r.a];
+    const b = brush.poly.vertices[r.b];
+    if (a && b) midpoints.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+  }
+  const faces = new Set(s.faces.filter((f) => f.node === id).map((f) => f.face));
+
+  for (const handle of handles) {
+    const on =
+      handle.kind === "vertex" ? corners.some((p) => nearby(p, handle.at))
+      : handle.kind === "edge" ? midpoints.some((p) => nearby(p, handle.at))
+      : handle.kind === "face" ? faces.has(handle.part)
+      : false;
+    if (on) handle.flags |= SELECTED;
+  }
+}
+
+/**
+ * The handle under the mouse, by index; returns whether anything has to be redrawn.
+ *
+ * Only the two handles involved are touched. Hovering one of three hundred corners must not rewrite the
+ * other two hundred and ninety-nine, because it happens on every frame the mouse moves.
+ */
+export function setHoverHandle(rs: RenderScene, index: number | undefined): boolean {
+  if (rs.hoverHandle === index) return false;
+  const before = rs.hoverHandle;
+  rs.hoverHandle = index;
+  let changed = false;
+  if (before !== undefined) {
+    const was = rs.handles.handles[before];
+    if (was) changed = setHandleFlags(rs.handles, before, was.flags & ~HOVERED) || changed;
+  }
+  if (index !== undefined) {
+    const now = rs.handles.handles[index];
+    if (now) changed = setHandleFlags(rs.handles, index, now.flags | HOVERED) || changed;
+  }
+  if (changed) applyHandles(rs);
+  return changed;
 }
 
 // ---------------------------------------------------------------- labels
@@ -441,22 +523,36 @@ function applyBatch(geometry: BufferGeometry, spec: Spec[], written: Upload): vo
   geometry.setDrawRange(0, written.used);
 }
 
+/**
+ * The quad every handle is an instance of: a unit square centred on nothing, in the corner order the
+ * vertex graph expects. It carries no world position at all — `handleAt` is where the handle is, and
+ * `position` is only which corner of the square this vertex is.
+ */
+function handleGeometry(): InstancedBufferGeometry {
+  const geometry = new InstancedBufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(new Float32Array([
+    -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
+  ]), 3));
+  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.instanceCount = 0;
+  return geometry;
+}
+
 /** handles are rebuilt wholesale, so their attributes are simply replaced when the arrays move */
 function applyHandles(rs: RenderScene): void {
-  const geometry = rs.handlePoints.geometry;
+  const geometry = rs.handleMesh.geometry as InstancedBufferGeometry;
   const spec: Spec[] = [
-    ["position", rs.handles.position, 3],
+    ["handleAt", rs.handles.position, 3],
     ["kind", rs.handles.kind, 1],
     ["flag", rs.handles.flag, 1],
-    ["pick", rs.handles.pick, 2],
   ];
   for (const [name, array, size] of spec) {
-    const held = geometry.getAttribute(name) as BufferAttribute | undefined;
-    if (!held || held.array !== array) geometry.setAttribute(name, new BufferAttribute(array, size));
+    const held = geometry.getAttribute(name) as InstancedBufferAttribute | undefined;
+    if (!held || held.array !== array) geometry.setAttribute(name, new InstancedBufferAttribute(array, size));
     else held.needsUpdate = true;
   }
-  geometry.setDrawRange(0, rs.handles.count);
-  rs.handlePoints.visible = rs.handles.count > 0;
+  geometry.instanceCount = rs.handles.count;
+  rs.handleMesh.visible = rs.handles.count > 0;
 }
 
 // ---------------------------------------------------------------- odds and ends
@@ -477,6 +573,7 @@ export function clearScene(rs: RenderScene): void {
   clearLines(rs.edges);
   clearLines(rs.decor);
   setHandles(rs.handles, []);
+  rs.hoverHandle = undefined;
   hideLabels(rs.labels);
   rs.seen.clear();
   rs.decorKeys.clear();

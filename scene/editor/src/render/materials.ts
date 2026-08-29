@@ -19,14 +19,16 @@
  * picture. A ray cast can disagree with what the eye sees; a pixel read cannot.
  */
 import {
-  LineBasicNodeMaterial, MeshBasicNodeMaterial, MeshStandardNodeMaterial, PointsNodeMaterial,
+  DoubleSide, LineBasicNodeMaterial, MeshBasicNodeMaterial, MeshStandardNodeMaterial,
 } from "three/webgpu";
 import type { Node } from "three/webgpu";
 import {
-  attribute, bitAnd, cameraPosition, color, float, floor, fwidth, int, max, mix, mod, normalWorld,
-  positionWorld, select, smoothstep, uniform, vec3, vec4,
+  attribute, bitAnd, cameraPosition, cameraProjectionMatrix, color, float, floor, fwidth, int, max, mix,
+  mod, modelViewMatrix, normalWorld, positionGeometry, positionWorld, screenDPR, select, smoothstep,
+  uniform, vec3, vec4, viewportSize,
 } from "three/tsl";
 import { FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED } from "./batch.ts";
+import { HANDLE_PIXELS } from "./handles.ts";
 
 // ---------------------------------------------------------------- the palette
 
@@ -210,16 +212,35 @@ export function edgeMaterial(): LineBasicNodeMaterial {
 }
 
 /**
- * The point handles.
+ * A handle's centre blown up into a screen-space square, `pixels` across.
  *
- * `sizeAttenuation` off is the whole point: a handle is a target for the mouse, and a target that shrinks
- * with distance is one that cannot be hit. Vertices are drawn a little larger than the midpoints and
- * centres, so a stack of them near one another is told apart before it is clicked.
+ * A handle is a target for the mouse, so it has to stay the same size however far away it is — a handle
+ * that shrinks with distance is one that cannot be hit. That has to be done here, by hand, because a
+ * `Points` object gets no size at all under WebGPU: the format has no `gl_PointSize`, `PointsNodeMaterial`
+ * only expands to a sprite when the object is *not* points, and the result is a one-pixel dot that is both
+ * invisible and unclickable. So a handle is an instanced quad and this is the expansion.
+ *
+ * The sizes come from `handles.ts` because the hit test reads them too — the square a designer aims at and
+ * the square they hit have to be the same square, and this is the only place that draws it.
  */
-export function handleMaterial(): PointsNodeMaterial {
-  const material = new PointsNodeMaterial({ sizeAttenuation: false, toneMapped: false, depthTest: false });
-  const kind = attribute<"float">("kind", "float");
-  material.sizeNode = select(kind.greaterThan(float(0)), float(7), float(9));
+function handleQuad(pixels: Node<"float">) {
+  const centre = attribute<"vec3">("handleAt", "vec3");
+  const clip = cameraProjectionMatrix.mul(modelViewMatrix.mul(vec4(centre, 1)));
+  // the corner is ±½, so multiplying by the size gives a square that many pixels across; the perspective
+  // divide is still to come, so the offset is pre-multiplied by w to survive it
+  const offset = positionGeometry.xy.mul(pixels).div(viewportSize.div(2)).mul(clip.w);
+  return clip.add(vec4(offset, 0, 0));
+}
+
+const HANDLE_SIZE = /*@__PURE__*/ select(
+  attribute<"float">("kind", "float").greaterThan(float(0)),
+  float(HANDLE_PIXELS.other),
+  float(HANDLE_PIXELS.vertex),
+);
+
+export function handleMaterial(): MeshBasicNodeMaterial {
+  const material = new MeshBasicNodeMaterial({ toneMapped: false, depthTest: false, side: DoubleSide });
+  material.vertexNode = handleQuad(HANDLE_SIZE.mul(screenDPR));
   material.colorNode = tinted(color(COLOURS.handle));
   material.name = "broom:handle";
   return material;
@@ -242,15 +263,6 @@ export function pickMaterial(): MeshBasicNodeMaterial {
   const live = float(1).sub(has(LOCKED));
   material.fragmentNode = vec4(encode(), 1).mul(vec4(vec3(live), 1));
   material.name = "broom:pick";
-  return material;
-}
-
-/** handles pick into their own buffer, one-based, so zero keeps meaning "nothing was under the mouse" */
-export function handlePickMaterial(): PointsNodeMaterial {
-  const material = new PointsNodeMaterial({ sizeAttenuation: false, toneMapped: false, depthTest: false });
-  material.sizeNode = float(11); // a touch larger than it is drawn, because a near miss should still hit
-  material.fragmentNode = vec4(encode(), 1);
-  material.name = "broom:handle-pick";
   return material;
 }
 

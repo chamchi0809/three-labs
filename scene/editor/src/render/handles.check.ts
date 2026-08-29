@@ -1,11 +1,11 @@
-// Handles: that a cuboid offers eight corners rather than twenty-four, and that a pick reads back the
-// handle it named.
+// Handles: that a cuboid offers eight corners rather than twenty-four, and that the buffers a handle is
+// drawn from say what the handle said.
 // Run with: node --experimental-strip-types src/render/handles.check.ts
 import assert from "node:assert/strict";
 import { boxFaces, buildBrush, type Vec3 } from "tscene";
 import { report, test } from "../check.ts";
 import { HOVERED, SELECTED } from "./batch.ts";
-import { brushHandles, clearHandles, handleAt, newHandles, setHandleFlags, setHandles } from "./handles.ts";
+import { brushHandles, clearHandles, newHandles, setHandleFlags, setHandles } from "./handles.ts";
 
 const polygonsOf = (min: Vec3, max: Vec3) => {
   const { mesh, problems } = buildBrush(boxFaces(min, max).map((points) => ({ points })));
@@ -42,16 +42,12 @@ test("all three kinds at once come out as one list that knows which is which", (
   assert.equal(all.filter((h) => h.kind === "face").length, 6);
 });
 
-test("the arrays are filled from the handles, and pick is one-based", () => {
+test("the arrays are filled from the handles", () => {
   const set = newHandles();
   setHandles(set, brushHandles("a", CUBE));
   assert.equal(set.count, 8);
   assert.deepEqual([...set.position.slice(0, 3)], set.handles[0]!.at);
   assert.deepEqual([...set.kind.slice(0, 8)], Array(8).fill(0), "all vertices");
-  assert.equal(set.pick[0], 1, "zero has to stay free for 'no handle'");
-  assert.equal(handleAt(set, 0), undefined);
-  assert.equal(handleAt(set, 1), set.handles[0]);
-  assert.equal(handleAt(set, 9), undefined, "past the end is nothing, not the array's leftovers");
 });
 
 test("a set replaced by a smaller one keeps the buffer but not the old handles", () => {
@@ -61,7 +57,7 @@ test("a set replaced by a smaller one keeps the buffer but not the old handles",
   setHandles(set, brushHandles("b", CUBE));
   assert.equal(set.count, 8);
   assert.equal(set.position, buffer, "twenty-six's room fits eight");
-  assert.equal(handleAt(set, 9), undefined, "and the leftovers are not reachable");
+  assert.equal(set.handles.length, 8, "and the leftovers are not reachable");
   assert.ok(set.handles.every((h) => h.of === "b"));
 });
 
@@ -82,7 +78,7 @@ test("clearing leaves nothing pickable", () => {
   setHandles(set, brushHandles("a", CUBE));
   clearHandles(set);
   assert.equal(set.count, 0);
-  assert.equal(handleAt(set, 1), undefined);
+  assert.deepEqual(set.handles, []);
 });
 
 test("a face that bounded nothing offers no handles of its own", () => {

@@ -18,19 +18,23 @@
  *
  * The trick that makes it cheap is `setViewOffset`: the camera is told to render a one-pixel-wide window
  * of its own frustum, so the pick pass rasterises one pixel of the map rather than a whole frame of it.
+ *
+ * Handles are the exception, and are hit-tested on the CPU. None of the three reasons above applies to
+ * them: a handle is a square of a known size around a point of a known position, so projecting the point
+ * and measuring the distance *is* what the rasteriser would do, exactly, with no readback to wait for and
+ * no second material to keep in step. There are a few hundred of them at most.
  */
 import {
-  Color, NearestFilter, RenderTarget, UnsignedByteType, type Camera, type Renderer,
+  Color, NearestFilter, RenderTarget, UnsignedByteType, Vector3, type Camera, type Renderer,
 } from "three/webgpu";
-import { decodePick, handlePickMaterial, pickMaterial } from "./materials.ts";
-import { handleAt, type Handle } from "./handles.ts";
+import { decodePick, pickMaterial } from "./materials.ts";
+import { HANDLE_REACH, type Handle, type HandleSet } from "./handles.ts";
 import type { RenderScene } from "./scene.ts";
 
 export type Picker = {
   target: RenderTarget;
-  /** the materials swapped in for the pass, made once — compiling a shader per click is not an option */
+  /** the material swapped in for the pass, made once — compiling a shader per click is not an option */
   face: ReturnType<typeof pickMaterial>;
-  handle: ReturnType<typeof handlePickMaterial>;
   /**
    * A stand-in camera per real camera.
    *
@@ -51,7 +55,7 @@ export function newPicker(): Picker {
     type: UnsignedByteType,
     generateMipmaps: false,
   });
-  return { target, face: pickMaterial(), handle: handlePickMaterial(), proxies: new WeakMap() };
+  return { target, face: pickMaterial(), proxies: new WeakMap() };
 }
 
 /** what a pick found: a solid and one of its faces, or one handle, or nothing at all */
@@ -80,20 +84,53 @@ export async function pickAt(
 ): Promise<Pick> {
   if (size.width <= 0 || size.height <= 0) return {};
 
-  if (options.handles && rs.handles.count > 0) {
-    const found = await pass(renderer, picker, rs, camera, x, y, size, "handles");
-    const handle = handleAt(rs.handles, found.ordinal);
+  if (options.handles) {
+    const handle = handleUnder(rs.handles, camera, x, y, size);
     if (handle) return { handle };
   }
 
-  const found = await pass(renderer, picker, rs, camera, x, y, size, "faces");
+  const found = await pass(renderer, picker, rs, camera, x, y, size);
   return found.ordinal > 0 ? { ordinal: found.ordinal, face: found.face } : {};
 }
 
 /**
- * One pass of one thing.
+ * The handle nearest a point, if one is near enough to have been aimed at.
  *
- * Everything is put back afterwards — the materials, the visibility, the render target and the camera's
+ * Nearest rather than topmost: handles are drawn without depth, so "the one in front" is not a question the
+ * picture answers, and the centre a designer aimed at is the one they meant. A handle outside the frustum
+ * is skipped rather than measured — it was never drawn, so it cannot be what was clicked, and an ortho pane
+ * projects things behind it to perfectly plausible pixels.
+ */
+export function handleUnder(
+  set: HandleSet,
+  camera: Camera,
+  x: number,
+  y: number,
+  size: { width: number; height: number },
+): Handle | undefined {
+  let best: Handle | undefined;
+  let nearest = HANDLE_REACH * HANDLE_REACH;
+  for (let i = 0; i < set.count; i++) {
+    at.set(set.position[i * 3]!, set.position[i * 3 + 1]!, set.position[i * 3 + 2]!).project(camera);
+    if (at.z < -1 || at.z > 1) continue;
+    const dx = (at.x * 0.5 + 0.5) * size.width - x;
+    const dy = (-at.y * 0.5 + 0.5) * size.height - y;
+    const away = dx * dx + dy * dy;
+    if (away < nearest) {
+      nearest = away;
+      best = set.handles[i];
+    }
+  }
+  return best;
+}
+
+/** somewhere to project into; hovering hit-tests every frame, and a hover should allocate nothing */
+const at = /*@__PURE__*/ new Vector3();
+
+/**
+ * One pick pass.
+ *
+ * Everything is put back afterwards — the material, the visibility, the render target and the camera's
  * view offset. A pick happens in the middle of a frame the user is looking at, and a pass that left any of
  * that changed would be visible as a flicker.
  */
@@ -105,29 +142,27 @@ async function pass(
   x: number,
   y: number,
   size: { width: number; height: number },
-  what: "faces" | "handles",
 ): Promise<{ ordinal: number; face: number }> {
   const shown = {
     faces: rs.faceMesh.visible,
     edges: rs.edgeLines.visible,
     decor: rs.decorLines.visible,
-    handles: rs.handlePoints.visible,
+    handles: rs.handleMesh.visible,
     labels: rs.labels.group.visible,
     grid: rs.gridPlane.visible,
   };
   const faceMaterial = rs.faceMesh.material;
-  const handleMaterial = rs.handlePoints.material;
 
-  rs.faceMesh.visible = what === "faces";
-  rs.handlePoints.visible = what === "handles";
-  // lines and text write no identity, and a line drawn over a face would occlude what the face said. The
-  // grid backdrop is worse than that: it covers the whole pane and would answer every pick with a colour.
+  rs.faceMesh.visible = true;
+  // lines, handles and text write no identity, and any of them drawn over a face would occlude what the
+  // face said. The grid backdrop is worse than that: it covers the whole pane and would answer every pick
+  // with a colour.
   rs.edgeLines.visible = false;
   rs.decorLines.visible = false;
+  rs.handleMesh.visible = false;
   rs.labels.group.visible = false;
   rs.gridPlane.visible = false;
   rs.faceMesh.material = picker.face;
-  rs.handlePoints.material = picker.handle;
 
   const proxy = proxyFor(picker, camera);
   narrow(proxy, size.width, size.height, Math.floor(x), Math.floor(y));
@@ -145,11 +180,10 @@ async function pass(
   renderer.setRenderTarget(wasTarget);
   renderer.setClearColor(wasClear, wasAlpha);
   rs.faceMesh.material = faceMaterial;
-  rs.handlePoints.material = handleMaterial;
   rs.faceMesh.visible = shown.faces;
   rs.edgeLines.visible = shown.edges;
   rs.decorLines.visible = shown.decor;
-  rs.handlePoints.visible = shown.handles;
+  rs.handleMesh.visible = shown.handles;
   rs.labels.group.visible = shown.labels;
   rs.gridPlane.visible = shown.grid;
 

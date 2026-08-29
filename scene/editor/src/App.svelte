@@ -42,7 +42,7 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M8 · tools</span>
+    <span class="milestone">M9 · tools</span>
     <span class="tools">
       {#each tools.all as tool (tool.id)}
         <button

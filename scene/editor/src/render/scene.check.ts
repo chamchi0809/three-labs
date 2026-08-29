@@ -3,7 +3,7 @@
 // says they mean. Nothing here draws — the point is exactly that the diff is decidable without a GPU.
 // Run with: node --experimental-strip-types src/render/scene.check.ts
 import assert from "node:assert/strict";
-import type { BufferAttribute } from "three/webgpu";
+import type { BufferAttribute, InstancedBufferGeometry } from "three/webgpu";
 import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
@@ -302,14 +302,19 @@ test("handles are the selection's, in the kinds the tool asked for", () => {
 
   syncHandles(rs, selected, { vertices: true });
   assert.equal(rs.handles.count, 8, "one solid's corners, not both solids'");
-  assert.equal(rs.handlePoints.geometry.drawRange.count, 8);
+  // a handle is one instance of the shared quad, so the count that matters is the instance count — the
+  // draw range is the six indices of the square itself and never changes
+  const geometry = rs.handleMesh.geometry as InstancedBufferGeometry;
+  assert.equal(geometry.instanceCount, 8);
+  assert.equal(geometry.getAttribute("handleAt").count >= 8, true, "the corners never reached the buffer");
 
   syncHandles(rs, selected, { vertices: true, faces: true });
   assert.equal(rs.handles.count, 14);
+  assert.equal(geometry.instanceCount, 14);
 
   syncHandles(rs, selected, undefined);
   assert.equal(rs.handles.count, 0, "a tool that wants none gets none");
-  assert.equal(rs.handlePoints.visible, false);
+  assert.equal(rs.handleMesh.visible, false);
 });
 
 // ---------------------------------------------------------------- starting over

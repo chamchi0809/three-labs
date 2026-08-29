@@ -6,7 +6,7 @@
  * few hundred at most, they all appear and all vanish the moment the selection changes, and nothing ever
  * edits one in place. Rebuilding the list wholesale is both simpler and faster than tracking spans for it.
  *
- * They are drawn as instanced points expanded in the vertex shader, so a handle stays the same size in
+ * They are drawn as instanced quads expanded in the vertex shader, so a handle stays the same size in
  * pixels however far away it is. A handle that shrinks with distance is a handle that cannot be grabbed,
  * and the whole point of them is being grabbable.
  */
@@ -37,20 +37,28 @@ export type HandleSet = {
   kind: Float32Array;
   /** float, the same bit field the faces and lines use */
   flag: Float32Array;
-  /** vec2: the handle's own index plus one, and its kind — a pick reads a handle by index, not by solid */
-  pick: Float32Array;
   /** how many of the arrays are real; they are grown but never shrunk */
   count: number;
 };
 
 const KINDS: Record<HandleKind, number> = { vertex: 0, edge: 1, face: 2, pivot: 3 };
 
+/**
+ * How wide a handle is drawn, in pixels, and how near the mouse has to be to grab one.
+ *
+ * Both the vertex shader and the hit test read these, which is what keeps the square a designer aims at and
+ * the square they actually hit the same square. A vertex is drawn larger than a midpoint or a centre so
+ * that a stack of them is told apart before it is clicked; the reach is a shade over half of that, because
+ * a near miss on something this small should still count.
+ */
+export const HANDLE_PIXELS = { vertex: 9, other: 7 } as const;
+export const HANDLE_REACH = 6;
+
 export const newHandles = (): HandleSet => ({
   handles: [],
   position: new Float32Array(0),
   kind: new Float32Array(0),
   flag: new Float32Array(0),
-  pick: new Float32Array(0),
   count: 0,
 });
 
@@ -66,7 +74,6 @@ export function setHandles(set: HandleSet, handles: Handle[]): void {
     set.position = new Float32Array(size * 3);
     set.kind = new Float32Array(size);
     set.flag = new Float32Array(size);
-    set.pick = new Float32Array(size * 2);
   }
 
   for (const [i, handle] of handles.entries()) {
@@ -75,14 +82,8 @@ export function setHandles(set: HandleSet, handles: Handle[]): void {
     set.position[i * 3 + 2] = handle.at[2];
     set.kind[i] = KINDS[handle.kind];
     set.flag[i] = handle.flags;
-    set.pick[i * 2] = i + 1; // one-based, so an empty pick buffer does not read as the first handle
-    set.pick[i * 2 + 1] = KINDS[handle.kind];
   }
 }
-
-/** the handle a pick buffer's first channel names, or nothing if it named nothing */
-export const handleAt = (set: HandleSet, pick: number): Handle | undefined =>
-  pick >= 1 && pick <= set.count ? set.handles[pick - 1] : undefined;
 
 /** one handle's flags changed — hovering one of a hundred must not rebuild the other ninety-nine */
 export function setHandleFlags(set: HandleSet, index: number, flags: Flags): boolean {

@@ -21,7 +21,9 @@ import type { ViewKind } from "../viewport/view.ts";
 import type { InputState, Rect } from "./input.ts";
 import { DRAG_THRESHOLD, pixelsBetween } from "./input.ts";
 
-export type ToolId = "select" | "move" | "shape" | "entity" | "extrude";
+export type ToolId =
+  | "select" | "move" | "shape" | "entity" | "extrude"
+  | "clip" | "vertex" | "edge" | "face" | "rotate" | "scale" | "shear" | "sweep" | "attributes";
 
 /** a named change that goes on the undo stack */
 export type Edit = {

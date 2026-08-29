@@ -17,7 +17,9 @@
   import { newCompass, updateCompass } from "../render/compass.ts";
   import { COLOURS } from "../render/materials.ts";
   import { newPicker, pickAt } from "../render/pick.ts";
-  import { clearDecor, newRenderScene, sceneBounds, setDecor, setHover, syncHandles, syncScene } from "../render/scene.ts";
+  import {
+    clearDecor, newRenderScene, sceneBounds, setDecor, setHover, setHoverHandle, syncHandles, syncScene,
+  } from "../render/scene.ts";
   import { layoutLabels } from "../render/text.ts";
   import type { Bounds } from "../brush/builder.ts";
   import { nodeById, nodeBounds, union } from "../doc/document.ts";
@@ -201,7 +203,21 @@
     moved = false;
     picking = true;
     try {
-      const found = await pickAt(renderer, picker, rs, cameras[at.view], at.x, at.y, sizes[at.view]);
+      // handles are only asked about when the active tool draws some, so the select tool never pays for a
+      // second pass and a stray corner can never take a click away from the solid it belongs to
+      const found = await pickAt(renderer, picker, rs, cameras[at.view], at.x, at.y, sizes[at.view], {
+        handles: Boolean(tools.current.handles),
+      });
+
+      if (found.handle) {
+        if (setHover(rs, undefined)) syncScene(rs, session.editor, tools.box.dragging);
+        setHoverHandle(rs, rs.handles.handles.indexOf(found.handle));
+        const says = `${found.handle.kind} of ${found.handle.of}`;
+        if (readout[at.view] !== says) readout = { ...readout, [at.view]: says };
+        return;
+      }
+
+      setHoverHandle(rs, undefined);
       const id = found.ordinal === undefined ? undefined : idOf(rs.brushes, found.ordinal);
       const hovering = id ? { node: id, face: found.face } : undefined;
       if (setHover(rs, hovering)) syncScene(rs, session.editor, tools.box.dragging);
@@ -222,6 +238,18 @@
    * back, which is another asynchronous round trip in the middle of a gesture that has to feel immediate.
    */
   function hitOf(kind: ViewKind, x: number, y: number): Hit | undefined {
+    // a handle answers alone and answers first: it is drawn over the map and it is what the gesture aimed
+    // at, so reporting the wall behind it would move the whole solid instead of the corner
+    const handle = rs.hoverHandle === undefined ? undefined : rs.handles.handles[rs.hoverHandle];
+    if (handle) {
+      return {
+        handle,
+        node: handle.of,
+        face: handle.kind === "face" ? handle.part : undefined,
+        point: [handle.at[0], handle.at[1], handle.at[2]],
+      };
+    }
+
     const found = rs.hover;
     if (!found) return undefined;
     const node = nodeById(session.editor.world, found.node);
@@ -448,6 +476,7 @@
 
   function leave(): void {
     pointer = undefined;
+    setHoverHandle(rs, undefined);
     if (setHover(rs, undefined)) syncScene(rs, session.editor, tools.box.dragging);
     if (Object.values(readout).some(Boolean)) readout = {};
   }
