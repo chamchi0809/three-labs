@@ -4,15 +4,16 @@
  * A tscene node is whatever three calls it — `mesh`, `pointLight`, `perspectiveCamera` — so there is no
  * fixed list of entities the way a Quake editor has one, and inventing one here would be inventing a
  * second definition of what a scene may contain. What the tool carries instead is a short list of the
- * types a designer reaches for while laying out a level, and a free type they can set to anything the
- * sheet would accept. M11 replaces the list with the `@template`s the project itself declares, which is
- * where the definitions actually belong.
+ * types a designer reaches for while laying out a level, and the project's own `@template`s on top of it:
+ * the entity browser hands one over, and from then on a click places an instance of it.
  *
  * A new entity is given a `@broom { size }` even though nothing in the scene needs one, because an entity
  * with no size is a point, and a point cannot be clicked. The box is what makes the thing the designer
- * just placed something they can then select, move and delete.
+ * just placed something they can then select, move and delete. A definition brings its own box; a bare
+ * type gets a plausible one from the list below.
  */
 import type { Vec3 } from "tscene";
+import { ANY_NODE, instanceOf, type EntityDef } from "../doc/catalogue.ts";
 import { entityNode, insertNodes, type EntityNode } from "../doc/document.ts";
 import { gridSize, type Editor } from "../doc/editor.ts";
 import { NOTHING, selectNodes } from "../doc/selection.ts";
@@ -31,17 +32,37 @@ export const ENTITY_TYPES: { type: string; half: number }[] = [
   { type: "perspectiveCamera", half: 0.25 },
 ];
 
-export const entitySettings: { type: string } = { type: "pointLight" };
+/** what the next click places: a plain node of a type, or an instance of a definition */
+export type Placing = { type: string; def?: EntityDef };
 
-export const setEntityType = (type: string): string => (entitySettings.type = type);
+export const entitySettings: Placing = { type: "pointLight" };
+
+/** what the tool is set to, said the way the status line and the browser both want it */
+export const placingName = (of: Placing = entitySettings): string =>
+  of.def ? `${of.type}.${of.def.name}` : of.type;
+
+export function setEntityType(type: string): string {
+  delete entitySettings.def;
+  entitySettings.type = type;
+  return type;
+}
+
+/** the entity browser's answer: place this definition from now on */
+export function setEntityDef(def: EntityDef): string {
+  entitySettings.def = def;
+  entitySettings.type = def.node === ANY_NODE ? "object3D" : def.node;
+  return placingName();
+}
 
 const halfOf = (type: string): number => ENTITY_TYPES.find((e) => e.type === type)?.half ?? 0.25;
 
-/** a new entity of `type`, placed */
-export function newEntity(type: string, at: Vec3): EntityNode {
-  const half = halfOf(type);
-  return entityNode(type, {
-    props: setVec3([], "position", at),
+/** a new entity, placed — an instance of the current definition, or a bare node of the current type */
+export function newEntity(at: Vec3, of: Placing = entitySettings): EntityNode {
+  const position = setVec3([], "position", at);
+  if (of.def) return instanceOf(of.def, position);
+  const half = halfOf(of.type);
+  return entityNode(of.type, {
+    props: position,
     broom: { size: [-half, -half, -half, half, half, half] },
   });
 }
@@ -65,11 +86,13 @@ export function placeAt(input: InputState, grid: number): Vec3 {
 
 const place = (input: InputState, editor: Editor): Outcome => {
   const at = placeAt(input, gridSize(editor));
-  const type = entitySettings.type;
-  const node = newEntity(type, at);
+  // read once, so that a repeat later places what was placed then rather than whatever is armed now
+  const of: Placing = { ...entitySettings };
+  const name = placingName(of);
+  const node = newEntity(at, of);
   return {
     edit: {
-      name: `create ${type}`,
+      name: `create ${name}`,
       repeatable: true,
       apply: (e) => {
         const world = insertNodes(e.world, e.layer, [node]);
@@ -77,12 +100,12 @@ const place = (input: InputState, editor: Editor): Outcome => {
       },
       // one more of the same, not the same one twice — a repeated placement needs its own identity
       again: (e) => {
-        const made = newEntity(type, at);
+        const made = newEntity(at, of);
         const world = insertNodes(e.world, e.layer, [made]);
         return { ...e, world, selection: selectNodes(world, NOTHING, [made.id], "replace", e.open) };
       },
     },
-    note: `${type} at ${at.join(", ")}`,
+    note: `${name} at ${at.join(", ")}`,
   };
 };
 

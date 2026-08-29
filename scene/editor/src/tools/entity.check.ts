@@ -8,7 +8,11 @@ import { newEditor, type Editor } from "../doc/editor.ts";
 import { history, run, separate, undo, type History } from "../doc/history.ts";
 import { vec3Of } from "../doc/props.ts";
 import { newView, type Size } from "../viewport/view.ts";
-import { ENTITY_TYPES, entitySettings, entityTool, newEntity, placeAt, setEntityType } from "./entity.ts";
+import { defByName } from "../doc/catalogue.ts";
+import { demoCatalogue } from "../doc/demo.ts";
+import {
+  ENTITY_TYPES, entitySettings, entityTool, newEntity, placeAt, setEntityDef, setEntityType,
+} from "./entity.ts";
 import { newInput, type InputState } from "./input.ts";
 import { ToolBox, type Outcome } from "./tool.ts";
 
@@ -43,19 +47,30 @@ function apply(h: History, out: Outcome | undefined): History {
 // ---------------------------------------------------------------- what a new entity is
 
 test("a new entity is written with the position it was placed at", () => {
-  const light = newEntity("pointLight", [1, 2, 3]);
+  const light = newEntity([1, 2, 3], { type: "pointLight" });
   assert.equal(light.type, "pointLight");
   nearVec(vec3Of(light.props, "position")!, [1, 2, 3]);
 });
 
 test("a new entity is given a box, because a point cannot be clicked", () => {
   for (const { type, half } of ENTITY_TYPES) {
-    const box = nodeBounds(newEntity(type, [0, 0, 0]));
+    const box = nodeBounds(newEntity([0, 0, 0], { type }));
     assert.ok(box, `${type} has nothing to pick`);
     near(box!.max[0]! - box!.min[0]!, half * 2);
   }
   // a type the list has never heard of still gets one, so the free type stays usable
-  assert.ok(nodeBounds(newEntity("audioListener", [0, 0, 0])));
+  assert.ok(nodeBounds(newEntity([0, 0, 0], { type: "audioListener" })));
+});
+
+test("armed with a definition, a click places an instance of it and not a bare node", () => {
+  const def = defByName(demoCatalogue(), "mesh", "crate")!;
+  assert.equal(setEntityDef(def), "mesh.crate");
+  const made = newEntity([0, 0, 0]);
+  assert.equal(made.type, "mesh");
+  assert.deepEqual(made.classes, ["crate"]);
+  assert.deepEqual(made.broom.size, def.size, "the definition's own box, not a guessed one");
+  assert.equal(setEntityType("pointLight"), "pointLight");
+  assert.deepEqual(newEntity([0, 0, 0]).classes, [], "and setting a bare type disarms it again");
 });
 
 // ---------------------------------------------------------------- where it goes

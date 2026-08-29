@@ -2,8 +2,25 @@
 <meta charset="utf-8" />
 <title>three-broom</title>
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1d21; }
+  /* The palette, in one place. Every panel reads these rather than repeating hexes, so that the shell,
+     the inspectors and the viewport chrome are one surface rather than three that nearly match. */
+  :root {
+    color-scheme: dark;
+    --bg: #1b1d21;
+    --panel: #16181b;
+    --sunk: #121417;
+    --raised: #1b1e22;
+    --line: #24272c;
+    --edge: #3d4653;
+    --ink: #d6dae0;
+    --text: #9aa1ac;
+    --dim: #6d7480;
+    --on: #2a3038;
+    --accent: #7aa2f7;
+    --warn: #d08770;
+    --mono: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
   body { font: 12px/1.5 system-ui, sans-serif; color: #d7dae0; }
   #app { height: 100%; }
 </style>

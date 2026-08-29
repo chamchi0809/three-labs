@@ -22,6 +22,13 @@ export const num = (value: number, unit: "" | "deg" | "rad" = ""): Value => ({ .
 export const str = (value: string): Value => ({ ...SYNTHETIC, kind: "string", value });
 export const ident = (name: string): Value => ({ ...SYNTHETIC, kind: "ident", name });
 export const hex = (value: number, digits: 6 | 8 = 6): Value => ({ ...SYNTHETIC, kind: "hex", value, digits });
+export const bool = (value: boolean): Value => ident(value ? "true" : "false");
+
+/** `ref(#lamp)` — a node named by the `#id` the sheet gave it */
+export const ref = (name: string): Value => ({ ...SYNTHETIC, kind: "ref", name, namePos: SYNTHETIC });
+
+/** `var(--wall)` — a `--var` read by name, which is how a face names what it is made of */
+export const read = (name: string): Value => ({ ...SYNTHETIC, kind: "var", name, namePos: SYNTHETIC });
 
 /** `name(a, b, …)` — how every compound value is written in a sheet, `vec3(0, 1, 0)` included */
 export const call = (name: string, args: Value[]): ObjectValue => ({
@@ -56,13 +63,14 @@ export function stringOf(props: Member[], name: string): string | undefined {
 }
 
 /** `vec3(x, y, z)` or `[x, y, z]`, whichever the sheet wrote; anything else is not a place */
-export function vec3Of(props: Member[], name: string): Vec3 | undefined {
-  const v = valueOf(props, name);
+export function asVec3(v: Value | undefined): Vec3 | undefined {
   const args = v?.kind === "object" && v.name === "vec3" ? v.args : v?.kind === "array" ? v.items : undefined;
   if (!args || args.length !== 3) return undefined;
   const n = args.map((a) => (a.kind === "number" ? a.value : NaN));
   return n.some(Number.isNaN) ? undefined : [n[0]!, n[1]!, n[2]!];
 }
+
+export const vec3Of = (props: Member[], name: string): Vec3 | undefined => asVec3(valueOf(props, name));
 
 // ---------------------------------------------------------------- writing
 

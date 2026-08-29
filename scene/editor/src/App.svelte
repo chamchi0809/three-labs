@@ -1,6 +1,7 @@
 <script lang="ts">
   // The shell. M7 fills the centre with the pane layout; M10 hangs the inspectors off the right edge.
   import Views from "./viewport/Views.svelte";
+  import Inspector from "./inspect/Inspector.svelte";
   import { clampExponent, formatSize } from "./grid/snap.ts";
   import { withGrid } from "./doc/editor.ts";
   import { LAYOUTS } from "./viewport/layout.ts";
@@ -42,7 +43,7 @@
 <div class="shell">
   <header>
     <span class="mark">three-broom</span>
-    <span class="milestone">M9 · tools</span>
+    <span class="milestone">M10 · inspectors</span>
     <span class="tools">
       {#each tools.all as tool (tool.id)}
         <button
@@ -62,7 +63,7 @@
       {/each}
     </span>
   </header>
-  <main><Views /></main>
+  <main><Views /><Inspector /></main>
   <footer>
     <span>grid <b>{formatSize(2 ** exponent)}</b></span>
     <!-- the separator is an expression because the space in front of it is at the edge of a block, and
@@ -77,28 +78,29 @@
   .shell { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
   header, footer {
     display: flex; gap: 12px; align-items: center;
-    padding: 6px 10px; background: #16181b; border-color: #24272c; border-style: solid;
-    font: 12px ui-monospace, monospace; color: #9aa1ac;
+    padding: 6px 10px; background: var(--panel); border-color: var(--line); border-style: solid;
+    font: var(--mono); color: var(--text);
   }
   header { border-width: 0 0 1px; }
   footer { border-width: 1px 0 0; }
-  main { min-height: 0; }
-  .mark { color: #d6dae0; font-weight: 600; }
-  .milestone, .hint { color: #6d7480; }
+  /* the panes take the space that is left; the inspector is as wide as it says it is */
+  main { display: grid; grid-template-columns: 1fr auto; min-height: 0; }
+  .mark { color: var(--ink); font-weight: 600; }
+  .milestone, .hint { color: var(--dim); }
   .hint { margin-left: auto; }
   .note {
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-    color: #9aa1ac;
+    color: var(--text);
   }
-  b { color: #d6dae0; font-weight: 600; }
+  b { color: var(--ink); font-weight: 600; }
   .layouts, .tools { display: flex; gap: 3px; }
   .layouts { margin-left: auto; }
   .layouts button, .tools button {
     height: 18px; padding: 0 6px; cursor: pointer;
-    background: #1b1e22; border: 1px solid #24272c; border-radius: 3px;
-    font: 11px ui-monospace, monospace; color: #6d7480;
+    background: var(--raised); border: 1px solid var(--line); border-radius: 3px;
+    font: var(--mono); color: var(--dim);
   }
   .layouts button { width: 20px; padding: 0; }
-  .layouts button:hover, .tools button:hover { border-color: #3d4653; color: #9aa1ac; }
-  .layouts button.on, .tools button.on { background: #2a3038; border-color: #3d4653; color: #d6dae0; }
+  .layouts button:hover, .tools button:hover { border-color: var(--edge); color: var(--text); }
+  .layouts button.on, .tools button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
 </style>
