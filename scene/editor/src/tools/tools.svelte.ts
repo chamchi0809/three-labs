@@ -23,6 +23,7 @@ class Tools {
   readonly box = newToolBox();
   #id = $state<ToolId>(this.box.current.id);
   #band = $state<Band | null>(null);
+  #rev = $state(0);
 
   get all(): Tool[] {
     return this.box.tools;
@@ -33,6 +34,15 @@ class Tools {
     // plain mutable state on purpose, since a drag tracker has no business being a reactive proxy
     void this.#id;
     return this.box.current;
+  }
+
+  /**
+   * A counter bumped by every outcome, for the parts of the UI that show tool state the tools keep in
+   * plain module objects. Settings are not reactive and should not be — a drag reads them sixty times a
+   * second — so anything drawing them reads this to know when to look again.
+   */
+  get rev(): number {
+    return this.#rev;
   }
 
   /** the rubber band, in the pixels of one pane */
@@ -55,6 +65,7 @@ class Tools {
     if (outcome.separate) session.separate();
     if (outcome.band !== undefined) this.#band = outcome.band;
     this.#id = this.box.current.id;
+    this.#rev++;
     return outcome.decor;
   }
 

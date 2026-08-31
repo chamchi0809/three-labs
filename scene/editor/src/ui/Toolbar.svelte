@@ -42,6 +42,7 @@
   import Files from "../io/Files.svelte";
   import Keymap from "../keys/Keymap.svelte";
   import Prefs from "./Prefs.svelte";
+  import ToolOptions from "./ToolOptions.svelte";
   import { keys } from "../keys/keys.svelte.ts";
   import { printChord } from "../keys/keymap.ts";
   import { look } from "../render/look.svelte.ts";
@@ -94,114 +95,124 @@
   const saveLabel = $derived(project.dirty ? "save" : "saved");
 </script>
 
-<header class="toolbar">
-  <span class="brand">three-broom</span>
+<div class="bar">
+  <header class="toolbar">
+    <span class="brand">three-broom</span>
 
-  <Files />
+    <Files />
 
-  <span class="group tools">
-    {#each tools.all as tool (tool.id)}
-      {@const Icon = TOOL_ICONS[tool.id]}
-      <button
-        class="tool"
-        class:on={tools.current.id === tool.id}
-        use:tooltip={`${tool.title} (${tool.key.toUpperCase()})`}
-        onclick={() => tools.use(tool.id)}
-      >
-        {#if Icon}<Icon size={16} />{:else}{tool.title.slice(0, 1)}{/if}
-      </button>
-    {/each}
-  </span>
+    <span class="group tools">
+      {#each tools.all as tool (tool.id)}
+        {@const Icon = TOOL_ICONS[tool.id]}
+        <button
+          class="tool"
+          class:on={tools.current.id === tool.id}
+          use:tooltip={`${tool.title} (${tool.key.toUpperCase()})`}
+          onclick={() => tools.use(tool.id)}
+        >
+          {#if Icon}<Icon size={16} />{:else}{tool.title.slice(0, 1)}{/if}
+        </button>
+      {/each}
+    </span>
 
-  <span class="group">
-    <button
-      class="btn"
-      disabled={!session.canUndo}
-      use:tooltip={withKey(session.undoName ? `undo ${session.undoName}` : "undo", "edit.undo")}
-      onclick={() => session.undo()}
-    >
-      <IconArrowBackUp size={16} />
-    </button>
-    <button
-      class="btn"
-      disabled={!session.canRedo}
-      use:tooltip={withKey(session.redoName ? `redo ${session.redoName}` : "redo", "edit.redo")}
-      onclick={() => session.redo()}
-    >
-      <IconArrowForwardUp size={16} />
-    </button>
-  </span>
-
-  <!-- two states, not a slider: "classic" is what a level is built in and "modern" is what it will look
-       like, and anything in between is a third thing a designer has to think about for no gain -->
-  <span class="group looks">
-    <button
-      class="btn"
-      class:on={!look.pbr}
-      use:tooltip={"classic — flat shading, one material, one draw call: the shape of the level"}
-      onclick={() => (look.current = "classic")}
-    >
-      <IconCube size={16} />
-    </button>
-    <button
-      class="btn"
-      class:on={look.pbr}
-      use:tooltip={"modern — the sheet's own materials and the map's own lights: what a player will see"}
-      onclick={() => (look.current = "pbr")}
-    >
-      <IconSparkles size={16} />
-    </button>
-  </span>
-
-  <span class="group layouts">
-    {#each LAYOUTS as kind, i (kind)}
-      {@const Icon = LAYOUT_ICONS[kind]}
+    <span class="group">
       <button
         class="btn"
-        class:on={panes.layout === kind && !panes.maximised}
-        use:tooltip={`${kind} pane · ⌘${i + 1}`}
-        onclick={() => panes.setLayout(kind)}
+        disabled={!session.canUndo}
+        use:tooltip={withKey(session.undoName ? `undo ${session.undoName}` : "undo", "edit.undo")}
+        onclick={() => session.undo()}
       >
-        <Icon size={16} />
+        <IconArrowBackUp size={16} />
       </button>
-    {/each}
-  </span>
+      <button
+        class="btn"
+        disabled={!session.canRedo}
+        use:tooltip={withKey(session.redoName ? `redo ${session.redoName}` : "redo", "edit.redo")}
+        onclick={() => session.redo()}
+      >
+        <IconArrowForwardUp size={16} />
+      </button>
+    </span>
 
-  <span class="group">
-    <Bake />
-    <Keymap />
-    <Prefs />
-    <!-- the mark is what makes a console worth having a button for: something was said while you were
-         looking somewhere else, and its colour is how bad it was -->
+    <!-- two states, not a slider: "classic" is what a level is built in and "modern" is what it will look
+         like, and anything in between is a third thing a designer has to think about for no gain -->
+    <span class="group looks">
+      <button
+        class="btn"
+        class:on={!look.pbr}
+        use:tooltip={"classic — flat shading, one material, one draw call: the shape of the level"}
+        onclick={() => (look.current = "classic")}
+      >
+        <IconCube size={16} />
+      </button>
+      <button
+        class="btn"
+        class:on={look.pbr}
+        use:tooltip={"modern — the sheet's own materials and the map's own lights: what a player will see"}
+        onclick={() => (look.current = "pbr")}
+      >
+        <IconSparkles size={16} />
+      </button>
+    </span>
+
+    <span class="group layouts">
+      {#each LAYOUTS as kind, i (kind)}
+        {@const Icon = LAYOUT_ICONS[kind]}
+        <button
+          class="btn"
+          class:on={panes.layout === kind && !panes.maximised}
+          use:tooltip={`${kind} pane · ⌘${i + 1}`}
+          onclick={() => panes.setLayout(kind)}
+        >
+          <Icon size={16} />
+        </button>
+      {/each}
+    </span>
+
+    <span class="group">
+      <Bake />
+      <Keymap />
+      <Prefs />
+      <!-- the mark is what makes a console worth having a button for: something was said while you were
+           looking somewhere else, and its colour is how bad it was -->
+      <button
+        class="btn console"
+        class:on={drawer.open}
+        class:warn={log.pending === "warn"}
+        class:bad={log.pending === "bad"}
+        use:tooltip={withKey("console", "window.log")}
+        onclick={() => drawer.toggle("log")}
+      >
+        <IconTerminal2 size={16} />
+        {#if log.unread}<i>{log.unread > 99 ? "99+" : log.unread}</i>{/if}
+      </button>
+    </span>
+
+    <span class="spacer"></span>
+
     <button
-      class="btn console"
-      class:on={drawer.open}
-      class:warn={log.pending === "warn"}
-      class:bad={log.pending === "bad"}
-      use:tooltip={withKey("console", "window.log")}
-      onclick={() => drawer.toggle("log")}
+      class="save"
+      class:dirty={project.dirty}
+      use:tooltip={withKey("save", "file.save")}
+      onclick={() => void project.save()}
     >
-      <IconTerminal2 size={16} />
-      {#if log.unread}<i>{log.unread > 99 ? "99+" : log.unread}</i>{/if}
+      <IconDeviceFloppy size={14} />
+      {saveLabel}
     </button>
-  </span>
+  </header>
 
-  <span class="spacer"></span>
-
-  <button
-    class="save"
-    class:dirty={project.dirty}
-    use:tooltip={withKey("save", "file.save")}
-    onclick={() => void project.save()}
-  >
-    <IconDeviceFloppy size={14} />
-    {saveLabel}
-  </button>
-</header>
+  <!-- the live tool's own settings, under the row that picked it -->
+  <ToolOptions />
+</div>
 
 <style>
-  .toolbar {
+  /* one grid child for both rows, so the options row can come and go with the tool without the shell's
+     rows having to be renumbered around it */
+  .bar {
     grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .toolbar {
     display: flex;
     align-items: center;
     gap: 10px;
