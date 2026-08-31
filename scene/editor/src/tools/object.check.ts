@@ -1,5 +1,5 @@
 // Placing everything in a level that is not a wall.
-// node --experimental-strip-types --disable-warning=ExperimentalWarning src/tools/entity.check.ts
+// node --experimental-strip-types --disable-warning=ExperimentalWarning src/tools/object.check.ts
 import { strict as assert } from "node:assert";
 import type { Vec3 } from "tscene";
 import { report, test } from "../check.ts";
@@ -11,8 +11,8 @@ import { newView, type Size } from "../viewport/view.ts";
 import { defByName } from "../doc/catalogue.ts";
 import { demoCatalogue } from "../doc/demo.ts";
 import {
-  ENTITY_TYPES, entitySettings, entityTool, newEntity, placeAt, setEntityDef, setEntityType,
-} from "./entity.ts";
+  OBJECT_TYPES, objectSettings, objectTool, newObject, placeAt, setObjectDef, setObjectType,
+} from "./object.ts";
 import { newInput, type InputState } from "./input.ts";
 import { ToolBox, type Outcome } from "./tool.ts";
 
@@ -44,33 +44,33 @@ function apply(h: History, out: Outcome | undefined): History {
   return next;
 }
 
-// ---------------------------------------------------------------- what a new entity is
+// ---------------------------------------------------------------- what a new object is
 
-test("a new entity is written with the position it was placed at", () => {
-  const light = newEntity([1, 2, 3], { type: "pointLight" });
+test("a new object is written with the position it was placed at", () => {
+  const light = newObject([1, 2, 3], { type: "pointLight" });
   assert.equal(light.type, "pointLight");
   nearVec(vec3Of(light.props, "position")!, [1, 2, 3]);
 });
 
-test("a new entity is given a box, because a point cannot be clicked", () => {
-  for (const { type, half } of ENTITY_TYPES) {
-    const box = nodeBounds(newEntity([0, 0, 0], { type }));
+test("a new object is given a box, because a point cannot be clicked", () => {
+  for (const { type, half } of OBJECT_TYPES) {
+    const box = nodeBounds(newObject([0, 0, 0], { type }));
     assert.ok(box, `${type} has nothing to pick`);
     near(box!.max[0]! - box!.min[0]!, half * 2);
   }
   // a type the list has never heard of still gets one, so the free type stays usable
-  assert.ok(nodeBounds(newEntity([0, 0, 0], { type: "audioListener" })));
+  assert.ok(nodeBounds(newObject([0, 0, 0], { type: "audioListener" })));
 });
 
 test("armed with a definition, a click places an instance of it and not a bare node", () => {
   const def = defByName(demoCatalogue(), "mesh", "crate")!;
-  assert.equal(setEntityDef(def), "mesh.crate");
-  const made = newEntity([0, 0, 0]);
+  assert.equal(setObjectDef(def), "mesh.crate");
+  const made = newObject([0, 0, 0]);
   assert.equal(made.type, "mesh");
   assert.deepEqual(made.classes, ["crate"]);
   assert.deepEqual(made.broom.size, def.size, "the definition's own box, not a guessed one");
-  assert.equal(setEntityType("pointLight"), "pointLight");
-  assert.deepEqual(newEntity([0, 0, 0]).classes, [], "and setting a bare type disarms it again");
+  assert.equal(setObjectType("pointLight"), "pointLight");
+  assert.deepEqual(newObject([0, 0, 0]).classes, [], "and setting a bare type disarms it again");
 });
 
 // ---------------------------------------------------------------- where it goes
@@ -102,8 +102,8 @@ test("looking exactly along the ground it lands at the origin, where it can be f
 // ---------------------------------------------------------------- the gesture
 
 test("a click places one, selects it, and undo takes it away again", () => {
-  setEntityType("pointLight");
-  const tools = new ToolBox([entityTool]);
+  setObjectType("pointLight");
+  const tools = new ToolBox([objectTool]);
   let h = history(empty());
   tools.down(at(400, 200), h.editor);
   h = apply(h, tools.up(at(400, 200), h.editor));
@@ -114,7 +114,7 @@ test("a click places one, selects it, and undo takes it away again", () => {
 });
 
 test("a drag is not a placement: only a click puts one down", () => {
-  const tools = new ToolBox([entityTool]);
+  const tools = new ToolBox([objectTool]);
   const e = empty();
   tools.down(at(400, 200), e);
   assert.equal(tools.move(at(500, 200), e), undefined, "the tool has no drag, so there is nothing to do");
@@ -122,8 +122,8 @@ test("a drag is not a placement: only a click puts one down", () => {
 });
 
 test("repeating a placement makes another one rather than moving the first", () => {
-  setEntityType("pointLight");
-  const tools = new ToolBox([entityTool]);
+  setObjectType("pointLight");
+  const tools = new ToolBox([objectTool]);
   let h = history(empty());
   tools.down(at(400, 200), h.editor);
   h = apply(h, tools.up(at(400, 200), h.editor));
@@ -135,13 +135,13 @@ test("repeating a placement makes another one rather than moving the first", () 
 });
 
 test("tab walks the list of types and wraps", () => {
-  setEntityType(ENTITY_TYPES[0]!.type);
-  const seen = [entitySettings.type];
-  for (let i = 1; i < ENTITY_TYPES.length; i++) seen.push(entityTool.press!("tab", undefined, empty())!.note!);
-  assert.deepEqual(seen, ENTITY_TYPES.map((t) => t.type));
-  assert.equal(entityTool.press!("tab", undefined, empty())?.note, ENTITY_TYPES[0]!.type);
-  assert.equal(entityTool.press!("q", undefined, empty()), undefined);
-  setEntityType("pointLight");
+  setObjectType(OBJECT_TYPES[0]!.type);
+  const seen = [objectSettings.type];
+  for (let i = 1; i < OBJECT_TYPES.length; i++) seen.push(objectTool.press!("tab", undefined, empty())!.note!);
+  assert.deepEqual(seen, OBJECT_TYPES.map((t) => t.type));
+  assert.equal(objectTool.press!("tab", undefined, empty())?.note, OBJECT_TYPES[0]!.type);
+  assert.equal(objectTool.press!("q", undefined, empty()), undefined);
+  setObjectType("pointLight");
 });
 
-report("entity");
+report("object");

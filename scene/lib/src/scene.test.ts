@@ -493,6 +493,22 @@ test("@bakery keys are checked per position", async () => {
   assert.match(parse(`mesh { @bakery; }`).errors[0]!.message, /@bakery takes a block/);
 });
 
+test("@entity takes any key and only plain values", async () => {
+  assert.deepEqual(
+    await checkText(`@template mesh.slime { @entity { hp: 30; boss: false; drops: ["coin"] }; }
+      mesh.slime { @entity { hp: 300; loot: { gold: 5 } }; }`),
+    [],
+  );
+  assert.match((await checkText(`@entity { hp: 30 }`))[0]!, /@entity belongs on a node/);
+  assert.match((await checkText(`mesh { @entity { at: vec3(0, 1, 0) }; }`))[0]!, /@entity at must be a plain value/);
+  assert.match(
+    (await checkText(`group #lamp { }\nmesh { @entity { lit: ref(#lamp) }; }`))[0]!,
+    /@entity lit must be a plain value/,
+  );
+  // a `calc()` of constants is folded before the checker sees it, so it arrives as the number it is
+  assert.deepEqual(await checkText(`mesh { @entity { hp: calc(20 + 10) }; }`), []);
+});
+
 test("templates are typed by the node they apply to", async () => {
   assert.deepEqual(await checkText(`@template mesh.glow { castShadow: true; }\nmesh.glow { }`), []);
   assert.deepEqual(await checkText(`@template .hidden { visible: false; }\npointLight.hidden { }`), []);
@@ -763,6 +779,47 @@ test("@bakery lands on .bakery, merged key by key", async () => {
   const box = root.getObjectByName("box") as any;
   assert.deepEqual(box.bakery, { enabled: true, radius: 0.5 }, "the node's own block wins key by key");
   assert.deepEqual(box.material.bakery, { albedo: [0.5, 0.25, 0.125] });
+});
+
+test("@entity lands on .entity, the template's defaults under the instance's overrides", async () => {
+  const root = await load(`
+    @template mesh.slime { @entity { hp: 30; speed: 2; drops: ["coin"] }; }
+    mesh.slime #boss { @entity { hp: 300; boss: true }; }`);
+  const boss = root.getObjectByName("boss") as any;
+  assert.deepEqual(boss.entity, { hp: 300, speed: 2, drops: ["coin"], boss: true });
+});
+
+test("an entity is its own node: data at a point, and not a mesh", async () => {
+  const root = await load(`
+    @template entity.spawner {
+      @broom { color: #6fd08c; category: "gameplay" };
+      @fields { hp: { type: int; min: 1; max: 999 } };
+      @entity { hp: 30; kind: "ogre" };
+    }
+    entity.spawner #ogre { position: vec3(4, 0, -2); @entity { hp: 60 }; }`);
+  const ogre = root.getObjectByName("ogre") as any;
+  assert.equal(ogre.isEntity, true, "an entity says so, so a game can find one without a class import");
+  assert.equal(ogre.type, "Entity");
+  assert.deepEqual(ogre.entity, { hp: 60, kind: "ogre" });
+  assert.deepEqual(ogre.position.toArray(), [4, 0, -2]);
+  assert.equal(ogre.children.length, 0, "no geometry, no material, nothing to draw");
+  const { entities } = await import("./runtime.ts");
+  assert.deepEqual(entities(root).map((e) => e.entity), [ogre.entity]);
+  // an entity is not a mesh, and the checker is where that is said
+  assert.deepEqual(await checkText(`entity { geometry: boxGeometry(1, 1, 1); }`), ['Entity has no property "geometry"']);
+  assert.deepEqual(await checkText(`@template entity.x { @fields { hp: { type: int } }; }\nentity.x { }`), []);
+  assert.match((await checkText(`@template entity.x { @fields { hp: { type: intt } }; }`))[0]!, /@fields hp/);
+});
+
+test("@locale is the sheet's translation table, keyed by the source text", async () => {
+  const root = await load(`
+    @locale { ko: { "Open the door": "\uBB38\uC744 \uC5EC\uC5B4\uB77C" } };
+    entity #door { @entity { sign: "Open the door" }; }`);
+  const { localize } = await import("./runtime.ts");
+  assert.equal(localize(root, "Open the door", "ko"), "\uBB38\uC744 \uC5EC\uC5B4\uB77C");
+  assert.equal(localize(root, "Open the door", "de"), "Open the door", "an untranslated string is itself");
+  assert.equal(localize(root, "Open the door", undefined), "Open the door");
+  assert.match((await checkText(`entity { @locale { ko: { "a": "b" } }; }`))[0]!, /@locale belongs on the sheet/);
 });
 
 test("one AST node is one instance, so a shared --var is a shared material", async () => {

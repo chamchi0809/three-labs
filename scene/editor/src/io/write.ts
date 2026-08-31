@@ -25,6 +25,7 @@ import { childrenOf, type Node, type NodeId, type World } from "../doc/document.
 import { broomMember, faceMembers, headOf, ownMembers, rowMembers, toObject, worldBroom } from "./emit.ts";
 import { printMember, printNode } from "./literal.ts";
 import { materialEdits, type MaterialDrafts } from "./materials.ts";
+import { templateEdits, type TemplateDrafts } from "./templates.ts";
 import {
   applyEdits, dedent, deleteAt, indentAt, insertAt, lineRange, newlineOf, reindent, replaceAt, withComments,
   type TextEdit,
@@ -60,7 +61,9 @@ const inPlace = (ctx: Ctx, node: Node, file: string): node is Node & { origin: O
 
 // ---------------------------------------------------------------- the whole thing
 
-export function writeWorld(world: World, project: Project, materials?: MaterialDrafts): WriteResult {
+export function writeWorld(
+  world: World, project: Project, materials?: MaterialDrafts, templates?: TemplateDrafts,
+): WriteResult {
   const ctx: Ctx = { project, edits: new Map(), problems: [] };
 
   writeBroom(ctx, world);
@@ -68,6 +71,9 @@ export function writeWorld(world: World, project: Project, materials?: MaterialD
   // the declarations, which are nobody's node: see `materials.ts` for why they are written apart
   if (materials?.size) {
     for (const [file, list] of materialEdits(project.sheets, project.root, materials)) sink(ctx, file).push(...list);
+  }
+  if (templates?.size) {
+    for (const [file, list] of templateEdits(project.sheets, templates)) sink(ctx, file).push(...list);
   }
 
   const files = new Map<string, string>();

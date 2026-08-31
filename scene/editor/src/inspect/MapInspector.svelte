@@ -51,7 +51,7 @@
     <dt>faces</dt><dd>{stats.faces}</dd>
     <!-- counted apart from the solids, because a patch is a surface and contributes none of those faces -->
     <dt>patches</dt><dd>{stats.patches}</dd>
-    <dt>entities</dt><dd>{stats.entities}</dd>
+    <dt>objects</dt><dd>{stats.objects}</dd>
     <dt>groups</dt><dd>{stats.groups}</dd>
     <dt>layers</dt><dd>{stats.layers}</dd>
   </dl>

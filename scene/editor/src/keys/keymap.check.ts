@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { report, test } from "../check.ts";
 import {
-  bindingsOf, chordKey, chordOf, chordsFor, commandFor, conflictsOf, COMMANDS, DEFAULTS, isViewCommand,
-  keyOf, parseChord, printChord, rowKey, type Binding, type Custom,
+  bindingsOf, chordKey, chordOf, chordsFor, commandFor, conflictsOf, COMMANDS, DEFAULTS, isFlyChord,
+  isViewCommand, keyOf, parseChord, printChord, rowKey, type Binding, type Custom,
 } from "./keymap.ts";
 
 const press = (key: string, mods: { ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean } = {}) =>
@@ -125,6 +125,21 @@ test("a latin layout is taken at its word, not by where QWERTY puts the key", ()
   assert.equal(keyOf({ key: "Escape", code: "Escape" }), "escape");
   assert.equal(keyOf({ key: "[", code: "BracketLeft" }), "[");
   assert.equal(keyOf({ key: "w" }), "w", "an event with no code is still a key");
+});
+
+test("the camera keeps wasd and qe: a binding on one of them is dropped, modified is fine", () => {
+  const on = [
+    { chord: { key: "w" }, command: "tool.shape" },
+    { chord: { key: "e", shift: true }, command: "tool.entity" },
+    { chord: { key: "d", ctrl: true }, command: "edit.duplicate" },
+  ];
+  const live = bindingsOf([], { off: [], on });
+  assert.deepEqual(live.map((b) => b.command), ["edit.duplicate"], "shift alone does not free a fly key");
+  assert.equal(isFlyChord({ key: "q" }), true);
+  assert.equal(isFlyChord({ key: "q", ctrl: true }), false);
+  assert.equal(isFlyChord({ key: "f" }), false);
+  // and nothing shipped is on one of them
+  for (const b of DEFAULTS) assert.equal(isFlyChord(b.chord), false, `${b.command} is bound to a fly key`);
 });
 
 report("keys");

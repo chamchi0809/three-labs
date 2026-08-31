@@ -445,11 +445,136 @@ group #torch {
 
 At the top level, `grid` is the power of two the editor snaps to (`0` is one metre, `-1` is half a metre)
 and `scale` is how many metres one unit of an imported map is worth. In a node, `kind` says whether the
-editor treats it as a point entity or a brush entity, `icon` and `color` are how a point entity draws when
-it has no geometry, `size` is its selection box as `min x y z, max x y z`, and `layer`, `locked` and
+editor places it by clicking or wraps it around a selection of solids, `icon` and `color` are how one
+with no geometry draws, `size` is its selection box as `min x y z, max x y z`, and `layer`, `locked` and
 `hidden` are the editor state that survives a round trip.
 
 Everything here is advisory: a sheet with no `@broom` in it still loads, and three never sees these keys.
+
+## Entities
+
+An `entity` is a node that is data rather than geometry — an `Object3D` with nothing to draw, whose whole
+content is a record of values sitting at a point in the level. A door that needs a key, a spawn point, a
+trigger that loads the next room: things a game reads, not things a renderer draws.
+
+```css
+@template entity.spawner {
+  @broom { color: #6fd08c; size: [-0.3, 0, -0.3, 0.3, 1.8, 0.3]; category: "gameplay" };
+  @fields { hp: { type: int; min: 1; max: 999 }; mood: { type: enum; options: ["calm", "angry"] } };
+  @entity { hp: 30; mood: "calm" };
+}
+
+entity.spawner #ogre {
+  position: vec3(4, 0, -2);
+  @entity { hp: 60; mood: "angry" };
+}
+```
+
+The template is the type and the node is the instance, exactly as for any other node: `@template
+entity.spawner` declares what a spawner is, and `entity.spawner { … }` places one. It has no `geometry`
+and no `material` — an entity is not a mesh, and writing one on it is an error — so what it is *made of*
+is `@entity` for the data and `@fields` for what that data is. `@broom` is what an editor draws it as.
+
+## `@entity`
+
+The level's own data. Where `@bakery` and `@broom` are settings for a tool and have a fixed table of
+knobs, `@entity` has none — the fields are whatever the project invents, and the runtime puts them on the
+object as `object.entity` for a spawner to read.
+
+Usually on an `entity` node, but legal on any node, because a door that is a mesh and carries the key it
+needs is still something a game has to find:
+
+```css
+@template mesh.slime {
+  @broom { kind: point; color: #63c74d; size: [-0.4, 0, -0.4, 0.4, 0.8, 0.4] };
+  @entity { hp: 30; speed: 2; boss: false; drops: ["coin", "key"] };
+}
+
+mesh.slime #boss {
+  position: vec3(4, 0, 2);
+  @entity { hp: 300; boss: true };
+}
+```
+
+The template is the definition and the node is the instance, and the two are merged key by key with the
+node winning — so `#boss` comes out with `{ hp: 300, speed: 2, boss: true, drops: ["coin", "key"] }`. That
+is the whole of the mechanism: a definition holds the defaults, an instance overrides the few it cares
+about, and nothing has to be copied for a placed thing to be complete.
+
+Values are plain: numbers, strings, bare words (`true`, `false`, `null` and anything else as a string),
+lists and records. A `vec3()`, a `calc()` or a `var()` is rejected, because these are read as data and
+never evaluated as three values.
+
+At runtime the block lands on `object.entity`, and `entities(root)` is every object that got one:
+
+```ts
+import { entities, loadScene } from "tscene";
+
+const root = await loadScene(sheet);
+for (const it of entities<{ hp: number }>(root)) spawn(it.position, it.entity.hp);
+```
+
+## `@fields`
+
+What an `@entity` key *is*, as against what it happens to hold. This is the half of a `.fgd` tscene still
+needs: which keys exist and what they default to, `@entity` already says, and saying it twice is how a
+definition file gets out of step with the level it describes.
+
+```css
+@template entity.door {
+  @fields {
+    key: { type: enum; options: ["none", "brass", "skull"]; doc: "what opens it" };
+    locked: { type: bool };
+    sign: { type: text; localized: true };
+    script: { type: script };
+    to: { type: file };
+    hint: { type: lines };
+    hp: { type: int; min: 0; max: 999 };
+    where: { type: point };
+    tint: { type: color };
+    tags: { type: text; array: true; nullable: true };
+    mood: { type: enum; enum: "moods" };
+  };
+  @entity { key: "brass"; locked: true };
+}
+```
+
+The types are `int`, `float`, `text`, `lines`, `bool`, `color`, `point`, `enum`, `file` and `script`. A
+field with no declaration is not untyped — `hp: 30` earns a number box by being a number — so this table
+is only for what a value cannot say about itself: that a string is one of five choices, that a number is a
+whole one in a range, that a path is a file, that a line of prose wants a box with room in it.
+
+`options` lists the choices on the field; `enum` names a shared list instead. `localized: true` marks a
+string that goes through `@locale`. `array` and `nullable` say a field holds a list of the type, or
+nothing at all. `doc` is the tooltip. Everything here is advisory — three never sees it, and only an
+editor reads it.
+
+## `@locale`
+
+The sheet's translation table, at the top level. The key is the source text itself rather than an id, so a
+string nobody has translated — or a whole locale nobody has filled in — still shows what the level author
+wrote instead of `menu.door.open.1`.
+
+```css
+@locale {
+  ko: { "Open the door": "문을 열어라" };
+  ja: { "Open the door": "ドアを開ける" };
+};
+
+entity #front {
+  @entity { sign: "Open the door" };
+}
+```
+
+It lands on the root the loader returns, and `localize` reads it back:
+
+```ts
+import { loadScene, localize } from "tscene";
+
+const root = await loadScene(sheet);
+localize(root, "Open the door", "ko"); // 문을 열어라
+localize(root, "Open the door", "de"); // "Open the door" — untranslated, not blank
+```
 
 ## Brushes
 

@@ -1,9 +1,9 @@
 /**
  * The document: what a map is, in between the sheet on disk and the scene on screen.
  *
- * A world holds layers, layers hold groups, entities and solids, and groups and entities hold more of
+ * A world holds layers, layers hold groups, objects and solids, and groups and objects hold more of
  * the same. That is TrenchBroom's tree, and it maps onto tscene without inventing any syntax: a layer is
- * a top-level `group` node, a group is a nested one, an entity is any other node, and a solid is a
+ * a top-level `group` node, a group is a nested one, an object is any other node, and a solid is a
  * `brush`. Which of the two a `group` is comes from where it sits, so nothing has to be tagged.
  *
  * The tree is immutable. Every edit returns a new world sharing every subtree it did not touch, which is
@@ -19,7 +19,8 @@ import type { Bounds } from "../brush/builder.ts";
 import { brushBounds, type Brush } from "../brush/brush.ts";
 import { patchBounds, type Patch } from "../patch/patch.ts";
 import type { Origin } from "../io/origin.ts";
-import { vec3Of } from "./props.ts";
+import { bounds, compose, transformPoint } from "../brush/vec.ts";
+import { trsOf } from "./props.ts";
 
 export type NodeId = string;
 
@@ -35,7 +36,7 @@ type Base = {
   /** the `#id` the sheet gave it. Names in a sheet are the designer's; `id` above is the session's */
   sheetId?: string;
   /**
-   * The `.class` templates written on its head. On every node rather than on entities alone, because
+   * The `.class` templates written on its head. On every node rather than on objects alone, because
    * `brush.wall { … }` is legal tscene and a solid that lost its template on the way in would lose it on
    * the way out too.
    */
@@ -62,8 +63,8 @@ export type PatchNode = Base & { kind: "patch"; patch: Patch; props: Member[] };
  * Any node the editor does not model specially: a mesh, a light, an instance of a `@template`. Its body
  * is carried verbatim apart from the child nodes, which are lifted into `children`.
  */
-export type EntityNode = Base & {
-  kind: "entity";
+export type ObjectNode = Base & {
+  kind: "object";
   /** the node name as the sheet writes it: `mesh`, `pointLight`, or a template's name */
   type: string;
   args: Value[];
@@ -71,14 +72,14 @@ export type EntityNode = Base & {
   children: Node[];
 };
 
-/** solids and entities selected and moved as one thing */
+/** solids and objects selected and moved as one thing */
 export type GroupNode = Base & { kind: "group"; name: string; children: Node[]; props: Member[] };
 
 /** the top level of the tree, and the unit a designer hides a whole floor of a building with */
 export type LayerNode = Base & { kind: "layer"; name: string; children: Node[]; props: Member[] };
 
-export type Node = BrushNode | PatchNode | EntityNode | GroupNode | LayerNode;
-export type Parent = GroupNode | LayerNode | EntityNode;
+export type Node = BrushNode | PatchNode | ObjectNode | GroupNode | LayerNode;
+export type Parent = GroupNode | LayerNode | ObjectNode;
 /** the two kinds the editor draws itself, rather than handing to the runtime to make what it will of */
 export type SolidNode = BrushNode | PatchNode;
 export type World = { layers: LayerNode[]; broom: { grid: number; scale: number } };
@@ -98,8 +99,8 @@ export const patchNode = (patch: Patch, over: Partial<PatchNode> = {}): PatchNod
   kind: "patch", id: freshId(), broom: {}, classes: [], props: [], patch, ...over,
 });
 
-export const entityNode = (type: string, over: Partial<EntityNode> = {}): EntityNode => ({
-  kind: "entity", id: freshId(), broom: {}, classes: [], type, args: [], props: [], children: [], ...over,
+export const objectNode = (type: string, over: Partial<ObjectNode> = {}): ObjectNode => ({
+  kind: "object", id: freshId(), broom: {}, classes: [], type, args: [], props: [], children: [], ...over,
 });
 
 export const groupNode = (name: string, children: Node[] = [], over: Partial<GroupNode> = {}): GroupNode => ({
@@ -197,7 +198,7 @@ export function* solidsUnder(node: Node): Generator<SolidNode> {
  * it is written at all.
  */
 export const nodeTypeName = (node: Node): string =>
-  node.kind === "entity" ? node.type : node.kind === "layer" ? "group" : node.kind;
+  node.kind === "object" ? node.type : node.kind === "layer" ? "group" : node.kind;
 
 // ---------------------------------------------------------------- changing
 
@@ -319,18 +320,24 @@ export function ungroup(world: World, id: NodeId): { world: World; freed: NodeId
 
 // ---------------------------------------------------------------- extent
 
-/** the box an entity draws in when it is not a solid: what its `@broom { size }` says, about its origin */
-export function entityBounds(node: EntityNode): Bounds | undefined {
-  const at = vec3Of(node.props, "position") ?? [0, 0, 0];
+/** the box an object draws in when it is not a solid: what its `@broom { size }` says, about its origin */
+export function objectBounds(node: ObjectNode): Bounds | undefined {
+  const trs = trsOf(node.props);
   const size = node.broom.size;
   if (!size || size.length !== 6) {
-    // an entity with no stated size is still somewhere, and a point is a box a picker can hit
-    return { min: at, max: at };
+    // an object with no stated size is still somewhere, and a point is a box a picker can hit
+    return { min: trs.position, max: trs.position };
   }
-  return {
-    min: [at[0] + size[0]!, at[1] + size[1]!, at[2] + size[2]!],
-    max: [at[0] + size[3]!, at[1] + size[4]!, at[2] + size[5]!],
-  };
+  // the eight corners of the stated box put where the object's own turn and size put them, then boxed
+  // again — a turned box is not axis-aligned, and axis-aligned is what the picker and the batch want back
+  const m = compose(trs);
+  const corners: Vec3[] = [];
+  for (const x of [size[0]!, size[3]!]) {
+    for (const y of [size[1]!, size[4]!]) {
+      for (const z of [size[2]!, size[5]!]) corners.push(transformPoint(m, [x, y, z]));
+    }
+  }
+  return bounds(corners);
 }
 
 /** everything a node encloses, or nothing when it encloses nothing at all */
@@ -340,7 +347,7 @@ export function nodeBounds(node: Node): Bounds | undefined {
   // and the alternative is a box that changes size when the subdivision count does, which would make a
   // frame-selection jump the first time the camera got close enough to raise it
   if (node.kind === "patch") return patchBounds(node.patch.grid);
-  const own = node.kind === "entity" ? entityBounds(node) : undefined;
+  const own = node.kind === "object" ? objectBounds(node) : undefined;
   return childrenOf(node).reduce<Bounds | undefined>((acc, kid) => union(acc, nodeBounds(kid)), own);
 }
 

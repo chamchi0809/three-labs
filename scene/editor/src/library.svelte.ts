@@ -4,7 +4,7 @@
  * A sibling of {@link session} rather than part of it, because the catalogue is not a thing anyone edits
  * and so is not a thing anyone undoes. It comes from the sheet's `@template`s and `--var`s, it changes
  * when the sheet is opened or reloaded, and putting it on the undo stack would mean a designer could
- * press ⌘Z until the entity browser was empty.
+ * press ⌘Z until the object browser was empty.
  *
  * Materials are the exception, and the exception is only half an exception: what the *sheet* declares is
  * read here like everything else, but what this session has changed about a declaration lives on the
@@ -17,8 +17,9 @@
  * deciding to keep it. It is never written, which is why it is a separate map.
  */
 import { demoCatalogue } from "./doc/demo.ts";
-import type { Catalogue, EntityDef, MaterialDef } from "./doc/catalogue.ts";
+import { defKey, type Catalogue, type ObjectDef, type MaterialDef } from "./doc/catalogue.ts";
 import { freeName, newMaterial, type MaterialDrafts } from "./io/materials.ts";
+import type { TemplateDrafts } from "./io/templates.ts";
 import { session } from "./session.svelte.ts";
 
 class Library {
@@ -30,7 +31,8 @@ class Library {
   #catalogue = $derived.by((): Catalogue => {
     const depths = this.#depths;
     const drafts = session.editor.materials;
-    if (!depths.size && !drafts.size) return this.#loaded;
+    const templates = session.editor.templates;
+    if (!depths.size && !drafts.size && !templates.size) return this.#loaded;
     const materials: MaterialDef[] = [];
     for (const m of this.#loaded.materials) {
       const draft = drafts.has(m.name) ? drafts.get(m.name) : m;
@@ -40,7 +42,10 @@ class Library {
       if (draft && !this.#loaded.materials.some((m) => m.name === name)) materials.push(draft);
     }
     return {
-      entities: this.#loaded.entities,
+      ...this.#loaded,
+      objects: templates.size
+        ? this.#loaded.objects.map((d) => templates.get(defKey(d)) ?? d)
+        : this.#loaded.objects,
       materials: materials.map((m) => {
         const depth = depths.get(m.name);
         return depth === undefined ? m : { ...m, depth };
@@ -52,8 +57,8 @@ class Library {
     return this.#catalogue;
   }
 
-  get entities(): EntityDef[] {
-    return this.#catalogue.entities;
+  get objects(): ObjectDef[] {
+    return this.#catalogue.objects;
   }
 
   get materials(): MaterialDef[] {
@@ -63,6 +68,33 @@ class Library {
   /** what a save has to write: the declarations this session changed, by their name in the sheet */
   get drafts(): MaterialDrafts {
     return session.editor.materials;
+  }
+
+  /** the same, for the `@template`s — see `io/templates.ts` */
+  get templateDrafts(): TemplateDrafts {
+    return session.editor.templates;
+  }
+
+  /**
+   * The key a def's declaration is filed under: the name the *file* has, which a rename has moved away
+   * from. The same trick {@link keyFor} plays for materials, and for the same reason — a save has to
+   * patch the block that is there rather than append a second one.
+   */
+  keyOfTemplate(def: ObjectDef): string {
+    for (const [key, draft] of session.editor.templates) if (defKey(draft) === defKey(def)) return key;
+    return defKey(def);
+  }
+
+  /**
+   * A `@template` changed: the whole definition as it should now read.
+   *
+   * Renaming through this would be half a rename — a template's name is the `.class` every instance of it
+   * carries, so the level has to move with the declaration, in the same command. That is
+   * `renameTemplate` in `actions.ts`, which does both halves at once.
+   */
+  editTemplate(def: ObjectDef, name = `edit ${def.name}`): void {
+    const key = this.keyOfTemplate(def);
+    session.run(name, (e) => ({ ...e, templates: new Map(e.templates).set(key, def) }));
   }
 
   /**

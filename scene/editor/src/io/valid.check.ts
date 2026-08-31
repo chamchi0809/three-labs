@@ -88,5 +88,21 @@ test("the switch points at the lamp through userData, which a Mesh actually has"
   assert.deepEqual(await errorsIn(`mesh #a { target: ref(#a); }\n`).then((e) => e.length > 0), true);
 });
 
+// `@entity` is the level's own data, and the checker holds it to plain values — the entity grid writes a
+// point as a list and a colour as a bare hex for exactly this reason. See `plain` in inspect/PropertyRow.
+test("an entity's data is data: a point is a list and a colour a bare hex, never a call", async () => {
+  const ok = `@template entity.m {
+  @fields { p: { type: point }; c: { type: color } };
+  @entity { p: [1, 2, 3]; c: #d0607a; };
+}
+entity.m #x { }
+`;
+  assert.deepEqual(await errorsIn(ok), []);
+  for (const spelling of ["p: vec3(1, 2, 3)", "c: color(#d0607a)"]) {
+    const errors = await errorsIn(ok.replace(/@entity \{[^}]*\}/, `@entity { ${spelling} }`));
+    assert.ok(errors.some((e) => e.includes("must be a plain value")), `${spelling}: ${errors.join("; ") || "no error at all"}`);
+  }
+});
+
 await settle();
 report("valid");

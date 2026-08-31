@@ -16,12 +16,12 @@ import {
   BufferAttribute, BufferGeometry, Group, InstancedBufferAttribute, InstancedBufferGeometry, LineSegments,
   Mesh, PlaneGeometry, Scene, type Material, type Object3D,
 } from "three/webgpu";
-import { brushToMesh } from "../brush/brush.ts";
-import type { Bounds } from "../brush/builder.ts";
+import { brushOf, brushToMesh } from "../brush/brush.ts";
+import { cuboid, type Bounds } from "../brush/builder.ts";
 import { hullSegments, patchToBrushMesh } from "../patch/patch.ts";
 import type { Catalogue } from "../doc/catalogue.ts";
-import type { BrushNode, Node, NodeId, PatchNode, World } from "../doc/document.ts";
-import { boundsCentre, childrenOf, nodeById, nodeBounds } from "../doc/document.ts";
+import type { BrushNode, ObjectNode, Node, NodeId, PatchNode, World } from "../doc/document.ts";
+import { boundsCentre, childrenOf, objectBounds, nodeById, nodeBounds } from "../doc/document.ts";
 import type { Editor } from "../doc/editor.ts";
 import { isFaceSelected, isSelected, type Selection } from "../doc/selection.ts";
 import type { Upload } from "./arena.ts";
@@ -51,9 +51,11 @@ export type Hover = { node: NodeId; face?: number } | undefined;
  * What a surface was last drawn as, so an unchanged one is skipped without asking the GPU anything.
  *
  * `shape` is the solid's `brush` or the patch's `patch` — whichever of the two this node keeps its geometry
- * in. Both are immutable, so one pointer comparison answers "has this changed" for either kind.
+ * in. Both are immutable, so one pointer comparison answers "has this changed" for either kind. An object
+ * keeps its box in two places at once — a `position` among its properties and a `size` in its `@broom` —
+ * so what is remembered for one is the node itself, which is replaced whenever either of them is edited.
  */
-type Seen = { shape: BrushNode["brush"] | PatchNode["patch"]; flags: number[] };
+type Seen = { shape: BrushNode["brush"] | PatchNode["patch"] | ObjectNode; flags: number[] };
 
 export type RenderScene = {
   scene: Scene;
@@ -222,7 +224,7 @@ function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "classic")
  * The map's own lights when it has any, and the editor's rig when it has not.
  *
  * The lights are built every call and then thrown away unless they differ from the ones already up. That
- * sounds backwards — building them is the work — but it is not: walking the map for its light entities is
+ * sounds backwards — building them is the work — but it is not: walking the map for its light objects is
  * a few hundred property reads, while *installing* them is what costs. Swapping the contents of the light
  * group changes the lighting graph three derives its shaders from, so every material in the map recompiles.
  *
@@ -289,6 +291,9 @@ export function syncScene(rs: RenderScene, editor: Editor, dragging = false): vo
     } else if (node.kind === "patch") {
       alive.add(node.id);
       syncPatch(rs, node, editor.selection, context);
+    } else if (node.kind === "object") {
+      alive.add(node.id);
+      syncObject(rs, node, editor.selection, context);
     }
   });
 
@@ -383,7 +388,7 @@ function syncBrush(rs: RenderScene, node: BrushNode, selection: Selection, conte
  * hairline over a curved wall is a grey smear that hides the very handles it is drawn to explain.
  */
 function syncPatch(rs: RenderScene, node: PatchNode, selection: Selection, context: Context): void {
-  const flags = [patchFlags(rs, node, selection, context)];
+  const flags = [surfaceFlags(rs, node.id, selection, context)];
   const was = rs.seen.get(node.id);
 
   if (was && was.shape === node.patch) {
@@ -411,14 +416,79 @@ function syncPatch(rs: RenderScene, node: PatchNode, selection: Selection, conte
   rs.seen.set(node.id, { shape: node.patch, flags });
 }
 
-/** the same word a solid's face gets, for the one surface a patch has */
-function patchFlags(rs: RenderScene, node: PatchNode, selection: Selection, context: Context): number {
+/**
+ * The smallest an object's box may be, in metres either side of its origin.
+ *
+ * An object with no `@broom { size }` is a point, and a point has no volume to rasterise — so it would be
+ * drawn by nothing, picked by nothing, and clickable only by dragging a band across it. The tool that
+ * places one writes a size; a sheet written by hand often does not, and those are exactly the nodes a
+ * designer then cannot select.
+ */
+const OBJECT_HALF = 0.125;
+
+/** an object's box, never flatter than {@link OBJECT_HALF} on any axis */
+export function objectBox(node: ObjectNode): Bounds {
+  const box = objectBounds(node) ?? { min: [0, 0, 0], max: [0, 0, 0] };
+  const min: [number, number, number] = [box.min[0], box.min[1], box.min[2]];
+  const max: [number, number, number] = [box.max[0], box.max[1], box.max[2]];
+  for (let axis = 0; axis < 3; axis++) {
+    // per axis rather than all three at once: a sign is a box a designer meant to be flat, and padding
+    // the two axes it has thickness in would move its faces away from where they were written
+    if (max[axis]! - min[axis]! >= OBJECT_HALF) continue;
+    const middle = (min[axis]! + max[axis]!) / 2;
+    min[axis] = middle - OBJECT_HALF / 2;
+    max[axis] = middle + OBJECT_HALF / 2;
+  }
+  return { min, max };
+}
+
+/**
+ * An object into the same two batches the solids go into.
+ *
+ * Its box is not geometry the level has — the runtime makes a light or a mesh of the node, not a crate —
+ * but it is the only thing about an object the *editor* can draw, and drawing it into the face batch is
+ * what makes an object clickable at all: the pick pass rasterises that batch and nothing else, so a node
+ * outside it is a node no click can ever land on. Which is the state objects were in.
+ */
+function syncObject(rs: RenderScene, node: ObjectNode, selection: Selection, context: Context): void {
+  const flags = [surfaceFlags(rs, node.id, selection, context)];
+  const was = rs.seen.get(node.id);
+
+  if (was && was.shape === node) {
+    if (same(was.flags, flags)) return;
+    setFlags(rs.brushes, node.id, () => flags[0]!);
+    setLineFlags(rs.edges, node.id, solidFlags(flags));
+    was.flags = flags;
+    return;
+  }
+
+  const { mesh } = brushToMesh(brushOf(cuboid(objectBox(node))));
+  if (!mesh) {
+    rs.seen.delete(node.id);
+    dropBrush(rs.brushes, node.id);
+    dropLines(rs.edges, node.id);
+    return;
+  }
+
+  // slot 0, always: the box is the editor's own furniture, and a material named on the node is the
+  // runtime's business rather than something to paint the marker with
+  setBrush(rs.brushes, node.id, mesh, () => flags[0]!, () => 0);
+  const { segments, faces } = edgeSegments(mesh.polygons);
+  setLines(rs.edges, node.id, segments, solidFlags(flags), {
+    object: entryOf(rs.brushes, node.id)!.ordinal,
+    part: (segment) => faces[segment] ?? 0,
+  });
+  rs.seen.set(node.id, { shape: node, flags });
+}
+
+/** the same word a solid's face gets, for a node whose whole surface is one thing: a patch, or an object's box */
+function surfaceFlags(rs: RenderScene, id: NodeId, selection: Selection, context: Context): number {
   let flags =
     (context.locked ? LOCKED : 0) |
     (context.outside ? OUTSIDE : 0) |
-    (isSelected(selection, node.id) ? SELECTED : 0);
-  if (isFaceSelected(selection, { node: node.id, face: 0 })) flags |= FACE_SELECTED;
-  if (rs.hover?.node === node.id) flags |= HOVERED;
+    (isSelected(selection, id) ? SELECTED : 0);
+  if (isFaceSelected(selection, { node: id, face: 0 })) flags |= FACE_SELECTED;
+  if (rs.hover?.node === id) flags |= HOVERED;
   return flags;
 }
 
@@ -446,7 +516,7 @@ const same = (a: number[], b: number[]): boolean => a.length === b.length && a.e
 // ---------------------------------------------------------------- what is drawn over the map
 
 /**
- * Selection bounds, spikes and entity links.
+ * Selection bounds, spikes and object links.
  *
  * Every key written here is remembered, and anything not rewritten this pass is dropped — which is what
  * keeps the last selection's box from staying on screen after the selection has moved on. Tools add their
@@ -640,11 +710,11 @@ export function setHoverHandle(rs: RenderScene, index: number | undefined): bool
 
 // ---------------------------------------------------------------- labels
 
-/** entity and group names, over the middle of whatever they are */
+/** object and group names, over the middle of whatever they are */
 function syncLabels(rs: RenderScene, editor: Editor): void {
   hideLabels(rs.labels);
   walkForDrawing(editor, (node) => {
-    if (node.kind !== "entity" && node.kind !== "group") return;
+    if (node.kind !== "object" && node.kind !== "group") return;
     const name = node.kind === "group" ? node.name : (node.sheetId ?? node.type);
     const at = centreIn(editor.world, node.id);
     if (!at) return;

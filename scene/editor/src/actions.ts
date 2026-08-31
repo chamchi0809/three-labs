@@ -11,10 +11,13 @@
  * here — editing a solid inside one copy of a room is how a designer means to edit all of them, and that
  * happens in the command processor, which the tools reach without passing through this file.
  */
-import { IDENTITY, translation, type Mat4 } from "./brush/vec.ts";
+import { IDOBJECT, translation, type Mat4 } from "./brush/vec.ts";
 import { snap } from "./grid/snap.ts";
 import { gridSize, type Editor } from "./doc/editor.ts";
-import { nodeById, nodeBounds, replaceNode, type NodeId } from "./doc/document.ts";
+import {
+  moveNodes, nodeById, nodeBounds, removeNodes, replaceNode, type NodeId,
+} from "./doc/document.ts";
+import { renameNode, setSheetId, sheetIds } from "./doc/inspect.ts";
 import {
   addColumn, addRow, dropColumn, dropRow, flip as flipGrid, snapPatch, spansOf, type Patch,
 } from "./patch/patch.ts";
@@ -23,16 +26,19 @@ import {
   openGroup, propagateFrom, separateGroup, ungroupSelected,
 } from "./doc/groups.ts";
 import {
-  addLayer, hideSelected, isolateSelected, lockSelected, moveToLayer, removeLayer, renameLayer,
-  showAll, toggleHidden, toggleLocked, unlockAll,
+  hideSelected, isolateSelected, lockSelected, showAll, toggleHidden, toggleLocked, unlockAll,
 } from "./doc/layers.ts";
 import { applyFixes, type Context, type Issue } from "./doc/issues.ts";
 import {
   hollowSelection, intersectSelection, mergeSelection, subtractSelection, type Attempt,
 } from "./doc/csg.ts";
-import { hasTag, selectByTag, tagNodes, untagNodes, type Tag } from "./doc/tags.ts";
-import { isolateTag as isolate, hideTag as hide } from "./doc/tags.ts";
-import { NOTHING, selectedNodes, type SelectMode } from "./doc/selection.ts";
+import {
+  applyTemplate, hasTemplate, removeTemplate, renameClass, selectByTemplate, type Template,
+} from "./doc/templates.ts";
+import type { ObjectDef } from "./doc/catalogue.ts";
+import { cleanName } from "./io/materials.ts";
+import { library } from "./library.svelte.ts";
+import { NOTHING, selectExactly, selectedNodes, type SelectMode } from "./doc/selection.ts";
 import { session } from "./session.svelte.ts";
 
 // ---------------------------------------------------------------- the two shapes every command has
@@ -50,6 +56,16 @@ export const ungroup = (): void => edit("ungroup", ungroupSelected);
 export const enterGroup = (id: NodeId): void => view((e) => openGroup(e, id));
 export const leaveGroup = (): void => view(closeGroup);
 export const duplicate = (): void => edit("duplicate", duplicateSelected);
+
+/**
+ * The selection, gone — every solid, patch, object and group of it.
+ *
+ * A root is not in the selection and so cannot be deleted here — a sheet's own top level is not a thing in
+ * the level, it is where the level is kept. Nothing clears the selection afterwards either: an edit settles through `prune`, so pointing at what no longer exists is
+ * already impossible.
+ */
+export const deleteSelection = (): void =>
+  edit("delete", (e) => (e.selection.nodes.length ? { ...e, world: removeNodes(e.world, e.selection.nodes) } : e));
 
 /**
  * A linked copy of the selected group, put down beside the original.
@@ -77,7 +93,7 @@ export function linkedDuplicate(): void {
 function beside(e: Editor, id: NodeId): Mat4 {
   const node = nodeById(e.world, id);
   const bounds = node && nodeBounds(node);
-  if (!bounds) return IDENTITY;
+  if (!bounds) return IDOBJECT;
   const step = gridSize(e);
   const width = Math.max(bounds.max[0] - bounds.min[0], step);
   // snapping down to nothing would put the copy back on top of the original, so the grid step is the floor
@@ -105,24 +121,39 @@ export const matchCopies = (): void =>
     return from.reduce((acc, id) => ({ ...acc, world: propagateFrom(acc.world, id) }), e);
   });
 
-// ---------------------------------------------------------------- layers and visibility
+// ---------------------------------------------------------------- the tree
 
-export const newLayer = (name?: string): void =>
-  edit("new layer", (e) => {
-    const { world, layer } = addLayer(e.world, name);
-    return { ...e, world, layer: layer.id };
+/**
+ * Nodes moved under a parent, at an index — the hierarchy panel's drag and drop.
+ *
+ * `at` counts the children the parent has *after* the moving ones are taken out of it, which is what
+ * `moveNodes` is written to take; the panel works that index out with `dropAt` in doc/tree.ts.
+ */
+export const reparent = (ids: NodeId[], parent: NodeId, at?: number): void =>
+  edit("move", (e) => ({ ...e, world: moveNodes(e.world, ids, parent, at) }));
+
+/** the hierarchy's own click: a row names a node, so that node is what is picked, group or no group */
+export const pickNodes = (ids: NodeId[], mode: SelectMode = "replace"): void =>
+  view((e) => ({ ...e, selection: selectExactly(e.world, e.selection, ids, mode) }));
+
+/** a group's or a root's name — what F2 in the hierarchy edits */
+export const renameTo = (id: NodeId, name: string): void =>
+  edit("rename", (e) => ({ ...e, world: renameNode(e.world, id, name) }));
+
+/**
+ * The `#id` a node answers to, which is the name everything that is not a group goes by.
+ *
+ * Refused when it is taken: two nodes answering to `#lamp` means `ref(#lamp)` no longer names one thing,
+ * and a sheet that reads back wrong is worse than a rename that did not happen.
+ */
+export const setId = (id: NodeId, to: string): void =>
+  edit("set id", (e) => {
+    const name = to.trim();
+    if (name && sheetIds(e.world).includes(name)) return e;
+    return { ...e, world: setSheetId(e.world, id, name) };
   });
 
-export const deleteLayer = (id: NodeId): void =>
-  edit("delete layer", (e) => ({ ...e, world: removeLayer(e.world, id) }));
-
-export const nameLayer = (id: NodeId, name: string): void =>
-  edit("rename layer", (e) => ({ ...e, world: renameLayer(e.world, id, name) }));
-
-/** where new solids go; not an edit, because it changes nothing that would be written to the sheet */
-export const useLayer = (id: NodeId): void => view((e) => (e.layer === id ? e : { ...e, layer: id }));
-
-export const moveSelectionToLayer = (id: NodeId): void => edit("move to layer", (e) => moveToLayer(e, id));
+// ---------------------------------------------------------------- visibility
 
 export const hideNode = (id: NodeId): void =>
   edit("hide", (e) => ({ ...e, world: toggleHidden(e.world, id) }));
@@ -135,27 +166,50 @@ export const isolateSelection = (): void => edit("isolate", isolateSelected);
 export const showEverything = (): void => edit("show all", (e) => ({ ...e, world: showAll(e.world) }));
 export const unlockEverything = (): void => edit("unlock all", (e) => ({ ...e, world: unlockAll(e.world) }));
 
-// ---------------------------------------------------------------- tags
+// ---------------------------------------------------------------- templates
 
-export const selectTag = (tag: Tag, mode: SelectMode = "replace"): void =>
-  view((e) => selectByTag(e, tag, mode));
-export const isolateTag = (tag: Tag): void => edit(`isolate ${tag.name}`, (e) => isolate(e, tag));
-export const hideTag = (tag: Tag): void => edit(`hide ${tag.name}`, (e) => hide(e, tag));
+export const selectTemplate = (t: Template, mode: SelectMode = "replace"): void =>
+  view((e) => selectByTemplate(e, t, mode));
 
 /**
- * A tag put on the selection, or taken off it.
+ * A template put on the selection, or taken off it.
  *
  * Off when every selected node already has it, on otherwise — the rule a checkbox over a multiple
  * selection needs, and the one that makes clicking twice a round trip.
  */
-export const toggleTag = (tag: Tag): void =>
-  edit(`tag ${tag.name}`, (e) => {
+export const toggleTemplate = (t: Template): void =>
+  edit(`template ${t.name}`, (e) => {
     const nodes = selectedNodes(e.world, e.selection);
     if (!nodes.length) return e;
     const ids = nodes.map((n) => n.id);
-    const all = nodes.every((n) => hasTag(n, tag));
-    return { ...e, world: all ? untagNodes(e.world, ids, tag) : tagNodes(e.world, ids, tag) };
+    const all = nodes.every((n) => hasTemplate(n, t));
+    return { ...e, world: all ? removeTemplate(e.world, ids, t) : applyTemplate(e.world, ids, t) };
   });
+
+/**
+ * A kind renamed: the declaration and every instance of it, in one command.
+ *
+ * The two halves cannot be separated — a `@template` renamed while the level still says `.button` is a
+ * delete with extra steps — and one ⌘Z has to be one rename, which is the same argument the material
+ * browser makes for doing a material's rename this way.
+ *
+ * A name another template of the same node type already answers to is refused: two declarations under one
+ * name is a level that reads back as something else.
+ */
+export function renameTemplate(def: ObjectDef, raw: string): void {
+  const to = cleanName(raw);
+  if (!to || to === def.name) return;
+  if (library.objects.some((d) => d.name === to && d.node === def.node)) {
+    return session.set((e) => ({ ...e, note: `.${to} is taken` }));
+  }
+  const was: Template = { name: def.name, node: def.node };
+  const key = library.keyOfTemplate(def);
+  session.run(`rename ${def.name}`, (e) => ({
+    ...e,
+    world: renameClass(e.world, was, to),
+    templates: new Map(e.templates).set(key, { ...def, name: to }),
+  }));
+}
 
 // ---------------------------------------------------------------- constructive solid geometry
 

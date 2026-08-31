@@ -188,7 +188,7 @@ test("the children a template and a rule contribute are visible, and marked as n
   const { world, inh, sheets } = opened(TORCH);
   const sconce = find(world, "sconce");
   const kids = derivedChildren(sconce, inh, sheets);
-  assert.deepEqual(kids.map((k) => (k.kind === "entity" ? k.type : k.kind)), ["pointLight", "sphere"]);
+  assert.deepEqual(kids.map((k) => (k.kind === "object" ? k.type : k.kind)), ["pointLight", "sphere"]);
   assert.deepEqual(kids.map((k) => k.origin?.derived), ["template", "override"]);
   assert.deepEqual(kids.map((k) => k.origin?.of), [sconce.id, sconce.id]);
   assert.ok(kids.every((k) => k.id.startsWith(`${sconce.id}~`)), "ids hang off the host, so selection survives");
@@ -206,7 +206,7 @@ test("a derived node put in the tree is never written back", () => {
     ...read.world,
     layers: read.world.layers.map((l) => ({
       ...l,
-      children: l.children.map((k) => (k.id === sconce.id && k.kind === "entity" ? { ...k, children: kids } : k)),
+      children: l.children.map((k) => (k.id === sconce.id && k.kind === "object" ? { ...k, children: kids } : k)),
     })),
   };
   assert.equal(derivedIds(shown).length, 2, "both of them are in the tree");

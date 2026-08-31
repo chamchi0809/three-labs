@@ -219,7 +219,7 @@ export type MaterialBakery = {
 };
 
 export type Knob = {
-  type: "number" | "string" | "boolean" | "numbers";
+  type: "number" | "string" | "boolean" | "numbers" | "strings";
   length?: number;
   values?: string[];
   /** inclusive bounds for a number knob, or for every entry of a `numbers` one */
@@ -299,14 +299,18 @@ export type SceneBroom = {
 };
 
 /**
- * A node's `@broom { … }`. On a `@template` it is the entity definition — what the editor puts in its
+ * A node's `@broom { … }`. On a `@template` it is the object definition — what the editor puts in its
  * browser and how it draws an instance. On a node it is that node's place in the workspace.
  */
 export type NodeBroom = {
   /** `point` is placed by clicking, `brush` is applied to a selection of solids */
   kind?: "point" | "brush";
   icon?: string;
-  /** the editor's tint for this entity, as a colour */
+  /** the group this definition is filed under in the editor's browser */
+  category?: string;
+  /** one line about what this thing is, shown where the browser has room for it */
+  doc?: string;
+  /** the editor's tint for this object, as a colour */
   color?: number;
   /** the editor's bounding box: min x y z, then max x y z, in metres */
   size?: number[];
@@ -351,6 +355,9 @@ export const BROOM: Record<"scene" | "node", Record<string, Knob>> = {
   node: {
     kind: { type: "string", values: ["point", "brush"] },
     icon: { type: "string" },
+    /** what the editor's browser files this definition under, and what it says about it in a tooltip */
+    category: { type: "string" },
+    doc: { type: "string" },
     color: { type: "number", min: 0, max: 0xffffff },
     // flat rather than two vec3()s: a knob is a plain value by design, and one row is not worth nesting
     size: { type: "numbers", length: 6 },
@@ -363,8 +370,54 @@ export const BROOM: Record<"scene" | "node", Record<string, Knob>> = {
   },
 };
 
-/** the at-rules a body may hold, and which table checks each one */
-export const AT_RULES = ["bakery", "broom"] as const;
+/**
+ * The editors an `@entity` field can ask for.
+ *
+ * A field's editor is inferred from its default where nothing says otherwise — `hp: 30` is a number box
+ * without being told — so this table exists for the cases inference cannot reach: a string that is really
+ * one of five choices, a number that is really a whole one between 0 and 99, a path to a file, a block of
+ * prose that wants more than one line.
+ */
+export const FIELD_TYPES = [
+  "int", "float", "text", "lines", "bool", "color", "point", "enum", "file", "script",
+] as const;
+
+export type FieldType = (typeof FIELD_TYPES)[number];
+
+/**
+ * `@fields { hp: { type: int; min: 0; max: 99 } }` — what an `@entity` key *is*, as against what it
+ * happens to hold.
+ *
+ * This is the half of a `.fgd` tscene still needs. The other half — which keys exist and what they start
+ * as — the `@entity` block already says, and saying it twice is how a definition file gets out of step
+ * with the level it describes.
+ */
+export const FIELD: Record<string, Knob> = {
+  type: { type: "string", values: [...FIELD_TYPES] },
+  /** inclusive bounds, for `int` and `float` */
+  min: { type: "number" },
+  max: { type: "number" },
+  /** fixed choices, written here — the `enum` knob is the same thing shared between fields instead */
+  options: { type: "strings" },
+  /** the name of a top-level `--list: ["a", "b"]` this field draws its choices from */
+  enum: { type: "string" },
+  /** the text goes into `@locale`, and the game reads it back through {@link localize} */
+  localized: { type: "boolean" },
+  /** a list of the type rather than one of it */
+  array: { type: "boolean" },
+  nullable: { type: "boolean" },
+  doc: { type: "string" },
+};
+
+/**
+ * The at-rules a body may hold.
+ *
+ * `bakery` and `broom` name a table in this file that says which knobs are legal, and so does `fields`.
+ * `entity` names none on purpose: it is the level's own data — `@entity { hp: 30 }` — and what a project
+ * calls its fields is the project's business, so the checker only insists that the values be plain ones.
+ * `locale` is the sheet's translation table, keyed by the source text itself.
+ */
+export const AT_RULES = ["bakery", "broom", "entity", "fields", "locale"] as const;
 
 export const className = (name: string) => ALIASES[name] ?? name[0]!.toUpperCase() + name.slice(1);
 export const nodeName = (cls: string) => cls[0]!.toLowerCase() + cls.slice(1);

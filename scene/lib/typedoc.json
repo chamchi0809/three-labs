@@ -1,12 +1,28 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "plugin": ["typedoc-plugin-markdown"],
-  "entryPoints": ["src/index.ts", "src/tools.ts", "src/vite.ts", "src/bakery/index.ts", "src/bakery/node.ts"],
+  "plugin": [
+    "typedoc-plugin-markdown"
+  ],
+  "entryPoints": [
+    "src/index.ts",
+    "src/tools.ts",
+    "src/vite.ts",
+    "src/bakery/index.ts",
+    "src/bakery/node.ts"
+  ],
   "tsconfig": "tsconfig.json",
   "out": "docs/api",
   "readme": "none",
   "outputFileStrategy": "modules",
   "excludeExternals": true,
+  "externalSymbolLinkMappings": {
+    "@types/three": {
+      "Object3D": "https://threejs.org/docs/#api/en/core/Object3D"
+    },
+    "three": {
+      "Object3D": "https://threejs.org/docs/#api/en/core/Object3D"
+    }
+  },
   "treatWarningsAsErrors": true,
   "excludeInternal": true,
   "hideGenerator": true,

@@ -8,8 +8,8 @@ import { report, test } from "../check.ts";
 import { cuboid } from "../brush/builder.ts";
 import { brushOf } from "../brush/brush.ts";
 import {
-  brushNode, childrenOf, entityNode, moveNodes, patchNode, removeNodes, updateNode, type BrushNode,
-  type EntityNode, type GroupNode, type Node, type PatchNode, type World,
+  brushNode, childrenOf, objectNode, moveNodes, patchNode, removeNodes, updateNode, type BrushNode,
+  type ObjectNode, type GroupNode, type Node, type PatchNode, type World,
 } from "../doc/document.ts";
 import { addRow, movePoints, patchShape, patchUv, rowsOf } from "../patch/patch.ts";
 import { setNumber, setString } from "../doc/props.ts";
@@ -113,10 +113,10 @@ test("a file with nothing the editor understands still comes back whole", () => 
   assert.equal(saved(world, p), odd);
 });
 
-test("a brush the editor could not read stays an entity and survives untouched", () => {
+test("a brush the editor could not read stays an object and survives untouched", () => {
   const weird = `brush #odd {\n  face(var(--a), vec3(1, 0, 0), vec3(0, 0, 1));\n  face(vec3(0, -1, 0), vec3(0, -1, 1), vec3(1, -1, 0));\n}\n`;
   const { project: p, world } = project({ [ROOT]: weird });
-  assert.equal(find(world, "odd").kind, "entity", "an unreadable solid is not a solid");
+  assert.equal(find(world, "odd").kind, "object", "an unreadable solid is not a solid");
   assert.equal(saved(world, p), weird);
 });
 
@@ -125,8 +125,8 @@ test("a brush the editor could not read stays an entity and survives untouched",
 test("one property changed touches one line", () => {
   const before = `group #Hall {\n  // do not move this\n  mesh #a (boxGeometry(1, 1, 1)) {\n    position: vec3(0, 0, 0);\n    castShadow: true;\n  }\n}\n`;
   const { project: p, world } = project({ [ROOT]: before });
-  const a = find(world, "a") as EntityNode;
-  const next = updateNode<EntityNode>(world, a.id, (n) => ({ ...n, props: setNumber(n.props, "position", 4) }));
+  const a = find(world, "a") as ObjectNode;
+  const next = updateNode<ObjectNode>(world, a.id, (n) => ({ ...n, props: setNumber(n.props, "position", 4) }));
   assert.equal(
     saved(next, p),
     `group #Hall {\n  // do not move this\n  mesh #a (boxGeometry(1, 1, 1)) {\n    position: 4;\n    castShadow: true;\n  }\n}\n`,
@@ -136,8 +136,8 @@ test("one property changed touches one line", () => {
 test("a property the editor never touched is not reformatted", () => {
   const before = `mesh #a (boxGeometry(1, 1, 1)) {\n  position:   vec3( 0,0 , 0 );\n  castShadow: true;\n}\n`;
   const { project: p, world } = project({ [ROOT]: before });
-  const a = find(world, "a") as EntityNode;
-  const next = updateNode<EntityNode>(world, a.id, (n) => ({ ...n, props: setString(n.props, "userData", "x") }));
+  const a = find(world, "a") as ObjectNode;
+  const next = updateNode<ObjectNode>(world, a.id, (n) => ({ ...n, props: setString(n.props, "userData", "x") }));
   const text = saved(next, p);
   assert.ok(text.includes("position:   vec3( 0,0 , 0 );"), "the untouched line kept its spacing");
   assert.ok(text.includes('userData: "x";'), "the new one was appended");
@@ -146,8 +146,8 @@ test("a property the editor never touched is not reformatted", () => {
 test("a property removed takes its whole line with it", () => {
   const before = `mesh #a (boxGeometry(1, 1, 1)) {\n  position: vec3(0, 0, 0);\n  castShadow: true;\n}\n`;
   const { project: p, world } = project({ [ROOT]: before });
-  const a = find(world, "a") as EntityNode;
-  const next = updateNode<EntityNode>(world, a.id, (n) => ({ ...n, props: n.props.filter((m) => m.kind !== "prop" || m.name !== "position") }));
+  const a = find(world, "a") as ObjectNode;
+  const next = updateNode<ObjectNode>(world, a.id, (n) => ({ ...n, props: n.props.filter((m) => m.kind !== "prop" || m.name !== "position") }));
   assert.equal(saved(next, p), `mesh #a (boxGeometry(1, 1, 1)) {\n  castShadow: true;\n}\n`);
 });
 
@@ -188,7 +188,7 @@ test("a node moved between groups takes its comments with it", () => {
 test("an empty body is opened out when something is put in it", () => {
   const before = `group #A {}\n`;
   const { project: p, world } = project({ [ROOT]: before });
-  const fresh = entityNode("pointLight", { sheetId: "sun" });
+  const fresh = objectNode("pointLight", { sheetId: "sun" });
   const next = updateNode<GroupNode>(world, find(world, "A").id, (n) => ({ ...n, children: [fresh] }));
   assert.equal(saved(next, p), `group #A {\n  pointLight #sun\n}\n`);
 });
@@ -221,7 +221,7 @@ test("a face's material is rewritten and its neighbours are not", () => {
 
 test("a solid with a different number of sides is rewritten as a block", () => {
   const { project: p, world } = project({ [ROOT]: `group #A {\n  brush {\n  }\n}\n` });
-  // the sheet's brush has no faces at all, so it read as an entity; a real one replaces it
+  // the sheet's brush has no faces at all, so it read as an object; a real one replaces it
   const solid = brushNode(brushOf(cuboid({ min: [0, 0, 0], max: [2, 2, 2] })));
   const next = updateNode<GroupNode>(world, find(world, "A").id, (n) => ({ ...n, children: [solid] }));
   const text = saved(next, p);
@@ -245,7 +245,7 @@ test("a node added at the top level goes to the end of the file", () => {
   const { project: p, world } = project({ [ROOT]: before });
   const next = updateNode(world, world.layers[0]!.id, (n) => ({
     ...(n as GroupNode),
-    children: [...(n as GroupNode).children, entityNode("pointLight", { sheetId: "sun" })],
+    children: [...(n as GroupNode).children, objectNode("pointLight", { sheetId: "sun" })],
   }));
   assert.equal(saved(next, p), `mesh #a (boxGeometry(1, 1, 1));\n\npointLight #sun\n`);
 });
@@ -310,14 +310,14 @@ test("a name with a space in it has to be a string, whatever the sheet did", () 
 test("a class added to a head rewrites the head and nothing else", () => {
   const before = `mesh #a (boxGeometry(1, 1, 1)) {\n  castShadow: true;\n}\n`;
   const { project: p, world } = project({ [ROOT]: before });
-  const next = updateNode<EntityNode>(world, find(world, "a").id, (n) => ({ ...n, classes: ["lit"] }));
+  const next = updateNode<ObjectNode>(world, find(world, "a").id, (n) => ({ ...n, classes: ["lit"] }));
   // the head is the one thing that was reprinted, so it comes back in the printer's own spacing
   assert.equal(saved(next, p), `mesh.lit #a(boxGeometry(1, 1, 1)) {\n  castShadow: true;\n}\n`);
 });
 
 test("a node written without a body is reprinted whole when it needs one", () => {
   const { project: p, world } = project({ [ROOT]: `pointLight #sun (#ffffff, 1);\n` });
-  const next = updateNode<EntityNode>(world, find(world, "sun").id, (n) => ({ ...n, props: setNumber(n.props, "intensity", 3) }));
+  const next = updateNode<ObjectNode>(world, find(world, "sun").id, (n) => ({ ...n, props: setNumber(n.props, "intensity", 3) }));
   assert.equal(saved(next, p), `pointLight #sun(#ffffff, 1) {\n  intensity: 3;\n}\n`);
 });
 
@@ -436,11 +436,11 @@ test("a new patch is printed with its rows one per line", () => {
   );
 });
 
-test("a patch the editor could not read stays an entity and survives untouched", () => {
+test("a patch the editor could not read stays an object and survives untouched", () => {
   // two rows: the runtime would refuse it too, and neither of us is going to guess at a third
   const weird = `patch #odd {\n  row(vec3(0, 0, 0), vec3(1, 0, 0), vec3(2, 0, 0))\n  row(vec3(0, 0, 1), vec3(1, 0, 1), vec3(2, 0, 1))\n}\n`;
   const { project: p, world } = project({ [ROOT]: weird });
-  assert.equal(find(world, "odd").kind, "entity", "an unreadable patch is not a patch");
+  assert.equal(find(world, "odd").kind, "object", "an unreadable patch is not a patch");
   assert.equal(saved(world, p), weird);
 });
 

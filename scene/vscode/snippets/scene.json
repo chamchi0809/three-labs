@@ -69,7 +69,38 @@
     "body": [
       "@broom { ${1|kind,icon,color,size,layer,locked,hidden,grid,scale|}: ${2} };"
     ],
-    "description": "Editor settings — on the sheet, or on a node the editor treats as an entity"
+    "description": "Editor settings — on the sheet, or on a node the editor treats as an object"
+  },
+  "entity": {
+    "prefix": "entity",
+    "body": [
+      "@entity { ${1:hp}: ${2:30} };"
+    ],
+    "description": "Data this node carries into the game — the project names the fields"
+  },
+  "entitynode": {
+    "prefix": "entitynode",
+    "body": [
+      "entity.${1:type} #${2:name} {",
+      "\tposition: vec3(${3:0}, ${4:0}, ${5:0});",
+      "\t@entity { ${6:hp}: ${7:30} };",
+      "}"
+    ],
+    "description": "An entity: data placed at a point, with no geometry of its own"
+  },
+  "fields": {
+    "prefix": "fields",
+    "body": [
+      "@fields { ${1:hp}: { type: ${2|int,float,text,lines,bool,color,point,enum,file,script|} } };"
+    ],
+    "description": "What an @entity key is — the editor's box comes from this"
+  },
+  "locale": {
+    "prefix": "locale",
+    "body": [
+      "@locale { ${1:ko}: { \"${2:Open the door}\": \"${3}\" } };"
+    ],
+    "description": "The sheet's translation table, keyed by the source text"
   },
   "brush": {
     "prefix": "brush",

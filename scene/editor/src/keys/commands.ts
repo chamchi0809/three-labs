@@ -10,8 +10,8 @@
  * back out to the viewport instead of being swallowed here.
  */
 import {
-  duplicate, group, hideSelection, hollowBrushes, intersectBrushes, isolateSelection, leaveGroup,
-  lockSelection, mergeBrushes, showEverything, subtractBrushes, ungroup, unlockEverything,
+  deleteSelection, duplicate, group, hideSelection, hollowBrushes, intersectBrushes, isolateSelection,
+  leaveGroup, lockSelection, mergeBrushes, showEverything, subtractBrushes, ungroup, unlockEverything,
 } from "../actions.ts";
 import { bakery } from "../bake/bake.svelte.ts";
 import { withGrid } from "../doc/editor.ts";
@@ -38,6 +38,7 @@ const RUN: Record<string, () => boolean | void> = {
   "edit.redo": () => session.redo(),
   "edit.repeat": () => session.repeat(),
   "edit.duplicate": () => duplicate(),
+  "edit.delete": () => deleteSelection(),
 
   "structure.group": () => group(),
   "structure.ungroup": () => ungroup(),

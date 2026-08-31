@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
-   * The inspector panel: map, entity and face, in TrenchBroom's three tabs.
+   * The inspector panel: map, object and face, in TrenchBroom's three tabs.
    *
    * The tab follows the selection until the designer says otherwise — pick a face and the face tab comes
-   * up, pick a lamp and the entity tab does. That is what they were about to click anyway, and an
+   * up, pick a lamp and the object tab does. That is what they were about to click anyway, and an
    * inspector that guesses right nine times out of ten costs one click on the tenth, where one that never
    * guesses costs a click every time.
    *
@@ -20,17 +20,17 @@
   import { isEmpty } from "../doc/selection.ts";
   import { session } from "../session.svelte.ts";
   import { tooltip } from "../ui/tooltip.ts";
-  import EntityInspector from "./EntityInspector.svelte";
+  import ObjectInspector from "./ObjectInspector.svelte";
   import FaceInspector from "./FaceInspector.svelte";
   import IssueBrowser from "./IssueBrowser.svelte";
   import MapInspector from "./MapInspector.svelte";
 
   // the issue browser is never *suggested*, only chosen: a panel that jumped to the checker because the
   // solid being dragged is briefly off the grid would be unusable
-  type Tab = "map" | "entity" | "face" | "issues";
+  type Tab = "map" | "object" | "face" | "issues";
   const TABS: { id: Tab; icon: Icon; say: string }[] = [
     { id: "map", icon: IconMap, say: "map — grid, scale and what the level is made of" },
-    { id: "entity", icon: IconBulb, say: "entity — the properties of what is picked" },
+    { id: "object", icon: IconBulb, say: "object — the properties of what is picked" },
     { id: "face", icon: IconPolygon, say: "face — material and how it sits on the surface" },
     { id: "issues", icon: IconAlertTriangle, say: "issues — what the checker has to say" },
   ];
@@ -38,7 +38,7 @@
   let chosen = $state<Tab | undefined>(undefined);
 
   const suggested = $derived<Tab>(
-    session.editor.selection.faces.length ? "face" : isEmpty(session.editor.selection) ? "map" : "entity",
+    session.editor.selection.faces.length ? "face" : isEmpty(session.editor.selection) ? "map" : "object",
   );
   const tab = $derived(chosen ?? suggested);
 </script>
@@ -54,7 +54,7 @@
   </nav>
   <div class="body">
     {#if tab === "map"}<MapInspector />
-    {:else if tab === "entity"}<EntityInspector />
+    {:else if tab === "object"}<ObjectInspector />
     {:else if tab === "issues"}<IssueBrowser />
     {:else}<FaceInspector />{/if}
   </div>

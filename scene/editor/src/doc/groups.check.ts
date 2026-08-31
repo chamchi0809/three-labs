@@ -14,7 +14,7 @@ import { cuboid } from "../brush/builder.ts";
 import { rotation, translation } from "../brush/vec.ts";
 import { report, test } from "../check.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, removeNodes, updateNode,
+  brushNode, objectNode, groupNode, layerNode, nodeById, removeNodes, updateNode,
   type BrushNode, type GroupNode, type NodeId, type World,
 } from "./document.ts";
 import { newEditor } from "./editor.ts";
@@ -170,7 +170,7 @@ test("a rotated copy replays the edit turned into its own frame", () => {
 });
 
 test("a protected property stays the copy's own while everything else follows", () => {
-  const lamp = entityNode("pointLight", { props: setNumber(setString([], "label", "north"), "intensity", 1) });
+  const lamp = objectNode("pointLight", { props: setNumber(setString([], "label", "north"), "intensity", 1) });
   const source = groupNode("lamp", [lamp]);
   const { world: made, copy } = linkedCopy(world(source), source.id, translation([10, 0, 0]));
 
@@ -190,7 +190,7 @@ test("a protected property stays the copy's own while everything else follows", 
 });
 
 test("a protected property the source has and the copy does not stays absent from the copy", () => {
-  const lamp = entityNode("pointLight");
+  const lamp = objectNode("pointLight");
   const source = groupNode("lamp", [lamp]);
   const { world: made, copy } = linkedCopy(world(source), source.id, translation([10, 0, 0]));
   const theirs = copy!.children[0]!.id;
@@ -202,7 +202,7 @@ test("a protected property the source has and the copy does not stays absent fro
 });
 
 test("a #id never travels, so two copies never both answer to one name", () => {
-  const lamp = entityNode("pointLight", { sheetId: "north-lamp" });
+  const lamp = objectNode("pointLight", { sheetId: "north-lamp" });
   const source = groupNode("lamp", [lamp]);
   const { world: made, copy } = linkedCopy(world(source), source.id, translation([10, 0, 0]));
   const theirs = copy!.children[0]!.id;

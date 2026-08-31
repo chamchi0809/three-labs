@@ -205,7 +205,7 @@ check that the manifest belongs to this scene.
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `source` | \| `string` \| \{ `ao?`: `Texture`\<`unknown`, `TextureEventMap`\>; `manifest`: [`LightmapManifest`](#lightmapmanifest-1); `probes?`: `Texture`\<`unknown`, `TextureEventMap`\>[]; `texture`: `Texture`; \} |
 | `opts` | \{ `hdr?`: `boolean`; `manager?`: `LoadingManager`; \} |
 | `opts.hdr?` | `boolean` |
@@ -231,7 +231,7 @@ but gets no lightmap.
 
 | Parameter | Type |
 | ------ | ------ |
-| `o` | `Object3D` |
+| `o` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 
 #### Returns
 
@@ -412,8 +412,8 @@ sheet. Two siblings sharing a name are told apart by their index, so a key is al
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
-| `o` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
+| `o` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 
 #### Returns
 
@@ -496,7 +496,7 @@ names the source in the message.
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `where` | `string` |
 
 #### Returns

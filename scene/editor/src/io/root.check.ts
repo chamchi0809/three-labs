@@ -6,7 +6,7 @@ import { parse } from "tscene";
 import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
-import { brushNode, emptyWorld, entityNode, type World } from "../doc/document.ts";
+import { brushNode, emptyWorld, objectNode, type World } from "../doc/document.ts";
 import { setVec3 } from "../doc/props.ts";
 import { readWorld, type Sheets } from "./read.ts";
 import { importTarget, nameOf, rootOf } from "./root.ts";
@@ -110,7 +110,7 @@ test("a new map's layer is the sheet, not a group written around everything in i
 
 test("a map built from nothing writes a file that reads back as the same map", () => {
   const brush = brushNode(brushOf(cuboid({ min: [0, 0, 0], max: [4, 2, 6] }), { material: "wall" }));
-  const lamp = entityNode("pointLight", { props: setVec3([], "position", [2, 1.5, 3]) });
+  const lamp = objectNode("pointLight", { props: setVec3([], "position", [2, 1.5, 3]) });
   const fresh = freshWorld();
   const world: World = {
     layers: [{ ...fresh.layers[0]!, children: [brush, lamp] }],
@@ -126,7 +126,7 @@ test("a map built from nothing writes a file that reads back as the same map", (
   assert.equal(back.broom.grid, -3, "the grid survived the trip");
 
   const kinds = back.layers.flatMap((l) => l.children.map((c) => c.kind));
-  assert.deepEqual(kinds.sort(), ["brush", "entity"]);
+  assert.deepEqual(kinds.sort(), ["brush", "object"]);
 
   const solid = back.layers[0]!.children.find((c) => c.kind === "brush")!;
   assert.equal(solid.kind, "brush");
@@ -167,7 +167,7 @@ test("a save is a patch of the bytes the tree was read from, and stays one howev
   // a top-level `group` is the sheet's own layer, so the crate is a child of it rather than of a group
   const hall = read.world.layers[0]!;
   const crate = hall.children[0]!;
-  assert.equal(crate.kind, "entity");
+  assert.equal(crate.kind, "object");
   const moved = {
     ...read.world,
     layers: [{ ...hall, children: [{ ...crate, props: setVec3(crate.props, "position", [2, 0, 0]) }] }],

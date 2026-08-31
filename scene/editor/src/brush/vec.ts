@@ -99,7 +99,7 @@ export type Mat4 = [
   number, number, number, number,
 ];
 
-export const IDENTITY: Mat4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+export const IDOBJECT: Mat4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
 
 export const transformPoint = (m: Mat4, p: Vec3): Vec3 => [
   m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3],
@@ -151,7 +151,7 @@ export function rotation(axis: Vec3, angle: number, about: Vec3 = [0, 0, 0]): Ma
  * be a scale as well, and the tool that wants that has one.
  */
 export function shear(along: Vec3, by: 0 | 1 | 2, about: Vec3 = [0, 0, 0]): Mat4 {
-  const m: Mat4 = [...IDENTITY];
+  const m: Mat4 = [...IDOBJECT];
   m[by] = by === 0 ? 1 : along[0];
   m[4 + by] = by === 1 ? 1 : along[1];
   m[8 + by] = by === 2 ? 1 : along[2];
@@ -163,7 +163,7 @@ export function shear(along: Vec3, by: 0 | 1 | 2, about: Vec3 = [0, 0, 0]): Mat4
 }
 
 export function multiply(a: Mat4, b: Mat4): Mat4 {
-  const out = [...IDENTITY] as Mat4;
+  const out = [...IDOBJECT] as Mat4;
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) {
       out[r * 4 + c] = a[r * 4]! * b[c]! + a[r * 4 + 1]! * b[4 + c]! + a[r * 4 + 2]! * b[8 + c]!;
@@ -171,6 +171,56 @@ export function multiply(a: Mat4, b: Mat4): Mat4 {
     out[r * 4 + 3] = a[r * 4]! * b[3]! + a[r * 4 + 1]! * b[7]! + a[r * 4 + 2]! * b[11]! + a[r * 4 + 3]!;
   }
   return out;
+}
+
+/**
+ * A node's own transform, the way three keeps one and the way a sheet writes one: `position: vec3(…)`,
+ * `rotation: euler(…)` in XYZ order, `scale: vec3(…)`.
+ *
+ * This is the pair that lets a tool move a light. A solid has geometry for a matrix to act on; an object
+ * has only these three numbers, so a rotate or a scale has to be read out of the matrix and back into
+ * them. XYZ is three's default Euler order, and matching it is not optional — a sheet's `rotation` *is* an
+ * `Euler`, so any other order would place the object somewhere the runtime does not.
+ */
+export type Trs = { position: Vec3; rotation: Vec3; scale: Vec3 };
+
+export const IDENTITY_TRS: Trs = { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+
+/** translate ∘ rotate ∘ scale, in that order — the one three applies and the only one that composes right */
+export function compose({ position, rotation: r, scale: s }: Trs): Mat4 {
+  const [c1, c2, c3] = [Math.cos(r[0]), Math.cos(r[1]), Math.cos(r[2])];
+  const [s1, s2, s3] = [Math.sin(r[0]), Math.sin(r[1]), Math.sin(r[2])];
+  return [
+    c2 * c3 * s[0], -c2 * s3 * s[1], s2 * s[2], position[0],
+    (c1 * s3 + c3 * s1 * s2) * s[0], (c1 * c3 - s1 * s2 * s3) * s[1], -c2 * s1 * s[2], position[1],
+    (s1 * s3 - c1 * c3 * s2) * s[0], (c3 * s1 + c1 * s2 * s3) * s[1], c1 * c2 * s[2], position[2],
+  ];
+}
+
+/**
+ * The three back out of a matrix.
+ *
+ * A general matrix is not a TRS — a shear is not expressible as one — so this is a best fit rather than an
+ * inverse, and that is the honest answer for an object: three cannot store a shear on one either. A
+ * negative determinant is charged entirely to `scale.x`, which is the convention three itself uses, and
+ * gimbal lock falls back on `z = 0` for the same reason `Euler` does.
+ */
+export function decompose(m: Mat4): Trs {
+  const col = (c: number): Vec3 => [m[c]!, m[4 + c]!, m[8 + c]!];
+  const len = (v: Vec3) => Math.hypot(v[0], v[1], v[2]);
+  const flip = determinant(m) < 0 ? -1 : 1;
+  const scale: Vec3 = [len(col(0)) * flip, len(col(1)), len(col(2))];
+  // a zero axis has no direction left to read a rotation off, so it contributes none rather than a NaN
+  const r = (row: number, c: number) => (scale[c] ? m[row * 4 + c]! / scale[c]! : row === c ? 1 : 0);
+  const y = Math.asin(Math.min(1, Math.max(-1, r(0, 2))));
+  const locked = Math.abs(r(0, 2)) > 0.9999999;
+  return {
+    position: [m[3], m[7], m[11]],
+    rotation: locked
+      ? [Math.atan2(r(2, 1), r(1, 1)), y, 0]
+      : [Math.atan2(-r(1, 2), r(2, 2)), y, Math.atan2(-r(0, 1), r(0, 0))],
+    scale,
+  };
 }
 
 /** the determinant of the linear part: negative means the transform turns the world inside out */

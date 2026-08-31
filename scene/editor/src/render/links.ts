@@ -1,5 +1,5 @@
 /**
- * The lines between entities that name each other.
+ * The lines between objects that name each other.
  *
  * A door and the button that opens it are one mechanism and two nodes forty metres apart, and the only
  * thing tying them together in the file is a name. TrenchBroom draws that tie as a line in the viewport,
@@ -53,7 +53,7 @@ export function linksOf(world: World): Link[] {
 /**
  * The point a link is drawn to and from: the middle of whatever the node is.
  *
- * A solid has real geometry to take the middle of. An entity usually has a `position`, and one that does
+ * A solid has real geometry to take the middle of. An object usually has a `position`, and one that does
  * not is wherever its children are — which is right for a group of solids acting as one mechanism and
  * harmless for anything else. A node with neither has no place on screen, so it has no link either.
  */
@@ -86,7 +86,7 @@ export function centreOf(node: Node, boundsOf: (id: NodeId) => { min: number[]; 
  * Links as segments, with the ones touching the selection separated out.
  *
  * A map with a hundred links drawn all at once is a bowl of spaghetti nobody reads. Drawing the selected
- * entity's links brightly and the rest faintly is what makes the picture answer "what is this button
+ * object's links brightly and the rest faintly is what makes the picture answer "what is this button
  * wired to" instead of "how complicated is this map".
  */
 export function linkSegments(

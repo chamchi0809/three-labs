@@ -54,6 +54,8 @@ export function broomMember(broom: Node["broom"]): Member | undefined {
   // the checker rejects the quoted form outright
   if (broom.kind) entries.push(["kind", ident(broom.kind)]);
   if (broom.icon !== undefined) entries.push(["icon", str(broom.icon)]);
+  if (broom.category !== undefined) entries.push(["category", str(broom.category)]);
+  if (broom.doc !== undefined) entries.push(["doc", str(broom.doc)]);
   if (broom.color !== undefined) {
     entries.push(["color", { ...SYNTHETIC, kind: "hex", value: broom.color, digits: 6 }]);
   }
@@ -195,7 +197,7 @@ export function headOf(node: Node): ObjectValue {
   const name =
     node.kind === "brush" ? "brush"
     : node.kind === "patch" ? "patch"
-    : node.kind === "entity" ? node.type
+    : node.kind === "object" ? node.type
     : "group";
   // a group whose name lives in a `name:` property still keeps whatever `#id` the sheet gave it: the two
   // are different things to three, and only one of them is the editor's to rewrite
@@ -204,7 +206,7 @@ export function headOf(node: Node): ObjectValue {
       ? nameAt(node) === "head" ? node.name : node.sheetId
       : node.sheetId;
   return {
-    ...call(name, node.kind === "entity" ? node.args : []),
+    ...call(name, node.kind === "object" ? node.args : []),
     classes: [...node.classes],
     classSpans: node.classes.map(() => SYNTHETIC),
     ...(id !== undefined ? { id } : {}),

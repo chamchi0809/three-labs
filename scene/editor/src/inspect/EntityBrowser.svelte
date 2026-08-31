@@ -1,91 +1,104 @@
 <script lang="ts">
   /**
-   * The entity browser: everything the project declares that a designer can put in a level.
+   * The entity browser: the types of data this project places, grouped the way it filed them.
    *
-   * The list is the sheet's own `@template`s, so a project that declares a torch has a torch in here and
-   * one that does not, does not. There is no second file to keep in step and nothing to import.
+   * pixi-vania's `EntityPalette`, brought over as it stands — categories as headings, a coloured dot, the
+   * name, how many fields the type has, and the line at the bottom that tells you what to do next. The one
+   * thing that changed is where a type comes from: there it is a record in the project file, edited in a
+   * dialog; here a type *is* a `@template entity.spawner { … }` in the sheet, so the dot is its
+   * `@broom { color }`, the category its `@broom { category }`, and the fields its `@entity`/`@fields`.
    *
-   * Which half of TrenchBroom's split a definition falls in comes from its `@broom { kind }`. A **point**
-   * definition arms the create-entity tool: the next click in a pane places an instance. A **brush**
-   * definition is not placed at all — it is applied, by writing its class onto the solids already
-   * selected, which is what "make these five solids a trigger" means.
+   * An entity is not a mesh and this is not the object browser. Nothing in here draws: what a click arms
+   * is a record — `hp`, `kind`, `target` — that a click in a pane then places at a point, and that the game
+   * reads back with `entities(root)`.
    */
-  import { ANY_NODE, type EntityDef } from "../doc/catalogue.ts";
-  import { setClasses } from "../doc/inspect.ts";
-  import { selectedNodes } from "../doc/selection.ts";
+  import IconSettings from "@tabler/icons-svelte/icons/settings";
+  import { entityDefs, type ObjectDef } from "../doc/catalogue.ts";
   import { library } from "../library.svelte.ts";
   import { session } from "../session.svelte.ts";
-  import { setEntityDef } from "../tools/entity.ts";
+  import { entitySettings, setEntityDef } from "../tools/entity.ts";
   import { tools } from "../tools/tools.svelte.ts";
+  import { tooltip } from "../ui/tooltip.ts";
 
-  let filter = $state("");
-  let armed = $state("");
+  let { onedittypes }: { onedittypes?: () => void } = $props();
 
-  const matches = $derived(
-    library.entities.filter((d) => !filter || `${d.node}.${d.name}`.toLowerCase().includes(filter.toLowerCase())),
-  );
-  const selected = $derived(selectedNodes(session.editor.world, session.editor.selection));
+  /** by `@broom { category }`, in the order the sheet first mentioned each one — a project's own order */
+  const groups = $derived.by(() => {
+    const out = new Map<string, ObjectDef[]>();
+    for (const def of entityDefs(library.catalogue)) {
+      const key = def.category ?? "other";
+      (out.get(key) ?? out.set(key, []).get(key)!).push(def);
+    }
+    return [...out];
+  });
 
-  const label = (d: EntityDef) => `${d.node === ANY_NODE ? "" : d.node}.${d.name}`;
+  const armed = $derived(entitySettings.def?.name);
 
-  function use(def: EntityDef) {
-    if (def.kind === "brush") return apply(def);
-    armed = label(def);
+  const swatch = (def: ObjectDef): string =>
+    def.colour === undefined ? "var(--dim)" : `#${def.colour.toString(16).padStart(6, "0")}`;
+
+  /** how many keys a type has: its `@entity` defaults, plus any `@fields` declaration that adds to them */
+  const count = (def: ObjectDef): number =>
+    new Set([...def.fields.map((f) => f.name), ...def.declared.map((f) => f.name)]).size;
+
+  function choose(def: ObjectDef) {
     setEntityDef(def);
-    // arming a definition and then having to remember to press `n` is one step too many — the browser is
-    // a way of saying "place this", and saying it selects the tool that does
+    // arming a type and then having to remember to press `e` is one step too many — this browser is a way
+    // of saying "place this", and saying it picks the tool that does
     tools.use("entity");
-    session.set((e) => ({ ...e, note: `placing ${armed}` }));
+    session.set((e) => ({ ...e, note: `placing ${def.name} — click in a pane` }));
   }
-
-  function apply(def: EntityDef) {
-    const ids = selected.map((n) => n.id);
-    if (!ids.length) return session.set((e) => ({ ...e, note: `${def.name} applies to a selection` }));
-    session.run(`apply ${def.name}`, (e) => ({
-      ...e,
-      // added to whatever classes are already there rather than replacing them: `.trigger.once` is two
-      // templates on one node and both of them mean something
-      world: ids.reduce(
-        (w, id) => setClasses(w, [id], [...new Set([...(nodeClasses(id) ?? []), def.name])]),
-        e.world,
-      ),
-    }));
-    session.set((e) => ({ ...e, note: `${ids.length} × .${def.name}` }));
-  }
-
-  const nodeClasses = (id: string) => selected.find((n) => n.id === id)?.classes;
 </script>
 
-<div class="browser">
-  <input class="filter" placeholder="filter definitions…" bind:value={filter} />
-  <ul>
-    {#each matches as def (def.node + "." + def.name)}
-      <li>
-        <button class:on={armed === label(def)} onclick={() => use(def)} title={def.file ?? "the open sheet"}>
-          <i class="dot" style:background={def.colour === undefined ? "var(--dim)" : `#${def.colour.toString(16).padStart(6, "0")}`}></i>
-          <span class="name">{label(def)}</span>
-          <span class="kind">{def.kind}</span>
+{#each groups as [category, defs] (category)}
+  <h4>{category}</h4>
+  <ul class="ents">
+    {#each defs as def (def.name)}
+      <li class:active={armed === def.name}>
+        <button onclick={() => choose(def)} title={def.doc ?? def.file ?? "the open sheet"}>
+          <span class="dot" style:background={swatch(def)}></span>
+          <span class="name">{def.name}</span>
+          {#if count(def)}<span class="fields">{count(def)} field{count(def) > 1 ? "s" : ""}</span>{/if}
         </button>
       </li>
     {/each}
-    {#if !matches.length}<li class="none">{library.entities.length ? "nothing matches" : "the sheet declares no @template"}</li>{/if}
   </ul>
-</div>
+{/each}
+
+{#if !groups.length}
+  <p class="hint">no entity types yet — a type is a <code>@template entity.name</code> in the sheet.</p>
+{/if}
+
+{#if onedittypes}
+  <button class="edit" use:tooltip={"edit entity types"} onclick={onedittypes}>
+    <IconSettings size={13} /> edit types…
+  </button>
+{/if}
+
+<p class="hint">click a type, then click in a pane to place it. use select (V) to move it.</p>
 
 <style>
-  .browser { display: flex; flex-direction: column; gap: 4px; min-height: 0; }
-  .filter { width: 100%; }
-  ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 190px; }
-  li { display: block; }
-  .none { padding: 4px; color: var(--dim); font: var(--mono); }
-  button {
-    display: flex; gap: 6px; align-items: center; width: 100%; padding: 3px 5px; cursor: pointer;
-    background: transparent; border: 1px solid transparent; border-radius: 3px;
-    font: var(--mono); color: var(--text); text-align: left;
+  .edit {
+    display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; padding: 5px 9px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
+    color: var(--text); font: inherit; cursor: pointer;
   }
-  button:hover { background: var(--panel-2); border-color: var(--border); }
-  button.on { background: var(--accent-dim); border-color: var(--p5); color: var(--p9); }
-  .dot { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+  .edit:hover { background: var(--accent-dim); }
+  h4 {
+    margin: 6px 2px 3px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .ents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  li button {
+    width: 100%; display: flex; align-items: center; gap: 7px; padding: 6px 8px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
+    color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  }
+  li button:hover { background: var(--accent-dim); }
+  li.active button { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
   .name { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .kind { flex: none; color: var(--dim); }
+  .fields { color: var(--muted); font-size: 10px; }
+  .hint { color: var(--muted); font-size: 10px; margin: 8px 2px 0; }
+  code { font: var(--mono); color: var(--dim); }
 </style>

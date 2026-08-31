@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
-import type { MaterialDef } from "./catalogue.ts";
+import type { MaterialDef, ObjectDef } from "./catalogue.ts";
 import { brushNode, insertNodes, layerNode, nodeById, removeNodes, type World } from "./document.ts";
 import { newEditor, type Editor } from "./editor.ts";
 import {
@@ -296,6 +296,14 @@ test("a material declaration changed is an edit like any other", () => {
   assert.equal(h.editor.materials.size, 0);
   h = redo(h);
   assert.equal(h.editor.materials.get("wall"), wall);
+});
+
+test("a @template changed is an edit like any other, the same way a material is", () => {
+  let h = history(start());
+  const def: ObjectDef = { name: "button", node: "mesh", kind: "point", props: [], fields: [], declared: [] };
+  h = change(h, "override button", (e) => ({ ...e, templates: new Map(e.templates).set("mesh.button", def) }));
+  assert.equal(h.past.length, 1, "the prefab is on the stack: ⌘Z has to reach an override");
+  assert.equal(undo(h).editor.templates.size, 0);
 });
 
 test("the editor is settled after every command, so nothing points at what is gone", () => {

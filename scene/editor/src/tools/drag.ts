@@ -3,7 +3,7 @@
  *
  * Every dragging tool in the editor is one of exactly two gestures, and this file is both of them.
  *
- * **A drag on a plane** — moving a solid, dragging out a shape, placing an entity. The pointer ray is met
+ * **A drag on a plane** — moving a solid, dragging out a shape, placing an object. The pointer ray is met
  * with a plane and the difference between where it lands now and where it landed when the drag began is
  * the translation. Which plane is the whole design of a move tool: in an orthographic pane it can only
  * sensibly be the pane's own plane, and in a perspective pane it is the ground under the thing being

@@ -2,7 +2,10 @@
 // Pure (no typescript / no three import) so it runs in the browser too.
 import type { Diagnostic, Member, ObjectValue, Override, Pos, Template, Value } from "./parse.ts";
 import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
-import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import {
+  ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, FIELD, LOADERS, MATH, className, concrete, nodeName,
+  type Knob,
+} from "./names.ts";
 import { buildBrush, type BrushFace, type UvMode, type Vec3 } from "./brush.ts";
 import { gridProblems, type Patch } from "./patch.ts";
 
@@ -420,6 +423,56 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
    * reads a sheet, a node and a material, the editor only a sheet and a node.
    */
   function checkAtRule(m: Member & { kind: "at" }, position: "scene" | "node" | "material" | undefined) {
+    // `@entity { hp: 30 }` is the level's data rather than settings for a tool, so there is no table of
+    // legal keys — inventing the keys is the whole point. What is checked is the value: the runtime folds
+    // these with a literal reader, so a `calc()` or a `vec3()` in here would throw at load rather than
+    // here, and a designer would learn about it from a black screen.
+    if (m.name === "entity") {
+      if (position !== "node") return err("@entity belongs on a node", m);
+      for (const e of m.value.entries) checkLiteral(e.value, `@entity ${e.name}`);
+      return;
+    }
+    // `@fields { hp: { type: int; min: 0 } }` — the schema for those keys. Every entry is a record, and
+    // the records are the one place in an entity that *is* a fixed table, because the editor is what reads
+    // them: a `type: itn` that went unremarked would show a text box and nobody would know why.
+    if (m.name === "fields") {
+      if (position !== "node") return err("@fields belongs on a node", m);
+      for (const e of m.value.entries) {
+        if (e.value.kind !== "record") {
+          err(`@fields ${e.name} must be a record: { type: int; min: 0 }`, e.value);
+          continue;
+        }
+        for (const k of e.value.entries) {
+          const knob = FIELD[k.name];
+          if (!knob) {
+            const alt = suggest(k.name, Object.keys(FIELD));
+            err(
+              `@fields has no setting ${JSON.stringify(k.name)}` + (alt ? `; did you mean ${alt}?` : ""),
+              k.namePos,
+              alt ? { start: k.namePos.start, end: k.namePos.end, text: alt } : undefined,
+            );
+            continue;
+          }
+          checkKnob(k.value, knob, `@fields ${e.name} ${k.name}`);
+        }
+      }
+      return;
+    }
+    // `@locale { ko: { "Open the door": "문을 열어라" } }` — the source text is the key, so a translation
+    // table needs no ids and a sheet that has not been translated yet still reads as the game shows it
+    if (m.name === "locale") {
+      if (position !== "scene") return err("@locale belongs on the sheet", m);
+      for (const e of m.value.entries) {
+        if (e.value.kind !== "record") {
+          err(`@locale ${e.name} must be a record of translations`, e.value);
+          continue;
+        }
+        for (const t of e.value.entries) {
+          if (t.value.kind !== "string") err(`@locale ${e.name} ${JSON.stringify(t.name)} must be a string`, t.value);
+        }
+      }
+      return;
+    }
     const table =
       m.name === "broom"
         ? position === "scene" || position === "node" ? BROOM[position] : undefined
@@ -439,6 +492,22 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
         continue;
       }
       checkKnob(e.value, knob, `@${m.name} ${e.name}`);
+    }
+  }
+
+  /** the values a settings reader can fold: no `vec3()`, no `calc()`, no `var()` */
+  function checkLiteral(v: Value, what: string): void {
+    switch (v.kind) {
+      case "number": case "hex": case "string": case "ident":
+        return;
+      case "array":
+        for (const i of v.items) checkLiteral(i, what);
+        return;
+      case "record":
+        for (const e of v.entries) checkLiteral(e.value, what);
+        return;
+      default:
+        err(`${what} must be a plain value: a number, a string, a word, a list or a record`, v);
     }
   }
 
@@ -640,6 +709,10 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     }
     if (knob.type === "string" && v.kind !== "string") wrong("a string");
     if (knob.type === "boolean" && !(v.kind === "ident" && (v.name === "true" || v.name === "false"))) wrong("true or false");
+    if (knob.type === "strings") {
+      if (v.kind !== "array" || v.items.some((i) => i.kind !== "string")) wrong("an array of strings");
+      return;
+    }
     if (knob.type === "numbers") {
       if (v.kind !== "array" || v.items.some((i) => i.kind !== "number")) wrong("an array of numbers");
       else if (knob.length !== undefined && v.items.length !== knob.length) wrong(`${knob.length} numbers`);

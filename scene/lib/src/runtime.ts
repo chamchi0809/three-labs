@@ -7,6 +7,7 @@ import { AnimationClip, AnimationMixer, EquirectangularReflectionMapping, Group,
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
 import { className, LOADERS, math } from "./names.ts";
+import { Entity } from "./entity.ts";
 import { buildBrush, type BrushFace, type UvMode, type Vec3 } from "./brush.ts";
 import { buildPatch, type Patch, type PatchGrid } from "./patch.ts";
 
@@ -176,6 +177,40 @@ function fail(message: string, pos: Pos, ctx: Ctx): never {
 export function updateScene(root: Object3D, delta: number): void {
   for (const mixer of (root.userData.mixers ?? []) as AnimationMixer[]) mixer.update(delta);
 }
+
+/**
+ * Every entity in a tree, parents before children.
+ *
+ * The whole runtime side of the entity system: `@entity` merges a template's defaults under a node's
+ * overrides onto `object.entity`, and this is how a game finds the ones that got any. Order is the
+ * traversal's, which is the sheet's, so a spawner that cares about "the first spawn point" gets the one
+ * the level file lists first.
+ *
+ * Every {@link Entity} node, then, and also the ordinary node somebody hung an `@entity { … }` on — a
+ * door that is a mesh and carries the key it needs is still something a game has to find.
+ */
+export function entities<F = Record<string, unknown>>(root: Object3D): Entity<F>[] {
+  const out: Entity<F>[] = [];
+  root.traverse((o) => {
+    if ((o as Partial<Entity<F>>).entity) out.push(o as Entity<F>);
+  });
+  return out;
+}
+
+/**
+ * The sheet's translation table: locale code -> source text -> translation.
+ *
+ * A `@locale { … }` at the top of a sheet lands here, on the root the loader returns. The key is the
+ * source text itself rather than an id, so a string that has not been translated — or a whole locale
+ * nobody has filled in yet — still shows what the level author wrote instead of `menu.door.open.1`.
+ */
+export type Locale = Record<string, Record<string, string>>;
+
+export const localeOf = (root: Object3D): Locale | undefined => (root as { locale?: Locale }).locale;
+
+/** a source string in the given locale, falling back to the string itself */
+export const localize = (root: Object3D, text: string, locale: string | undefined): string =>
+  (locale && localeOf(root)?.[locale]?.[text]) || text;
 
 /**
  * Everything the module-level asset cache owns. A `gltf()` node is a `clone()` of the cached scene
@@ -366,9 +401,18 @@ function moduleRegistry(root: SceneModule | undefined): Record<string, any> {
  */
 function lookup(name: string, ctx: Ctx): any {
   let found = ctx.classes.get(name);
-  if (found === undefined) ctx.classes.set(name, (found = ctx.registry[name] ?? ctx.registry[className(name)]));
+  if (found === undefined) {
+    ctx.classes.set(name, (found = ctx.registry[name] ?? ctx.registry[className(name)] ?? OURS[className(name)]));
+  }
   return found;
 }
+
+/**
+ * The classes tscene brings itself, which no bundler has to be told about: a sheet that writes
+ * `entity { … }` is naming a class this package exports, not one of three's, so the plugin emits no
+ * import for it and the registry would not have it.
+ */
+const OURS: Record<string, any> = { Entity };
 
 // a sheet parsed from a string was never seen by the plugin, so nothing imported three on its behalf
 const HINT =

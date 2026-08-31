@@ -11,6 +11,7 @@
  * a new one.
  */
 import type { Member, ObjectValue, Pos, Value, Vec3 } from "tscene";
+import { IDENTITY_TRS, type Trs } from "../brush/vec.ts";
 
 /** the span of a value that was never in the source */
 export const SYNTHETIC: Pos = { start: 0, end: 0 };
@@ -43,6 +44,9 @@ export const call = (name: string, args: Value[]): ObjectValue => ({
 });
 
 export const vec3 = (v: Vec3): Value => call("vec3", [num(v[0]), num(v[1]), num(v[2])]);
+
+/** `[1, 2, 3]` — a list, and the only spelling of a place that `@entity` accepts: see `plain` below */
+export const list = (items: Value[]): Value => ({ ...SYNTHETIC, kind: "array", items });
 
 /** `{ a: 1; b: 2 }` — the one place a sheet keeps names three has no property for, `userData` included */
 export const record = (entries: [string, Value][]): Value => ({
@@ -99,6 +103,38 @@ export function asVec3(v: Value | undefined): Vec3 | undefined {
 }
 
 export const vec3Of = (props: Member[], name: string): Vec3 | undefined => asVec3(valueOf(props, name));
+
+/** an angle in radians, whichever unit the sheet wrote it in — a bare number already is one */
+const radians = (v: Value): number =>
+  v.kind === "number" ? (v.unit === "deg" ? (v.value * Math.PI) / 180 : v.value) : NaN;
+
+/**
+ * `euler(x, y, z)` in radians.
+ *
+ * A `rotation` is an `Euler` and not a `Vector3`, and tscene means that literally: `rotation: vec3(...)`
+ * throws at load because the property is read-only. So `euler()` is the only spelling this reads.
+ */
+export function asEuler(v: Value | undefined): Vec3 | undefined {
+  if (v?.kind !== "object" || v.name !== "euler" || v.args.length < 3) return undefined;
+  const n = v.args.slice(0, 3).map(radians);
+  return n.some(Number.isNaN) ? undefined : [n[0]!, n[1]!, n[2]!];
+}
+
+export const eulerOf = (props: Member[], name: string): Vec3 | undefined => asEuler(valueOf(props, name));
+
+/** a number as a sheet should hold it: 90.00000000000001 is a rounding error, not something to write down */
+export const tidy = (n: number): number => Math.round(n * 1e6) / 1e6 + 0;
+
+/** the three an object is placed by, with whatever it left unwritten standing at its default */
+export const trsOf = (props: Member[]): Trs => ({
+  position: vec3Of(props, "position") ?? IDENTITY_TRS.position,
+  rotation: eulerOf(props, "rotation") ?? IDENTITY_TRS.rotation,
+  scale: vec3Of(props, "scale") ?? IDENTITY_TRS.scale,
+});
+
+/** degrees, because that is what a designer reading the file back is thinking in */
+export const setEuler = (props: Member[], name: string, r: Vec3): Member[] =>
+  setProp(props, name, call("euler", r.map((a) => num(tidy((a * 180) / Math.PI), "deg"))));
 
 /** every `ref(#name)` inside a value, however deeply it is nested in arrays, records and calls */
 export function* refsIn(value: Value): Generator<string> {

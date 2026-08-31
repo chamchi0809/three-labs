@@ -81,8 +81,18 @@ export function resolve(world: World, id: NodeId, open?: NodeId): NodeId | undef
 
 // ---------------------------------------------------------------- objects
 
-export function selectNodes(world: World, s: Selection, ids: NodeId[], mode: SelectMode = "replace", open?: NodeId): Selection {
-  const wanted = ids.map((id) => resolve(world, id, open)).filter((id): id is NodeId => !!id);
+export const selectNodes = (world: World, s: Selection, ids: NodeId[], mode: SelectMode = "replace", open?: NodeId): Selection =>
+  selectExactly(world, s, ids.map((id) => resolve(world, id, open)).filter((id): id is NodeId => !!id), mode);
+
+/**
+ * Nodes selected exactly as named, without the group rule.
+ *
+ * The hierarchy panel is the one place a designer names a node rather than points at one: they clicked the
+ * row that says `lamp`, so `lamp` is what is selected, where clicking it in a pane would have picked the
+ * room it is part of. Everything else goes through {@link selectNodes}, which is that rule.
+ */
+export function selectExactly(world: World, s: Selection, ids: NodeId[], mode: SelectMode = "replace"): Selection {
+  const wanted = ids.filter((id) => isSelectable(world, id));
   // adding nothing to a selection is not the same as clearing it — only "replace" means "instead of"
   if (!wanted.length && mode !== "replace") return s;
   const nodes = combine(s.nodes, wanted, mode, same);

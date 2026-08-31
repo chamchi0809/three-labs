@@ -131,7 +131,7 @@
   .step {
     padding: 0 4px;
   }
-  /* an entity definition picked in the browser is not one of the buttons; it still has to be readable */
+  /* an object definition picked in the browser is not one of the buttons; it still has to be readable */
   .other {
     color: var(--p9);
     font-weight: 600;

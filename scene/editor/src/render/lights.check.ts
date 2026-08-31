@@ -8,7 +8,7 @@ import {
 import { report, test } from "../check.ts";
 import { EMPTY, type Catalogue } from "../doc/catalogue.ts";
 import { demoCatalogue, demoMap } from "../doc/demo.ts";
-import { entityNode, groupNode, layerNode, type Node, type World } from "../doc/document.ts";
+import { objectNode, groupNode, layerNode, type Node, type World } from "../doc/document.ts";
 import { newEditor } from "../doc/editor.ts";
 import { hex, num, setProp, setVec3, str } from "../doc/props.ts";
 import { editorLights, mapLights } from "./lights.ts";
@@ -47,7 +47,7 @@ test("a point light is built with the numbers it wrote, and three's defaults for
   props = setProp(props, "color", hex(0xff8800));
   props = setProp(props, "intensity", num(7));
   props = setProp(props, "distance", num(9));
-  const [light] = lit([entityNode("pointLight", { props })]);
+  const [light] = lit([objectNode("pointLight", { props })]);
   assert.ok(light instanceof PointLight);
   assert.deepEqual(light.position.toArray(), [1, 2, 3]);
   assert.equal(light.color.getHex(), 0xff8800);
@@ -57,39 +57,39 @@ test("a point light is built with the numbers it wrote, and three's defaults for
 });
 
 test("a hemisphere light takes a ground colour, and black is the one it gets if it wrote none", () => {
-  const [a] = lit([entityNode("hemisphereLight", { props: setProp([], "groundColor", hex(0x203040)) })]);
+  const [a] = lit([objectNode("hemisphereLight", { props: setProp([], "groundColor", hex(0x203040)) })]);
   assert.ok(a instanceof HemisphereLight);
   assert.equal(a.groundColor.getHex(), 0x203040);
 
-  const [b] = lit([entityNode("hemisphereLight")]);
+  const [b] = lit([objectNode("hemisphereLight")]);
   assert.equal((b as HemisphereLight).groundColor.getHex(), 0x000000);
 });
 
 test("a colour can be a name as well as a hex, because a sheet is entitled to write one", () => {
-  const [light] = lit([entityNode("ambientLight", { props: setProp([], "color", str("tomato")) })]);
+  const [light] = lit([objectNode("ambientLight", { props: setProp([], "color", str("tomato")) })]);
   assert.ok(light instanceof AmbientLight);
   assert.equal(light.color.getHex(), 0xff6347);
 });
 
 test("a spot light aims at a literal place, and at the origin when it names a node instead", () => {
-  const [aimed] = lit([entityNode("spotLight", { props: setVec3([], "target", [0, -1, 4]) })]);
+  const [aimed] = lit([objectNode("spotLight", { props: setVec3([], "target", [0, -1, 4]) })]);
   assert.ok(aimed instanceof SpotLight);
   assert.deepEqual(aimed.target.position.toArray(), [0, -1, 4]);
 
   // `target: ref(#thing)` is the ordinary way to write it, and resolving it is the runtime's job
-  const [guessed] = lit([entityNode("directionalLight", { props: setProp([], "target", str("#lamp")) })]);
+  const [guessed] = lit([objectNode("directionalLight", { props: setProp([], "target", str("#lamp")) })]);
   assert.deepEqual((guessed as DirectionalLight).target.position.toArray(), [0, 0, 0]);
 });
 
 test("anything that is not a light is not one, however it is dressed", () => {
-  assert.deepEqual(lit([entityNode("mesh", { props: place([0, 1, 0]) })]), []);
-  assert.deepEqual(lit([entityNode("perspectiveCamera")]), []);
+  assert.deepEqual(lit([objectNode("mesh", { props: place([0, 1, 0]) })]), []);
+  assert.deepEqual(lit([objectNode("perspectiveCamera")]), []);
 });
 
 // ---------------------------------------------------------------- where it is, and whether it counts
 
 test("a light inside a group is where the group put it", () => {
-  const light = entityNode("pointLight", { props: place([0, 1, 0]) });
+  const light = objectNode("pointLight", { props: place([0, 1, 0]) });
   const inner = groupNode("lamp", [light], { props: place([0, 0, 2]) });
   const outer = groupNode("room", [inner], { props: place([10, 0, 0]) });
   assert.deepEqual(lit([outer])[0]!.position.toArray(), [10, 1, 2]);
@@ -98,34 +98,34 @@ test("a light inside a group is where the group put it", () => {
 test("a light nobody placed keeps three's own place, because that place is a direction", () => {
   // a hemisphere light at the origin has no up and emits nothing; three starts one at (0, 1, 0) for that
   // reason, and a document that says nothing about where the sky is is not asking for it to be moved
-  const [sky] = lit([entityNode("hemisphereLight")]);
+  const [sky] = lit([objectNode("hemisphereLight")]);
   assert.deepEqual(sky!.position.toArray(), [0, 1, 0]);
-  const [sun] = lit([entityNode("directionalLight")]);
+  const [sun] = lit([objectNode("directionalLight")]);
   assert.deepEqual(sun!.position.toArray(), [0, 1, 0]);
 
-  const [placed] = lit([entityNode("hemisphereLight", { props: place([0, 0, 0]) })]);
+  const [placed] = lit([objectNode("hemisphereLight", { props: place([0, 0, 0]) })]);
   assert.deepEqual(placed!.position.toArray(), [0, 0, 0], "but a place written down is honoured");
 });
 
 test("a group with a place puts the lights inside it there, even the ones with none of their own", () => {
-  const inside = groupNode("rig", [entityNode("hemisphereLight")], { props: place([0, 5, 0]) });
+  const inside = groupNode("rig", [objectNode("hemisphereLight")], { props: place([0, 5, 0]) });
   assert.deepEqual(lit([inside])[0]!.position.toArray(), [0, 5, 0]);
 });
 
 test("a hidden subtree is not lit, because hiding a floor is how you work on the one below it", () => {
-  const light = entityNode("pointLight");
+  const light = objectNode("pointLight");
   assert.equal(lit([groupNode("upstairs", [light], { broom: { hidden: true } })]).length, 0);
-  assert.equal(lit([entityNode("pointLight", { broom: { hidden: true } })]).length, 0);
+  assert.equal(lit([objectNode("pointLight", { broom: { hidden: true } })]).length, 0);
 });
 
 test("a locked light still lights: locked is finished with, not turned off", () => {
-  assert.equal(lit([entityNode("pointLight", { broom: { locked: true } })]).length, 1);
+  assert.equal(lit([objectNode("pointLight", { broom: { locked: true } })]).length, 1);
 });
 
 // ---------------------------------------------------------------- through a template
 
 test("an instance is lit by its template's numbers, which it never had to repeat", () => {
-  const node = entityNode("pointLight", { classes: ["lamp"], props: place([0, 3, 0]) });
+  const node = objectNode("pointLight", { classes: ["lamp"], props: place([0, 3, 0]) });
   const [light] = lit([node], demoCatalogue());
   assert.ok(light instanceof PointLight);
   assert.equal(light.color.getHex(), 0xffddaa, "the @template's colour");
@@ -135,7 +135,7 @@ test("an instance is lit by its template's numbers, which it never had to repeat
 });
 
 test("what the instance writes wins over what the template says", () => {
-  const node = entityNode("pointLight", { classes: ["lamp"], props: setProp([], "intensity", num(2)) });
+  const node = objectNode("pointLight", { classes: ["lamp"], props: setProp([], "intensity", num(2)) });
   assert.equal((lit([node], demoCatalogue())[0] as PointLight).intensity, 2);
 });
 
@@ -157,7 +157,7 @@ test("the demo room lights itself, which is the whole claim the modern look make
 const rig = (rs: ReturnType<typeof newRenderScene>): Object3D[] => [...rs.lights.children];
 
 const lamp = (at: [number, number, number]) =>
-  worldOf([entityNode("pointLight", { props: place(at) })]);
+  worldOf([objectNode("pointLight", { props: place(at) })]);
 
 test("the same lights declared by a different world object are the same rig", () => {
   const rs = newRenderScene();

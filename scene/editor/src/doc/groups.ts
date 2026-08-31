@@ -17,7 +17,7 @@
  * all, since two copies of a door are the same door except for the one property that makes them two doors.
  */
 import type { Vec3 } from "tscene";
-import { IDENTITY, invert, multiply, translation, type Mat4 } from "../brush/vec.ts";
+import { IDOBJECT, invert, multiply, translation, type Mat4 } from "../brush/vec.ts";
 import {
   boundsCentre, childrenOf, copyNode, groupNodes, hasChildren, insertNodes, nodeBounds, nodeById,
   pathTo, replaceNode, ungroup, type GroupNode, type Node, type NodeId, type World,
@@ -33,7 +33,7 @@ export const linkOf = (node: Node): string | undefined => node.broom.link;
 
 /** where a copy stands in its link set; the set's own space when it does not say */
 export const atOf = (node: Node): Mat4 =>
-  node.broom.at?.length === 12 ? ([...node.broom.at] as Mat4) : IDENTITY;
+  node.broom.at?.length === 12 ? ([...node.broom.at] as Mat4) : IDOBJECT;
 
 export const protectedNames = (node: Node): string[] =>
   (node.broom.protect ?? "").split(/\s+/).filter(Boolean);
@@ -147,7 +147,7 @@ export function linkGroups(world: World, ids: NodeId[], name?: string): World {
   let out = world;
   for (const group of groups) {
     const at = group.id === groups[0]!.id
-      ? IDENTITY
+      ? IDOBJECT
       : translation(sub3(centreOf(group), home));
     out = replaceNode(out, group.id, { ...group, broom: { ...group.broom, link, at: [...at] } });
   }

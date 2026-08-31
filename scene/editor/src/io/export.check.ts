@@ -7,13 +7,13 @@ import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import type { Catalogue } from "../doc/catalogue.ts";
-import { brushNode, emptyWorld, entityNode, groupNode, type Node, type World } from "../doc/document.ts";
+import { brushNode, emptyWorld, objectNode, groupNode, type Node, type World } from "../doc/document.ts";
 import { hex, num, setNumber, setProp, setVec3, str } from "../doc/props.ts";
 import type { Value } from "tscene";
 import { readForExport, toGlb, toObj } from "./export.ts";
 
 const CATALOGUE: Catalogue = {
-  entities: [],
+  objects: [], enums: {},
   materials: [
     {
       name: "wall", type: "meshStandardMaterial",
@@ -194,9 +194,9 @@ test("an empty map is still a valid glb, not a file with a mesh made of nothing"
 // ---------------------------------------------------------------- lights
 
 const lamp = (): Node =>
-  entityNode("pointLight", { props: setNumber(setVec3([], "position", [1, 2, 3]), "intensity", 5) });
+  objectNode("pointLight", { props: setNumber(setVec3([], "position", [1, 2, 3]), "intensity", 5) });
 
-test("a light entity goes out as a light, not as nothing", () => {
+test("a light object goes out as a light, not as nothing", () => {
   const { lights } = readForExport(worldOf(lamp()));
   assert.equal(lights.length, 1);
   assert.equal(lights[0]!.kind, "point");
@@ -218,8 +218,8 @@ test("a map with no lights says nothing about an extension it does not use", () 
   assert.equal(json.extensions, undefined);
 });
 
-test("an entity that is not a light is left in the sheet, where a game will look for it", () => {
-  const spawn = entityNode("mesh", { props: setVec3([], "position", [1, 2, 3]) });
+test("an object that is not a light is left in the sheet, where a game will look for it", () => {
+  const spawn = objectNode("mesh", { props: setVec3([], "position", [1, 2, 3]) });
   const exported = readForExport(worldOf(spawn));
   assert.deepEqual(exported.lights, []);
   assert.deepEqual(exported.surfaces, []);
@@ -228,13 +228,13 @@ test("an entity that is not a light is left in the sheet, where a game will look
 test("a colour reads the same whichever of the three ways the sheet spelled it", () => {
   const ways: Value[] = [hex(0xff8040), num(0xff8040), str("#ff8040")];
   for (const value of ways) {
-    const node = entityNode("pointLight", { props: setProp([], "color", value) });
+    const node = objectNode("pointLight", { props: setProp([], "color", value) });
     assert.equal(readForExport(worldOf(node)).lights[0]!.colour, 0xff8040, value.kind);
   }
 });
 
 test("a light that is aimed comes out pointing there, which is a rotation and not a target", () => {
-  const spot = entityNode("spotLight", {
+  const spot = objectNode("spotLight", {
     props: setVec3(setVec3([], "position", [0, 4, 0]), "target", [0, 0, 0]),
   });
   const json = jsonOf(toGlb(readForExport(worldOf(spot)), CATALOGUE));

@@ -12,8 +12,9 @@
  * A **patch** is its control points, and a quadratic Bezier is affine-invariant, so moving the handles moves
  * the curve exactly. Nothing can destroy one — a fold is still a grid — so it never contributes a problem.
  *
- * An **entity** has no geometry to transform — it has a `position`, and that is what moves. Its children,
- * if it has any, move with it.
+ * An **object** has no geometry to transform — it has a `position`, a `rotation` and a `scale`, so the
+ * matrix is composed onto those three and read back out into them. Its children, if it has any, move with
+ * it.
  *
  * A **group or layer** is not a thing at all, only a name over its children, so it passes the matrix down.
  *
@@ -24,19 +25,21 @@
 import type { Vec3 } from "tscene";
 import { transformBrush, type Brush } from "../brush/brush.ts";
 import { transformLocked } from "../brush/uv.ts";
-import { IDENTITY, multiply, transformPoint, translation, type Mat4 } from "../brush/vec.ts";
+import {
+  IDOBJECT, compose, decompose, distance, multiply, translation, type Mat4,
+} from "../brush/vec.ts";
 import { transformPatch } from "../patch/patch.ts";
 import {
   childrenOf, hasChildren, replaceNode, type Node, type NodeId, type World,
 } from "./document.ts";
-import { setVec3, vec3Of } from "./props.ts";
+import { setEuler, setVec3, tidy, trsOf, vec3Of } from "./props.ts";
 import type { Selection } from "./selection.ts";
 
 export type Transformed = { world: World; problems: string[] };
 
 /** where a linked group stands after being moved: its old place in the set, then the move */
 const placed = (m: Mat4, at: number[] | undefined): Mat4 =>
-  multiply(m, at?.length === 12 ? (at as Mat4) : IDENTITY);
+  multiply(m, at?.length === 12 ? (at as Mat4) : IDOBJECT);
 
 /** one solid moved, with the material either riding along or staying put on the wall */
 export function transformBrushLocked(brush: Brush, m: Mat4, lockUv: boolean) {
@@ -65,18 +68,30 @@ export function transformNode(node: Node, m: Mat4, lockUv: boolean): { node?: No
   }
   if (problems.length) return { problems };
 
-  if (node.kind !== "entity") {
+  if (node.kind !== "object") {
     // a linked group that moves as a whole has moved *within its set*, and `at` is the record of where it
     // stands. Left behind, the next propagation would snap the copy back to where it was made
     const broom = node.broom.link === undefined ? node.broom : { ...node.broom, at: [...placed(m, node.broom.at)] };
     return { node: { ...node, broom, children }, problems: [] };
   }
-  // an entity with no position is one that has never been placed; giving it one here would invent a
-  // property the sheet never had, so it moves only its children and stays where it was written
-  const at = vec3Of(node.props, "position");
-  const props = at ? setVec3(node.props, "position", transformPoint(m, at)) : node.props;
+  // the object's own three, with whatever it left unwritten standing at its default, and the matrix
+  // composed onto them
+  const was = trsOf(node.props);
+  const now = decompose(multiply(m, compose(was)));
+
+  // Only what the matrix actually changed is written back, so that dragging a room full of lights across
+  // the floor does not leave `rotation: euler(0deg, 0deg, 0deg)` on every one of them. A position is the
+  // exception in the other direction: an object with no position is one that has never been placed, and
+  // giving it one here would invent a property the sheet never had.
+  let props = node.props;
+  if (vec3Of(node.props, "position")) props = setVec3(props, "position", now.position.map(tidy) as Vec3);
+  if (!same(now.rotation, was.rotation)) props = setEuler(props, "rotation", now.rotation);
+  if (!same(now.scale, was.scale)) props = setVec3(props, "scale", now.scale.map(tidy) as Vec3);
   return { node: { ...node, props, children }, problems: [] };
 }
+
+/** the same three numbers, to the precision a sheet is written in */
+const same = (a: Vec3, b: Vec3): boolean => distance(a, b) < 1e-9;
 
 /**
  * A set of nodes transformed together.

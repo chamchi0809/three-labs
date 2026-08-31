@@ -54,11 +54,15 @@ mesh #ring {
 }
 brush #pillar {
   @broom { kind: brush };
+  @entity { hp: 30 };
+  @fields { hp: { type: int } };
   face([0, 0, 0], [0, 0, 1], [1, 0, 0]) {
     uv: paraxial;
     scale: [2, 2];
   }
 }
+@locale { ko: { "Open the door": "\ubb38\uc744 \uc5f4\uc5b4\ub77c" } };
+entity.spawner #ogre { position: vec3(0, 0, 0); }
 `;
 
 // Tokenise every line, then look up the scope stack at the first offset of a given substring.
@@ -129,6 +133,9 @@ has(".glow", "entity.other.attribute-name.class", 25);
 has("brush", "keyword.other.brush", 28);           // the language's own node, not one of three's classes
 has("#pillar", "entity.other.attribute-name.id");
 has("@broom", "keyword.control.broom");
+has("@entity", "keyword.control.entity");
+has("@fields", "keyword.control.fields");
+has("@locale", "keyword.control.locale");
 has("face", "keyword.other.face");
 has("paraxial", "support.constant.uv");
 

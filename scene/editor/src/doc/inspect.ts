@@ -17,11 +17,14 @@
  * is what gives it back. This is the difference between an editor that shows a prefab and one that
  * flattens it the first time anybody looks at it.
  */
-import type { UvMode, Value, Vec2, Vec3 } from "tscene";
+import type { Member, UvMode, Value, Vec2, Vec3 } from "tscene";
 import { faceAttributes, facePolygon, type Brush, type FaceAttributes } from "../brush/brush.ts";
 import { uvOf } from "../brush/uv.ts";
 import { sameValue } from "../io/literal.ts";
-import { defFor, propType, type Catalogue, type EntityDef, type PropType } from "./catalogue.ts";
+import {
+  defFor, propType, type Catalogue, type DefHalf, type ObjectDef, type PropDef, type PropType,
+} from "./catalogue.ts";
+import { fieldOf, fieldsOf, removeField, renameField, setField, type FieldDef } from "./entity.ts";
 import {
   childrenOf, nodeById, solidsUnder, updateNode, type Node, type NodeId, type World,
 } from "./document.ts";
@@ -41,6 +44,22 @@ export type Row = {
   mixed: boolean;
   /** nobody wrote it — this is the definition speaking, and the row is drawn greyed */
   inherited: boolean;
+  /**
+   * A node wrote it and what it wrote is not what the template says — the `*` after the name.
+   *
+   * True for a property the template never declared at all, because that is also a value the template
+   * does not have: reverting it leaves the type's own default and overriding it adds it to the template.
+   */
+  differs: boolean;
+  /**
+   * What the project said this key *is*, from the definition's `@fields { … }`.
+   *
+   * Only ever set on an entity row, and only for a key somebody declared. Where it is present the editor
+   * follows it rather than the value's own shape: a `text` field whose value is empty is still a text box,
+   * an `enum` is a dropdown of the choices, and an `int` refuses a fraction. Where it is absent the value
+   * types itself, which is how an entity key nobody declared is still editable.
+   */
+  field?: FieldDef;
 };
 
 /**
@@ -51,33 +70,95 @@ export type Row = {
  * that is the order somebody thought about them in, and an inspector that alphabetises loses that for
  * nothing.
  */
-export function rowsFor(nodes: Node[], def?: EntityDef): Row[] {
-  const names: string[] = [];
-  for (const p of def?.props ?? []) names.push(p.name);
-  for (const node of nodes) {
-    for (const m of node.props) if (m.kind === "prop" && !names.includes(m.name)) names.push(m.name);
-  }
-  return names.map((name) => rowFor(nodes, name, def));
+export const rowsFor = (nodes: Node[], def?: ObjectDef): Row[] =>
+  gridFor(nodes, def?.props, (node, name) => propOf(node.props, name)?.value, ownProps);
+
+/**
+ * The rows for the `@entity { … }` data on the same set of nodes.
+ *
+ * The same grid over a different half of the body, because it is the same question — what did the
+ * definition declare, what did these nodes override, and do they agree — asked about the level's data
+ * rather than about three's properties. See `entity.ts` for why that data needs nothing else of its own.
+ */
+export function entityRowsFor(nodes: Node[], def?: ObjectDef, enums: Record<string, string[]> = {}): Row[] {
+  const declared = def?.declared ?? [];
+  // a key `@fields` declares and `@entity` never gave a default is still a key of this entity type, so it
+  // gets a row of its own — with no value, which is the honest thing to show for a field nobody has set
+  const known: PropDef[] = [
+    ...(def?.fields ?? []),
+    ...declared.filter((f) => !def?.fields.some((p) => p.name === f.name)).map((f) => ({ name: f.name, type: typeOfField(f) })),
+  ];
+  const rows = gridFor(nodes, known, (node, name) => fieldOf(node.props, name), (node) => fieldsOf(node.props).map((f) => f.name));
+  return rows.map((row) => {
+    const found = declared.find((f) => f.name === row.name);
+    if (!found) return row;
+    // an `enum` naming a `--list` is resolved here rather than in the row's editor: the panel should be
+    // handed the choices, not the name of a lookup it would have to do itself
+    const options = found.options ?? (found.enum !== undefined ? enums[found.enum] : undefined);
+    const field = options ? { ...found, options } : found;
+    return { ...row, field, type: typeOfField(field) };
+  });
 }
 
-function rowFor(nodes: Node[], name: string, def?: EntityDef): Row {
-  const written = nodes.map((n) => propOf(n.props, name)?.value).filter((v): v is Value => !!v);
-  const agreed = written.length === nodes.length && written.every((v) => sameValue(v, written[0]));
-  const fallback = def?.props.find((p) => p.name === name)?.value;
-  const value = agreed ? written[0] : written.length ? undefined : fallback;
-  return {
-    name,
-    // a mixed row still needs an editor, and the first value is as good a guide to which one as any
-    type: propType(value ?? written[0] ?? fallback),
-    ...(value ? { value } : {}),
-    written: written.length,
-    mixed: !agreed && written.length > 0,
-    inherited: written.length === 0 && !!fallback,
-  };
+/** the editor a declared field asks for, where the project said more than the value could */
+export const typeOfField = (field: FieldDef): PropType =>
+  field.type === "int" || field.type === "float" ? "number"
+  : field.type === "bool" ? "bool"
+  : field.type === "color" ? "colour"
+  : field.type === "point" ? "vec3"
+  : "text";
+
+const ownProps = (node: Node): string[] =>
+  node.props.filter((m) => m.kind === "prop").map((m) => (m as Extract<Member, { kind: "prop" }>).name);
+
+function gridFor(
+  nodes: Node[],
+  declared: PropDef[] | undefined,
+  valueOn: (node: Node, name: string) => Value | undefined,
+  namesOn: (node: Node) => string[],
+): Row[] {
+  const names: string[] = [];
+  for (const p of declared ?? []) names.push(p.name);
+  for (const node of nodes) {
+    for (const name of namesOn(node)) if (!names.includes(name)) names.push(name);
+  }
+  return names.map((name) => {
+    const written = nodes.map((n) => valueOn(n, name)).filter((v): v is Value => !!v);
+    const agreed = written.length === nodes.length && written.every((v) => sameValue(v, written[0]));
+    const fallback = declared?.find((p) => p.name === name)?.value;
+    const value = agreed ? written[0] : written.length ? undefined : fallback;
+    return {
+      name,
+      // a mixed row still needs an editor, and the first value is as good a guide to which one as any
+      type: propType(value ?? written[0] ?? fallback),
+      ...(value ? { value } : {}),
+      written: written.length,
+      mixed: !agreed && written.length > 0,
+      inherited: written.length === 0 && !!fallback,
+      differs: written.some((v) => !fallback || !sameValue(v, fallback)),
+    };
+  });
 }
+
+/**
+ * The definition's own values as rows, for the grid that edits the *template* rather than an instance.
+ *
+ * Nothing is inherited or mixed here — a template is one declaration and every value in it is its own —
+ * so this is the declaration read straight out, in the order it wrote it.
+ */
+export const defRows = (def: ObjectDef, half: DefHalf): Row[] =>
+  def[half].map((p) => ({
+    name: p.name,
+    type: p.type,
+    ...(p.value ? { value: p.value } : {}),
+    written: 1,
+    mixed: false,
+    inherited: false,
+    differs: false,
+  }));
 
 /** the definition every inspected node is an instance of, when they are all instances of the same one */
-export function commonDef(catalogue: Catalogue, nodes: Node[]): EntityDef | undefined {
+export function commonDef(catalogue: Catalogue, nodes: Node[]): ObjectDef | undefined {
   const first = nodes[0] && defFor(catalogue, nodes[0]);
   if (!first) return undefined;
   return nodes.every((n) => defFor(catalogue, n) === first) ? first : undefined;
@@ -92,7 +173,7 @@ export function describeNodes(nodes: Node[]): string {
 }
 
 export const typeName = (node: Node): string =>
-  node.kind === "entity" ? node.type : node.kind === "brush" ? "brush" : node.kind;
+  node.kind === "object" ? node.type : node.kind === "brush" ? "brush" : node.kind;
 
 // ---------------------------------------------------------------- writing properties
 
@@ -102,6 +183,16 @@ export const setNodesProp = (world: World, ids: NodeId[], name: string, value: V
 
 export const removeNodesProp = (world: World, ids: NodeId[], name: string): World =>
   ids.reduce((w, id) => updateNode(w, id, (n: Node) => ({ ...n, props: removeProp(n.props, name) })), world);
+
+/** the same three, against the `@entity { … }` block rather than against the body's own properties */
+export const setNodesField = (world: World, ids: NodeId[], name: string, value: Value): World =>
+  ids.reduce((w, id) => updateNode(w, id, (n: Node) => ({ ...n, props: setField(n.props, name, value) })), world);
+
+export const removeNodesField = (world: World, ids: NodeId[], name: string): World =>
+  ids.reduce((w, id) => updateNode(w, id, (n: Node) => ({ ...n, props: removeField(n.props, name) })), world);
+
+export const renameNodesField = (world: World, ids: NodeId[], from: string, to: string): World =>
+  ids.reduce((w, id) => updateNode(w, id, (n: Node) => ({ ...n, props: renameField(n.props, from, to) })), world);
 
 /**
  * A property renamed on every node that has it.
@@ -289,11 +380,11 @@ export const uvPolygon = (brush: Brush, face: number): Vec2[] =>
 // ---------------------------------------------------------------- the map
 
 export type MapStats = {
-  brushes: number; patches: number; entities: number; groups: number; layers: number; faces: number;
+  brushes: number; patches: number; objects: number; groups: number; layers: number; faces: number;
 };
 
 export function mapStats(world: World): MapStats {
-  const stats: MapStats = { brushes: 0, patches: 0, entities: 0, groups: 0, layers: 0, faces: 0 };
+  const stats: MapStats = { brushes: 0, patches: 0, objects: 0, groups: 0, layers: 0, faces: 0 };
   const visit = (node: Node) => {
     if (node.kind === "brush") {
       stats.brushes++;
@@ -302,7 +393,7 @@ export function mapStats(world: World): MapStats {
     }
     // a patch has no faces to count: it is one surface, and the number that matters about it is its spans
     if (node.kind === "patch") return void stats.patches++;
-    if (node.kind === "entity") stats.entities++;
+    if (node.kind === "object") stats.objects++;
     else if (node.kind === "group") stats.groups++;
     else stats.layers++;
     for (const kid of childrenOf(node)) visit(kid);

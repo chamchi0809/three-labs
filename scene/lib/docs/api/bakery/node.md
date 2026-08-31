@@ -669,7 +669,7 @@ The baker. Node only — pulls in Dawn, sharp and xatlas. See `tscene/bakery` fo
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `opts` | [`BakeOptions`](#bakeoptions) |
 
 #### Returns
@@ -746,7 +746,7 @@ Walks the scene once and flattens everything the path tracer needs. Does not mut
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `opts` | [`CollectOptions`](#collectoptions) |
 
 #### Returns

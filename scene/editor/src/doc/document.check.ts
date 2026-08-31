@@ -8,12 +8,12 @@ import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import type { Bounds } from "../brush/builder.ts";
 import {
-  boundsContain, boundsOverlap, brushNode, brushesUnder, emptyWorld, entityBounds, entityNode, groupNodes,
+  boundsContain, boundsOverlap, brushNode, brushesUnder, emptyWorld, objectBounds, objectNode, groupNodes,
   groupNode, groupOf, insertNodes, isHidden, isLocked, layerNode, layerOf, moveNodes, nodeBounds, nodeById,
   parents, pathTo, removeNodes, replaceNode, subtreeIds, ungroup, union, updateNode, walk, worldBounds,
   type BrushNode, type World,
 } from "./document.ts";
-import { numberOf, propOf, setProp, setVec3, str, vec3Of } from "./props.ts";
+import { numberOf, propOf, setEuler, setProp, setVec3, str, vec3Of } from "./props.ts";
 
 const box = (min: [number, number, number], max: [number, number, number]): BrushNode =>
   brushNode(brushOf(cuboid({ min, max })));
@@ -22,7 +22,7 @@ const box = (min: [number, number, number], max: [number, number, number]): Brus
 function map() {
   const a = box([0, 0, 0], [1, 1, 1]);
   const b = box([2, 0, 0], [3, 1, 1]);
-  const light = entityNode("pointLight", { props: setVec3([], "position", [5, 5, 5]) });
+  const light = objectNode("pointLight", { props: setVec3([], "position", [5, 5, 5]) });
   const group = groupNode("pillars", [a, b]);
   const main = layerNode("Main", [group, light]);
   const far = box([10, 0, 0], [11, 1, 1]);
@@ -160,14 +160,30 @@ test("a solid's extent is its own, and a group's is all of them", () => {
   assert.deepEqual(layer.max, [5, 5, 5], "the light counts too");
 });
 
-test("an entity with a stated size is a box about its origin, and one without is a point", () => {
-  const sized = entityNode("info_player_start", {
+test("an object with a stated size is a box about its origin, and one without is a point", () => {
+  const sized = objectNode("info_player_start", {
     props: setVec3([], "position", [4, 0, 4]),
     broom: { size: [-0.5, 0, -0.5, 0.5, 1.8, 0.5] },
   });
-  assert.deepEqual(entityBounds(sized), { min: [3.5, 0, 3.5], max: [4.5, 1.8, 4.5] });
-  const bare = entityNode("mesh");
-  assert.deepEqual(entityBounds(bare), { min: [0, 0, 0], max: [0, 0, 0] });
+  assert.deepEqual(objectBounds(sized), { min: [3.5, 0, 3.5], max: [4.5, 1.8, 4.5] });
+  const bare = objectNode("mesh");
+  assert.deepEqual(objectBounds(bare), { min: [0, 0, 0], max: [0, 0, 0] });
+});
+
+test("an object's box turns and stretches with it", () => {
+  const turned = objectNode("mesh", {
+    props: setEuler(setVec3([], "position", [0, 0, 0]), "rotation", [0, Math.PI / 2, 0]),
+    broom: { size: [-1, 0, -0.25, 1, 2, 0.25] },
+  });
+  const box = objectBounds(turned)!;
+  assert.ok(Math.abs(box.min[0]! + 0.25) < 1e-9 && Math.abs(box.max[2]! - 1) < 1e-9,
+    `a quarter turn swaps the long axis for the short one: ${JSON.stringify(box)}`);
+
+  const big = objectNode("mesh", {
+    props: setVec3(setVec3([], "position", [0, 0, 0]), "scale", [2, 2, 2]),
+    broom: { size: [-1, 0, -1, 1, 2, 1] },
+  });
+  assert.deepEqual(objectBounds(big), { min: [-2, 0, -2], max: [2, 4, 2] });
 });
 
 test("an empty layer encloses nothing, and does not make the world enclose nothing", () => {

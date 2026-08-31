@@ -9,18 +9,18 @@ import { withFace } from "../brush/uv.ts";
 import { demoCatalogue } from "./demo.ts";
 import { defByName } from "./catalogue.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
+  brushNode, objectNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
 } from "./document.ts";
 import { patchShape } from "../patch/patch.ts";
 import {
-  commonDef, describeNodes, faceInfo, facesInScope, mapStats, removeNodesProp, renameNode,
+  commonDef, defRows, describeNodes, faceInfo, facesInScope, mapStats, removeNodesProp, renameNode,
   renameNodesProp, rowsFor, setClasses, setNodesProp, setSheetId, sheetIds, uvPolygon,
 } from "./inspect.ts";
 import { num, setNumber, setString } from "./props.ts";
 import { NOTHING } from "./selection.ts";
 
 const lamp = (intensity: number) =>
-  entityNode("pointLight", { classes: ["lamp"], props: setNumber([], "intensity", intensity) });
+  objectNode("pointLight", { classes: ["lamp"], props: setNumber([], "intensity", intensity) });
 
 const cube = (material?: string) => brushNode(brushOf(cuboid({ min: [0, 0, 0], max: [2, 2, 2] }), material ? { material } : {}));
 
@@ -47,14 +47,14 @@ test("nodes that agree show the value; nodes that disagree show that they do", (
 });
 
 test("a property only some of them wrote is neither agreed nor inherited", () => {
-  const row = rowsFor([lamp(4), entityNode("pointLight", { classes: ["lamp"] })])[0]!;
+  const row = rowsFor([lamp(4), objectNode("pointLight", { classes: ["lamp"] })])[0]!;
   assert.equal(row.written, 1);
   assert.equal(row.mixed, true, "one wrote 4 and one did not write it at all");
 });
 
 test("the definition's properties are listed first, greyed, at its own values", () => {
   const def = defByName(demoCatalogue(), "pointLight", "lamp")!;
-  const rows = rowsFor([entityNode("pointLight", { classes: ["lamp"], props: setString([], "name", "torch") })], def);
+  const rows = rowsFor([objectNode("pointLight", { classes: ["lamp"], props: setString([], "name", "torch") })], def);
   assert.deepEqual(rows.map((r) => r.name), ["color", "intensity", "distance", "castShadow", "name"]);
   const intensity = rows.find((r) => r.name === "intensity")!;
   assert.equal(intensity.inherited, true);
@@ -70,11 +70,36 @@ test("writing over an inherited property stops it being inherited", () => {
   assert.equal(row.value?.kind === "number" && row.value.value, 4);
 });
 
+// ---------------------------------------------------------------- the prefab: what differs from the template
+
+test("the star is on what the node says and the template does not", () => {
+  const def = defByName(demoCatalogue(), "pointLight", "lamp")!;
+  const rows = rowsFor([objectNode("pointLight", {
+    classes: ["lamp"],
+    props: setString(setNumber([], "intensity", 12), "name", "torch"),
+  })], def);
+  const by = (name: string) => rows.find((r) => r.name === name)!;
+  assert.equal(by("intensity").differs, false, "written, but written the same as the template");
+  assert.equal(by("distance").differs, false, "nobody wrote it — this is the template speaking");
+  assert.equal(by("name").differs, true, "the template has no `name`, so anything the node says is an override");
+  assert.equal(rowsFor([lamp(4)], def).find((r) => r.name === "intensity")!.differs, true);
+  assert.equal(rowsFor([lamp(4), lamp(9)], def).find((r) => r.name === "intensity")!.differs, true, "mixed differs too");
+});
+
+test("a template's own rows are its declaration read straight out", () => {
+  const def = defByName(demoCatalogue(), "mesh", "button")!;
+  assert.deepEqual(defRows(def, "props").map((r) => r.name), ["geometry", "material"]);
+  assert.deepEqual(defRows(def, "fields").map((r) => [r.name, r.type]), [["target", "text"], ["once", "bool"]]);
+  for (const row of [...defRows(def, "props"), ...defRows(def, "fields")]) {
+    assert.deepEqual([row.written, row.mixed, row.inherited, row.differs], [1, false, false, false]);
+  }
+});
+
 test("a definition is common only when every one of them is an instance of it", () => {
   const cat = demoCatalogue();
   assert.equal(commonDef(cat, [lamp(1), lamp(2)])?.name, "lamp");
-  assert.equal(commonDef(cat, [lamp(1), entityNode("mesh", { classes: ["crate"] })]), undefined);
-  assert.equal(commonDef(cat, [entityNode("mesh")]), undefined);
+  assert.equal(commonDef(cat, [lamp(1), objectNode("mesh", { classes: ["crate"] })]), undefined);
+  assert.equal(commonDef(cat, [objectNode("mesh")]), undefined);
 });
 
 test("the header names what is selected without pretending it is one thing", () => {
@@ -90,7 +115,7 @@ test("the header names what is selected without pretending it is one thing", () 
 
 test("one property set across a selection, and every other byte left alone", () => {
   const a = lamp(4);
-  const b = entityNode("pointLight", { props: [...setNumber([], "intensity", 9), ...setString([], "name", "b")] });
+  const b = objectNode("pointLight", { props: [...setNumber([], "intensity", 9), ...setString([], "name", "b")] });
   const world = setNodesProp(worldOf([a, b]), [a.id, b.id], "intensity", num(2));
   assert.equal(rowsFor([nodeById(world, a.id)!, nodeById(world, b.id)!])[0]!.mixed, false);
   const after = nodeById(world, b.id)!;
@@ -108,7 +133,7 @@ test("a property removed comes back to whatever the definition said", () => {
 });
 
 test("renaming a property keeps its value and does not leave two of it behind", () => {
-  const a = entityNode("mesh", { props: [...setString([], "targetname", "door"), ...setString([], "target", "old")] });
+  const a = objectNode("mesh", { props: [...setString([], "targetname", "door"), ...setString([], "target", "old")] });
   const world = renameNodesProp(worldOf([a]), [a.id], "targetname", "target");
   const after = nodeById(world, a.id)!;
   assert.equal(after.props.length, 1);
@@ -138,7 +163,7 @@ test("a group's name is its own field, and only a group has one", () => {
 });
 
 test("the #id and the classes are the head of the node, not its body", () => {
-  const a = entityNode("mesh");
+  const a = objectNode("mesh");
   let world = setSheetId(worldOf([a]), a.id, "door");
   assert.equal(nodeById(world, a.id)!.sheetId, "door");
   assert.deepEqual(sheetIds(world), ["door"]);
@@ -151,8 +176,8 @@ test("the #id and the classes are the head of the node, not its body", () => {
 });
 
 test("every #id in the map is offered, however deep it is", () => {
-  const inner = entityNode("mesh", { sheetId: "lamp" });
-  const world = worldOf([groupNode("g", [inner]), entityNode("mesh", { sheetId: "door" })]);
+  const inner = objectNode("mesh", { sheetId: "lamp" });
+  const world = worldOf([groupNode("g", [inner]), objectNode("mesh", { sheetId: "door" })]);
   assert.deepEqual(sheetIds(world), ["lamp", "door"]);
 });
 
@@ -271,8 +296,8 @@ test("a patch has no face but 0, and any other number names nothing", () => {
 // ---------------------------------------------------------------- the map
 
 test("the map inspector counts what is there", () => {
-  const world = worldOf([cube(), cube(), entityNode("pointLight"), groupNode("g", [cube()])]);
-  assert.deepEqual(mapStats(world), { brushes: 3, patches: 0, entities: 1, groups: 1, layers: 1, faces: 18 });
+  const world = worldOf([cube(), cube(), objectNode("pointLight"), groupNode("g", [cube()])]);
+  assert.deepEqual(mapStats(world), { brushes: 3, patches: 0, objects: 1, groups: 1, layers: 1, faces: 18 });
 });
 
 test("a patch is counted as itself, and contributes no faces", () => {

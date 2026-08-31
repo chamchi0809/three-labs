@@ -7,7 +7,7 @@
   import IconKeyboard from "@tabler/icons-svelte/icons/keyboard";
   import Dialog from "../ui/Dialog.svelte";
   import { tooltip } from "../ui/tooltip.ts";
-  import { printChord, chordKey, chordOf, type Chord, type Command } from "./keymap.ts";
+  import { printChord, chordKey, chordOf, isFlyChord, type Chord, type Command } from "./keymap.ts";
   import { keys } from "./keys.svelte.ts";
 
   let open = $state(false);
@@ -16,6 +16,7 @@
 
   const bindings = $derived(keys.bindings);
   const conflicts = $derived(keys.conflicts);
+  let refused = $state("");
 
   const groups = $derived.by(() => {
     const by = new Map<string, Command[]>();
@@ -49,6 +50,10 @@
       event.preventDefault();
       event.stopImmediatePropagation();
       catching = undefined;
+      // the camera's six letters are refused out loud: bindingsOf drops them anyway, and a row that
+      // appeared and then did nothing would look like a bug rather than a rule
+      if (isFlyChord(chord)) return void (refused = `${printChord(chord)} flies the camera`);
+      refused = "";
       if (chord.key !== "escape" || chord.ctrl || chord.shift || chord.alt) keys.add(id, chord);
     };
     window.addEventListener("keydown", onKeydown, true);
@@ -68,7 +73,7 @@
 {#if open}
   <Dialog
     title="keyboard"
-    say={catching ? "press the keys you want" : "click a key to unbind it"}
+    say={refused || (catching ? "press the keys you want" : "click a key to unbind it")}
     onclose={close}
   >
     {#snippet actions()}

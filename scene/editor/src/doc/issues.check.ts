@@ -16,7 +16,7 @@ import { cuboid } from "../brush/builder.ts";
 import { report, test } from "../check.ts";
 import { catalogueOfSheets, EMPTY } from "./catalogue.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
+  brushNode, objectNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
 } from "./document.ts";
 import { patchOf, patchShape } from "../patch/patch.ts";
 import { linkedCopy } from "./groups.ts";
@@ -153,16 +153,16 @@ test("a patch scaled to nothing is found and reset", () => {
   findsAndFixes(context(world(flat)), "uv-scale-zero");
 });
 
-test("a brush entity wrapped around a patch is written around geometry, and is left alone", () => {
-  const door = entityNode("mesh", { classes: ["door"], children: [curve([0, 0, 0], [2, 0, 2], "wall")] });
+test("a brush object wrapped around a patch is written around geometry, and is left alone", () => {
+  const door = objectNode("mesh", { classes: ["door"], children: [curve([0, 0, 0], [2, 0, 2], "wall")] });
   const c = context(world(door));
-  assert.deepEqual(issuesOf(c).filter((i) => i.validator === "empty-brush-entity"), [],
+  assert.deepEqual(issuesOf(c).filter((i) => i.validator === "empty-brush-object"), [],
     "deleting this would delete a working part of the level");
 });
 
-test("a point entity holding a patch is found, and the patch is moved out to the layer", () => {
+test("a point object holding a patch is found, and the patch is moved out to the layer", () => {
   const inner = curve([0, 0, 0], [2, 0, 2], "wall");
-  const torch = entityNode("mesh", {
+  const torch = objectNode("mesh", {
     classes: ["torch"], props: setVec3([], "position", [0, 0, 0]), children: [inner],
   });
   const c = context(world(torch));
@@ -171,23 +171,23 @@ test("a point entity holding a patch is found, and the patch is moved out to the
   assert.ok(nodeById(fixed, inner.id), "the patch survived being moved out");
 });
 
-// ---------------------------------------------------------------- entities
+// ---------------------------------------------------------------- objects
 
 test("a class with no template is found and taken off", () => {
-  const node = entityNode("mesh", { classes: ["lantern"], props: setVec3([], "position", [0, 0, 0]) });
+  const node = objectNode("mesh", { classes: ["lantern"], props: setVec3([], "position", [0, 0, 0]) });
   const found = findsAndFixes(context(world(node)), "missing-definition");
   assert.equal(found[0]!.prop, "lantern");
 });
 
 test("a class is not reported when the project declares no templates at all", () => {
-  const node = entityNode("mesh", { classes: ["lantern"] });
+  const node = objectNode("mesh", { classes: ["lantern"] });
   const blind = context(world(node), { catalogue: EMPTY });
   assert.deepEqual(issuesOf(blind).filter((i) => i.validator === "missing-definition"), []);
 });
 
-test("a point entity holding solids is found, and the solids are moved out to the layer", () => {
+test("a point object holding solids is found, and the solids are moved out to the layer", () => {
   const inner = box();
-  const torch = entityNode("mesh", {
+  const torch = objectNode("mesh", {
     classes: ["torch"], props: setVec3([], "position", [0, 0, 0]), children: [inner],
   });
   const c = context(world(torch));
@@ -197,18 +197,18 @@ test("a point entity holding solids is found, and the solids are moved out to th
   assert.deepEqual((nodeById(fixed, torch.id) as { children: Node[] }).children, []);
 });
 
-test("a brush entity with no solids is found and deleted", () => {
-  const door = entityNode("mesh", { classes: ["door"] });
-  findsAndFixes(context(world(door)), "empty-brush-entity");
+test("a brush object with no solids is found and deleted", () => {
+  const door = objectNode("mesh", { classes: ["door"] });
+  findsAndFixes(context(world(door)), "empty-brush-object");
 });
 
-test("a point entity that was never placed is found and put at the origin", () => {
-  const torch = entityNode("mesh", { classes: ["torch"] });
+test("a point object that was never placed is found and put at the origin", () => {
+  const torch = objectNode("mesh", { classes: ["torch"] });
   findsAndFixes(context(world(torch)), "no-position");
 });
 
 test("a reference to a name nothing has is found and removed", () => {
-  const node = entityNode("mesh", {
+  const node = objectNode("mesh", {
     props: [{ ...SYNTHETIC, kind: "prop", name: "target", value: ref("gate") }],
   });
   const found = findsAndFixes(context(world(node)), "broken-ref");
@@ -217,7 +217,7 @@ test("a reference to a name nothing has is found and removed", () => {
 
 test("a reference that resolves is left alone", () => {
   const gate = { ...box(), sheetId: "gate" };
-  const node = entityNode("mesh", {
+  const node = objectNode("mesh", {
     props: [{ ...SYNTHETIC, kind: "prop", name: "target", value: ref("gate") }],
   });
   const c = context(world(gate, node));
@@ -235,7 +235,7 @@ test("two nodes answering to one name are found, and the second gets a name of i
 });
 
 test("a property written without a name is found and removed", () => {
-  const node = entityNode("mesh", {
+  const node = objectNode("mesh", {
     props: [{ ...SYNTHETIC, kind: "prop", name: "  ", value: num(1) }],
   });
   findsAndFixes(context(world(node)), "empty-property-name");

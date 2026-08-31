@@ -13,7 +13,7 @@
 import { clampSides } from "../brush/builder.ts";
 import { PATCH_SHAPES } from "tscene";
 import { KEEPS, clipState } from "./clip.ts";
-import { ENTITY_TYPES, entitySettings, placingName, setEntityType } from "./entity.ts";
+import { OBJECT_TYPES, objectSettings, placingName, setObjectType } from "./object.ts";
 import { patchSettings, setPatch } from "./patch.ts";
 import { SHAPE_KINDS, setShape, shapeSettings } from "./shape.ts";
 import { MAX_SEGMENTS, setSegments, sweepState } from "./sweep.ts";
@@ -88,12 +88,12 @@ export const TOOL_OPTIONS: Partial<Record<ToolId, ToolOption[]>> = {
       shown: () => patchSettings.shape !== "plane",
     },
   ],
-  entity: [
+  object: [
     {
-      kind: "choice", label: "type", about: "what a click places", key: "tab", values: ENTITY_TYPES.map((e) => e.type),
+      kind: "choice", label: "type", about: "what a click places", key: "tab", values: OBJECT_TYPES.map((e) => e.type),
       // a definition picked in the browser is a type the row has no button for, so it reads the whole name
-      get: () => (entitySettings.def ? placingName() : entitySettings.type),
-      set: setEntityType,
+      get: () => (objectSettings.def ? placingName() : objectSettings.type),
+      set: setObjectType,
     },
   ],
   clip: [

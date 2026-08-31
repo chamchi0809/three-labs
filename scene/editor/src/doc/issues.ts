@@ -248,15 +248,15 @@ function assign(c: Context, i: Issue): World {
     (b, f) => withFace(b, f, { material }), (p) => withPatchMaterial(p, material));
 }
 
-// ---------------------------------------------------------------- entities
+// ---------------------------------------------------------------- objects
 
 const missingDefinition: Validator = {
   id: "missing-definition",
   title: "classes with no template",
   severity: "warning",
   find: (c) => {
-    if (!c.catalogue.entities.length) return [];
-    const known = new Set(c.catalogue.entities.map((d) => d.name));
+    if (!c.catalogue.objects.length) return [];
+    const known = new Set(c.catalogue.objects.map((d) => d.name));
     return nodes(c.world).flatMap((n) =>
       n.classes.filter((cls) => !known.has(cls)).map((cls) =>
         at(n, "missing-definition", "warning", `no @template declares .${cls}`, { prop: cls, fix: "remove the class" })));
@@ -266,7 +266,7 @@ const missingDefinition: Validator = {
 
 const pointWithSolids: Validator = {
   id: "point-with-solids",
-  title: "point entities holding solids",
+  title: "point objects holding solids",
   severity: "warning",
   find: (c) => nodes(c.world).flatMap((n) => {
     const def = defFor(c.catalogue, n);
@@ -284,17 +284,17 @@ const pointWithSolids: Validator = {
   },
 };
 
-const emptyBrushEntity: Validator = {
-  id: "empty-brush-entity",
-  title: "brush entities with no solids",
+const emptyBrushObject: Validator = {
+  id: "empty-brush-object",
+  title: "brush objects with no solids",
   severity: "error",
   find: (c) => nodes(c.world).flatMap((n) => {
     const def = defFor(c.catalogue, n);
-    // a patch counts: a brush entity wrapped around a curved surface is written around geometry, and
+    // a patch counts: a brush object wrapped around a curved surface is written around geometry, and
     // deleting it because the geometry was not a brush would delete a working part of the level
     const empty = def?.kind === "brush" && ![...solidsUnder(n)].length;
     return empty
-      ? [at(n, "empty-brush-entity", "error", `.${def!.name} is written around solids and has none`,
+      ? [at(n, "empty-brush-object", "error", `.${def!.name} is written around solids and has none`,
           { fix: "delete it" })]
       : [];
   }),
@@ -303,12 +303,12 @@ const emptyBrushEntity: Validator = {
 
 const noPosition: Validator = {
   id: "no-position",
-  title: "point entities that were never placed",
+  title: "point objects that were never placed",
   severity: "warning",
   find: (c) => nodes(c.world).flatMap((n) => {
     const def = defFor(c.catalogue, n);
     const placed = n.props.some((m) => m.kind === "prop" && m.name === "position");
-    return def?.kind === "point" && n.kind === "entity" && !placed
+    return def?.kind === "point" && n.kind === "object" && !placed
       ? [at(n, "no-position", "warning", `.${def.name} has no position, so it sits at the origin`,
           { fix: "place it at the origin" })]
       : [];
@@ -329,7 +329,7 @@ const brokenRef: Validator = {
         if (!broken.length) return [];
         const said = `${m.name} points at ${broken.map((name) => `#${name}`).join(", ")}, which nothing is called`;
         // the fix is only offered for a reference that *is* the property. One nested inside a record or a
-        // call — `userData: { target: ref(#lamp) }`, the way an entity link is written — is still an error
+        // call — `userData: { target: ref(#lamp) }`, the way an object link is written — is still an error
         // worth naming, but removing the whole property to be rid of it would take the rest with it
         return m.value.kind === "ref"
           ? [at(n, "broken-ref", "error", said, { prop: m.name, fix: "remove the property" })]
@@ -476,7 +476,7 @@ const shapeOf = (node: Node): string =>
 export const VALIDATORS: Validator[] = [
   invalidSolid, tinySolid, outOfBounds, offGrid,
   uvScaleZero, uvOutOfRange, noMaterial, unknownMaterial,
-  missingDefinition, pointWithSolids, emptyBrushEntity, noPosition,
+  missingDefinition, pointWithSolids, emptyBrushObject, noPosition,
   brokenRef, duplicateId, emptyPropertyName,
   emptyGroup, unnamed, duplicateLayerName, linkOfOne, linkOutOfStep,
 ];

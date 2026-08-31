@@ -58,11 +58,11 @@ export function mapLights(world: World, catalogue: Catalogue): Object3D[] {
   const out: Object3D[] = [];
   const descend = (node: Node, at: [number, number, number], placed: boolean) => {
     if (node.broom.hidden === true) return;
-    const body = node.kind === "entity" ? props(node, catalogue) : node.props;
+    const body = node.kind === "object" ? props(node, catalogue) : node.props;
     const own = vec3Of(body, "position");
     const here = offset(at, own);
     const put = placed || own !== undefined;
-    if (node.kind === "entity") {
+    if (node.kind === "object") {
       const light = lightOf(node.type, body);
       if (light) {
         if (put) light.position.set(here[0], here[1], here[2]);
@@ -88,7 +88,7 @@ const offset = (
  * own members come first, because {@link valueOf} takes the first it finds and the instance is the one that
  * has overridden anything.
  */
-function props(node: Extract<Node, { kind: "entity" }>, catalogue: Catalogue): Member[] {
+function props(node: Extract<Node, { kind: "object" }>, catalogue: Catalogue): Member[] {
   const def = defFor(catalogue, node);
   if (!def) return node.props;
   const inherited = def.props

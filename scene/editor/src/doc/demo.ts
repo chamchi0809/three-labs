@@ -20,9 +20,10 @@ import { cuboid } from "../brush/builder.ts";
 import type { Vec3 } from "tscene";
 import type { Member, Value } from "tscene";
 import { catalogueOfSheets, type Catalogue } from "./catalogue.ts";
+import { setField } from "./entity.ts";
 import { colour, num, record, ref, setProp, setVec3, vec3 } from "./props.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, type BrushNode, type Node, type World,
+  brushNode, objectNode, groupNode, layerNode, type BrushNode, type Node, type World,
 } from "./document.ts";
 
 const box = (min: Vec3, max: Vec3, material?: string): BrushNode =>
@@ -53,11 +54,11 @@ export function demoMap(): World {
   // lights the room with what the map declares, and a room whose only light is one lamp is a room that is
   // mostly black. The sun's direction is where it is — that is what a directional light's position means —
   // so it is written a long way out along the axis it comes down.
-  const sky = entityNode("hemisphereLight", {
+  const sky = objectNode("hemisphereLight", {
     sheetId: "sky",
     props: body([["color", colour(0x9fb4cc)], ["groundColor", colour(0x3a352e)], ["intensity", num(0.9)]]),
   });
-  const sun = entityNode("directionalLight", {
+  const sun = objectNode("directionalLight", {
     sheetId: "sun",
     props: body([
       ["position", vec3([-24, 40, 18])],
@@ -66,22 +67,22 @@ export function demoMap(): World {
     ]),
   });
 
-  const light = entityNode("pointLight", {
+  const light = objectNode("pointLight", {
     sheetId: "lamp",
     classes: ["lamp"],
     props: setVec3([], "position", [0, 3.2, 3]),
     broom: { size: [-0.2, -0.2, -0.2, 0.2, 0.2, 0.2] },
   });
   const switchPlate = box([7.9, 1.1, 2], [8, 1.5, 2.4], "trim");
-  // `.button` is what gives it its geometry and material — an entity is a template applied to a node, and
+  // `.button` is what gives it its geometry and material — an object is a template applied to a node, and
   // one that names no template is a `mesh` with nothing in it. What it points at is the instance's own
-  // business, though, the way `target` is a per-entity key in TrenchBroom and not part of the definition.
+  // business, though, the way `target` is a per-object key in TrenchBroom and not part of the definition.
   //
   // Under `userData` because a `Mesh` has no `target`, and tscene means that literally: it would assign one
   // anyway, warn, and hand the game an object three does not describe. `userData` is where three itself
   // keeps what the engine on top of it cares about, and `refsIn` follows a `ref()` into a record, so the
   // link is still drawn between the switch and the lamp.
-  const button = entityNode("mesh", {
+  const button = objectNode("mesh", {
     sheetId: "switch",
     classes: ["button"],
     props: setProp(setVec3([], "position", [7.95, 1.3, 2.2]), "userData", record([["target", ref("lamp")]])),
@@ -91,12 +92,26 @@ export function demoMap(): World {
   // the switch and its plate move as one thing, which is what a group is for
   const mechanism = groupNode("door switch", [switchPlate, button]);
 
-  const children: Node[] = [floor, ceiling, ...walls, pillar, sky, sun, light, mechanism];
+  // data at a point: nothing draws these, and that is what an entity is. Placed here so the entity
+  // panel has values to edit the moment the editor opens.
+  const spawn = objectNode("entity", {
+    sheetId: "start",
+    classes: ["spawn"],
+    props: body([["position", vec3([-6, 0, 4])]]),
+    broom: { size: [-0.3, 0, -0.3, 0.3, 1.8, 0.3] },
+  });
+  const ogre = objectNode("entity", {
+    sheetId: "ogre",
+    classes: ["monster"],
+    props: setField(body([["position", vec3([4, 0, -3])]]), "hp", num(80)),
+  });
+
+  const children: Node[] = [floor, ceiling, ...walls, pillar, sky, sun, light, mechanism, spawn, ogre];
   return { layers: [layerNode("Default", children)], broom: { grid: -2, scale: 1 } };
 }
 
 /**
- * The definitions the demo room is built against: five materials and five entities.
+ * The definitions the demo room is built against: five materials and five objects.
  *
  * Enough of each that the browsers have something to filter and the property grid has one of every editor
  * to draw — a number, a colour, a place, a flag, a name and a reference — and no more than that. A demo
@@ -146,6 +161,7 @@ export const DEMO_SHEET = `
   @broom { icon: "switch"; color: #6fd08c; size: [-0.1, -0.2, -0.2, 0.1, 0.2, 0.2]; }
   geometry: boxGeometry(0.05, 0.2, 0.2);
   material: var(--trim);
+  @entity { target: ""; once: true; }
 }
 
 @template perspectiveCamera.viewpoint {
@@ -159,7 +175,48 @@ export const DEMO_SHEET = `
   @broom { kind: brush; icon: "trigger"; color: #d08770; }
   name: "trigger";
   visible: false;
+  @entity { event: "open"; once: false; }
 }
+
+/* the choices a field can draw from — one list, shared by every field that names it */
+--damage: ["none", "fire", "ice", "holy"];
+
+/* an entity is data at a point and nothing else: no geometry, no material, nothing to draw. Three of
+   them, in two categories, between them asking for one of every field type there is. */
+@template entity.spawn {
+  @broom { category: "gameplay"; color: #6fd08c; doc: "where the player comes in";
+           size: [-0.3, 0, -0.3, 0.3, 1.8, 0.3]; }
+  @fields {
+    facing: { type: float; min: -180; max: 180; doc: "degrees about Y" };
+    team: { type: int; min: 0; max: 3 };
+  };
+  @entity { facing: 0; team: 0; }
+}
+
+@template entity.monster {
+  @broom { category: "gameplay"; color: #d0607a; doc: "one enemy, placed"; }
+  @fields {
+    hp: { type: int; min: 1; max: 999 };
+    weakness: { type: enum; enum: "damage" };
+    patrol: { type: point; doc: "walks to here and back" };
+    tint: { type: color };
+    asleep: { type: bool };
+    brain: { type: script; doc: "runs every tick" };
+  };
+  @entity { hp: 30; weakness: "fire"; patrol: [0, 0, 0]; tint: #d0607a; asleep: false; }
+}
+
+@template entity.sign {
+  @broom { category: "story"; color: #7aa2f7; doc: "a line the game shows"; }
+  @fields {
+    say: { type: lines; localized: true; doc: "what it says" };
+    icon: { type: file };
+    once: { type: bool };
+  };
+  @entity { say: "Open the door"; once: true; }
+}
+
+@locale { ko: { "Open the door": "문을 여어라" } };
 `;
 
 let cached: Catalogue | undefined;

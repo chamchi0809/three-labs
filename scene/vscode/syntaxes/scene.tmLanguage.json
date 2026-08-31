@@ -48,6 +48,9 @@
         },
         { "name": "keyword.control.bakery.scene", "match": "@bakery\\b" },
         { "name": "keyword.control.broom.scene", "match": "@broom\\b" },
+        { "name": "keyword.control.entity.scene", "match": "@entity\\b" },
+        { "name": "keyword.control.fields.scene", "match": "@fields\\b" },
+        { "name": "keyword.control.locale.scene", "match": "@locale\\b" },
         { "name": "invalid.illegal.unknown-at-rule.scene", "match": "@[A-Za-z-]+" }
       ]
     },

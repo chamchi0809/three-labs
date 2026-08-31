@@ -4,6 +4,7 @@
 export * from "./parse.ts";
 export * from "./names.ts";
 export * from "./brush.ts";
+export * from "./entity.ts";
 // `Vec2` and `Vec3` are the same two aliases the brush module declares, and re-exporting them twice is
 // an ambiguous name rather than a duplicate — so the patch module contributes everything except those
 export {

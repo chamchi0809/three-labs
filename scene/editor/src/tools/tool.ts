@@ -22,7 +22,7 @@ import type { InputState, Rect } from "./input.ts";
 import { DRAG_THRESHOLD, pixelsBetween } from "./input.ts";
 
 export type ToolId =
-  | "select" | "move" | "shape" | "patch" | "entity" | "extrude"
+  | "select" | "move" | "shape" | "patch" | "object" | "entity" | "extrude"
   | "clip" | "vertex" | "edge" | "face" | "rotate" | "scale" | "shear" | "sweep" | "attributes";
 
 /** a named change that goes on the undo stack */

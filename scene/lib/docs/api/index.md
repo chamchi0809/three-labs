@@ -8,6 +8,48 @@
 
 ## Classes
 
+### Entity
+
+#### Extends
+
+- [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D)
+
+#### Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| `F` | `Record`\<`string`, `unknown`\> |
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new Entity<F>(): Entity<F>;
+```
+
+This creates a new [Object3D](https://threejs.org/docs/#api/en/core/Object3D) object.
+
+###### Returns
+
+[`Entity`](#entity)\<`F`\>
+
+###### Inherited from
+
+```ts
+Object3D.constructor
+```
+
+#### Properties
+
+| Property | Modifier | Type | Default value | Description | Overrides |
+| ------ | ------ | ------ | ------ | ------ | ------ |
+| <a id="entity-1"></a> `entity` | `public` | `F` | `undefined` | the level's own data: `@entity { … }` on the template, with the node's own written over it | - |
+| <a id="isentity"></a> `isEntity` | `readonly` | `true` | `true` | - | - |
+| <a id="type"></a> `type` | `readonly` | `string` | `Object3D` | A Read-only _string_ to check `this` object type. **Remarks** This can be used to find a specific type of Object3D in a scene. Sub-classes will update this value. | `Object3D.type` |
+
+***
+
 ### SceneSyntaxError
 
 #### Extends
@@ -271,6 +313,14 @@ type Expanded = {
 
 ***
 
+### FieldType
+
+```ts
+type FieldType = typeof FIELD_TYPES[number];
+```
+
+***
+
 ### HotListener
 
 ```ts
@@ -297,7 +347,7 @@ type Knob = {
   length?: number;
   max?: number;
   min?: number;
-  type: "number" | "string" | "boolean" | "numbers";
+  type: "number" | "string" | "boolean" | "numbers" | "strings";
   values?: string[];
 };
 ```
@@ -310,7 +360,7 @@ type Knob = {
 | <a id="length"></a> `length?` | `number` | - |
 | <a id="max"></a> `max?` | `number` | - |
 | <a id="min"></a> `min?` | `number` | inclusive bounds for a number knob, or for every entry of a `numbers` one |
-| <a id="type"></a> `type` | `"number"` \| `"string"` \| `"boolean"` \| `"numbers"` | - |
+| <a id="type-1"></a> `type` | `"number"` \| `"string"` \| `"boolean"` \| `"numbers"` \| `"strings"` | - |
 | <a id="values"></a> `values?` | `string`[] | - |
 
 ***
@@ -370,6 +420,20 @@ type LoadOptions = {
 | <a id="load"></a> `load?` | [`Loader`](#loader) | - |
 | <a id="manager"></a> `manager?` | `LoadingManager` | shared LoadingManager — its onProgress/onLoad see every texture() and gltf() |
 | <a id="registry"></a> `registry?` | `Record`\<`string`, `any`\> | Constructors and constants by name, e.g. `{ water: Water }` — looked up before the sheet's own build-time imports. A sheet loaded from a string has none of those, so it needs the whole set: `import { threeRegistry } from "tscene/three"`. |
+
+***
+
+### Locale
+
+```ts
+type Locale = Record<string, Record<string, string>>;
+```
+
+The sheet's translation table: locale code -> source text -> translation.
+
+A `@locale { … }` at the top of a sheet lands here, on the root the loader returns. The key is the
+source text itself rather than an id, so a string that has not been translated — or a whole locale
+nobody has filled in yet — still shows what the level author wrote instead of `menu.door.open.1`.
 
 ***
 
@@ -536,7 +600,9 @@ A node's own `@bakery { … }`. Both keys are inherited by the subtree unless a 
 ```ts
 type NodeBroom = {
   at?: number[];
+  category?: string;
   color?: number;
+  doc?: string;
   hidden?: boolean;
   icon?: string;
   kind?: "point" | "brush";
@@ -548,7 +614,7 @@ type NodeBroom = {
 };
 ```
 
-A node's `@broom { … }`. On a `@template` it is the entity definition — what the editor puts in its
+A node's `@broom { … }`. On a `@template` it is the object definition — what the editor puts in its
 browser and how it draws an instance. On a node it is that node's place in the workspace.
 
 #### Properties
@@ -556,7 +622,9 @@ browser and how it draws an instance. On a node it is that node's place in the w
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="at"></a> `at?` | `number`[] | This copy's place in its link set, as 12 row-major numbers of a 4×3 affine transform. A copy's children are stored in world coordinates like everything else, so this is not what draws them — it is what carries an edit from one copy into the others, and it is written down rather than derived because two copies of the same room can sit at the same place in different orientations. |
-| <a id="color"></a> `color?` | `number` | the editor's tint for this entity, as a colour |
+| <a id="category"></a> `category?` | `string` | the group this definition is filed under in the editor's browser |
+| <a id="color"></a> `color?` | `number` | the editor's tint for this object, as a colour |
+| <a id="doc"></a> `doc?` | `string` | one line about what this thing is, shown where the browser has room for it |
 | <a id="hidden"></a> `hidden?` | `boolean` | - |
 | <a id="icon"></a> `icon?` | `string` | - |
 | <a id="kind"></a> `kind?` | `"point"` \| `"brush"` | `point` is placed by clicking, `brush` is applied to a selection of solids |
@@ -1099,10 +1167,15 @@ call-name → three class. `texture`/`gltf` are loader-backed.
 ### AT\_RULES
 
 ```ts
-const AT_RULES: readonly ["bakery", "broom"];
+const AT_RULES: readonly ["bakery", "broom", "entity", "fields", "locale"];
 ```
 
-the at-rules a body may hold, and which table checks each one
+The at-rules a body may hold.
+
+`bakery` and `broom` name a table in this file that says which knobs are legal, and so does `fields`.
+`entity` names none on purpose: it is the level's own data — `@entity { hp: 30 }` — and what a project
+calls its fields is the project's business, so the checker only insists that the values be plain ones.
+`locale` is the sheet's translation table, keyed by the source text itself.
 
 ***
 
@@ -1173,6 +1246,36 @@ const FACE_PROPS: Record<string, {
 ```
 
 what a `face()` body may set — the rest of the face is its three points
+
+***
+
+### FIELD
+
+```ts
+const FIELD: Record<string, Knob>;
+```
+
+`@fields { hp: { type: int; min: 0; max: 99 } }` — what an `@entity` key *is*, as against what it
+happens to hold.
+
+This is the half of a `.fgd` tscene still needs. The other half — which keys exist and what they start
+as — the `@entity` block already says, and saying it twice is how a definition file gets out of step
+with the level it describes.
+
+***
+
+### FIELD\_TYPES
+
+```ts
+const FIELD_TYPES: readonly ["int", "float", "text", "lines", "bool", "color", "point", "enum", "file", "script"];
+```
+
+The editors an `@entity` field can ask for.
+
+A field's editor is inferred from its default where nothing says otherwise — `hp: 30` is a number box
+without being told — so this table exists for the cases inference cannot reach: a string that is really
+one of five choices, a number that is really a whole one between 0 and 99, a path to a file, a block of
+prose that wants more than one line.
 
 ***
 
@@ -1558,7 +1661,7 @@ asset cache is left alone: it is shared with every other use of the same url.
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 
 #### Returns
 
@@ -1584,6 +1687,40 @@ the top half of a sphere filling the box: five rows from the equator to a single
 #### Returns
 
 [`PatchGrid`](#patchgrid-1)
+
+***
+
+### entities()
+
+```ts
+function entities<F>(root): Entity<F>[];
+```
+
+Every entity in a tree, parents before children.
+
+The whole runtime side of the entity system: `@entity` merges a template's defaults under a node's
+overrides onto `object.entity`, and this is how a game finds the ones that got any. Order is the
+traversal's, which is the sheet's, so a spawner that cares about "the first spawn point" gets the one
+the level file lists first.
+
+Every [Entity](#entity) node, then, and also the ordinary node somebody hung an `@entity { … }` on — a
+door that is a mesh and carries the key it needs is still something a game has to find.
+
+#### Type Parameters
+
+| Type Parameter | Default type |
+| ------ | ------ |
+| `F` | `Record`\<`string`, `unknown`\> |
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
+
+#### Returns
+
+[`Entity`](#entity)\<`F`\>[]
 
 ***
 
@@ -1765,6 +1902,49 @@ Convenience: fetch a .tscene file and build it.
 
 ***
 
+### localeOf()
+
+```ts
+function localeOf(root): Locale | undefined;
+```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
+
+#### Returns
+
+[`Locale`](#locale) \| `undefined`
+
+***
+
+### localize()
+
+```ts
+function localize(
+   root, 
+   text, 
+   locale): string;
+```
+
+a source string in the given locale, falling back to the string itself
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
+| `text` | `string` |
+| `locale` | `string` \| `undefined` |
+
+#### Returns
+
+`string`
+
+***
+
 ### math()
 
 ```ts
@@ -1815,7 +1995,7 @@ renderer.setAnimationLoop(() => { mount.update(); renderer.render(scene, camera)
 
 | Parameter | Type |
 | ------ | ------ |
-| `parent` | `Object3D` |
+| `parent` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `src` | `string` \| [`SceneModule`](#scenemodule) |
 | `opts` | [`MountOptions`](#mountoptions) |
 
@@ -2183,7 +2363,7 @@ Advances every clip play() started. Call it once per frame with the frame time i
 
 | Parameter | Type |
 | ------ | ------ |
-| `root` | `Object3D` |
+| `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
 | `delta` | `number` |
 
 #### Returns

@@ -14,6 +14,7 @@ import { attributesTool } from "./attributes.ts";
 import { clipTool } from "./clip.ts";
 import { edgeTool, faceTool, vertexTool } from "./corners.ts";
 import { entityTool } from "./entity.ts";
+import { objectTool } from "./object.ts";
 import { extrudeTool } from "./extrude.ts";
 import { rotateTool, scaleTool, shearTool } from "./gizmo.ts";
 import { moveTool } from "./move.ts";
@@ -21,12 +22,13 @@ import { patchTool } from "./patch.ts";
 import { selectTool } from "./select.ts";
 import { shapeTool } from "./shape.ts";
 import { sweepTool } from "./sweep.ts";
+import { FLY_KEYS } from "../keys/keymap.ts";
 import type { Tool, ToolId } from "./tool.ts";
 import { TOOLS, newToolBox } from "./tools.ts";
 
 /** every tool this editor has, named one at a time so a new one that never reaches `TOOLS` is caught */
 const EVERY: Tool[] = [
-  selectTool, moveTool, rotateTool, scaleTool, shearTool, shapeTool, patchTool, entityTool,
+  selectTool, moveTool, rotateTool, scaleTool, shearTool, shapeTool, patchTool, objectTool, entityTool,
   extrudeTool, sweepTool, clipTool, vertexTool, edgeTool, faceTool, attributesTool,
 ];
 
@@ -39,7 +41,7 @@ test("every tool that exists is in the bar, and nothing is in it twice", () => {
 test("the order is the order of a working day: pick and place, draw, shape, dress", () => {
   const ids: ToolId[] = [
     "select", "move", "rotate", "scale", "shear",
-    "shape", "patch", "entity",
+    "shape", "patch", "object", "entity",
     "extrude", "sweep", "clip",
     "vertex", "edge", "face",
     "attributes",
@@ -52,6 +54,14 @@ test("no two tools answer to the same key, and no two carry the same id", () => 
   assert.equal(new Set(keys).size, keys.length, `two tools share a key: ${keys.sort().join(" ")}`);
   const ids = TOOLS.map((t) => t.id);
   assert.equal(new Set(ids).size, ids.length);
+});
+
+test("no tool takes a key the panes fly with", () => {
+  // a tool letter becomes a keymap binding, and the keymap is read before the camera is — so a tool on `w`
+  // would take flying away for as long as it was in hand. See FLY_KEYS in keys/keymap.ts.
+  for (const tool of TOOLS) {
+    assert.ok(!(FLY_KEYS as readonly string[]).includes(tool.key), `${tool.id} is on ${tool.key}, which flies`);
+  }
 });
 
 test("a key is one lower-case character, because that is what a key event will hand it", () => {

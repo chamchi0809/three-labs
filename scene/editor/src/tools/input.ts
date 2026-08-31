@@ -25,7 +25,7 @@ export const NO_MODS: Mods = { shift: false, ctrl: false, alt: false };
  *
  * `point` is where on the solid the ray met it. It is optional because a hover only needs to know *what*
  * is under the mouse, and working out *where* costs a ray-triangle pass the pick target cannot answer —
- * the tools that need it (extrude, entity placement) ask for it when a drag starts, not every frame.
+ * the tools that need it (extrude, object placement) ask for it when a drag starts, not every frame.
  */
 export type Hit = {
   node?: NodeId;

@@ -24,7 +24,7 @@
   } from "../render/scene.ts";
   import { bakery } from "../bake/bake.svelte.ts";
   import { keys } from "../keys/keys.svelte.ts";
-  import { keyOf } from "../keys/keymap.ts";
+  import { FLY_KEYS, keyOf } from "../keys/keymap.ts";
   import { library } from "../library.svelte.ts";
   import { prefs } from "../ui/prefs.svelte.ts";
   import { perf } from "./perf.ts";
@@ -736,14 +736,14 @@
     }
 
     // the tool's own keys, which are not in the keymap: they are the tool's, they change with it, and
-    // several tools spell the same letter differently. None of them touch wasd/qe, so flying is never
-    // something a tool can quietly take away
+    // several tools spell the same letter differently. `FLY_KEYS` is what keeps flying out of their reach —
+    // the keymap drops a reserved chord and `tools.check.ts` refuses a tool that claims one
     if (run(tools.box.press(key, inputFor(event), session.editor))) {
       event.preventDefault();
       return;
     }
 
-    if ("wasdqe".includes(key) && key.length === 1) {
+    if ((FLY_KEYS as readonly string[]).includes(key)) {
       held.add(key);
       event.preventDefault();
     }

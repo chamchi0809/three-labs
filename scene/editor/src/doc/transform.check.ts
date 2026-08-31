@@ -14,9 +14,9 @@ import { brushBounds, brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import { rotation, scaling, translation } from "../brush/vec.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, type BrushNode, type World,
+  brushNode, objectNode, groupNode, layerNode, nodeById, type BrushNode, type World,
 } from "./document.ts";
-import { setVec3, vec3Of } from "./props.ts";
+import { eulerOf, propOf, setVec3, vec3Of } from "./props.ts";
 import { NOTHING, selectNodes } from "./selection.ts";
 import {
   transformBrushLocked, transformNode, transformNodes, transformSelection, translateSelection,
@@ -24,8 +24,8 @@ import {
 
 const near = (a: number, b: number, eps = 1e-9) =>
   assert.ok(Math.abs(a - b) < eps, `${a} is not ${b} (within ${eps})`);
-const nearVec = (a: Vec3, b: Vec3, eps = 1e-9) => {
-  for (let i = 0; i < 3; i++) near(a[i]!, b[i]!, eps);
+const nearVec = (a: Vec3, b: Vec3, eps = 1e-9, why = "") => {
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(a[i]! - b[i]!) < eps, `${why}: ${a} is not ${b}`);
 };
 
 const box = (min: Vec3, max: Vec3) => brushNode(brushOf(cuboid({ min, max })));
@@ -78,19 +78,19 @@ test("one bad solid in a selection stops the whole selection", () => {
   nearVec(boundsOf(out.world, good.id)!.min, [0, 0, 0], 1e-12);
 });
 
-// ---------------------------------------------------------------- entities
+// ---------------------------------------------------------------- objects
 
-test("an entity moves by its position, because it has no geometry to move", () => {
-  const light = entityNode("pointLight", { props: setVec3([], "position", [1, 2, 3]) });
+test("an object moves by its position, because it has no geometry to move", () => {
+  const light = objectNode("pointLight", { props: setVec3([], "position", [1, 2, 3]) });
   const world: World = { layers: [layerNode("Main", [light])], broom: { grid: -2, scale: 1 } };
   const { world: moved } = transformNodes(world, [light.id], translation([0, 1, 0]));
   nearVec(vec3Of(nodeById(moved, light.id)!.props, "position")!, [1, 3, 3]);
 });
 
-test("an entity that was never placed is not given a position by being moved", () => {
-  const light = entityNode("pointLight");
+test("an object that was never placed is not given a position by being moved", () => {
+  const light = objectNode("pointLight");
   const inner = box([0, 0, 0], [1, 1, 1]);
-  const parent = entityNode("group", { children: [inner] });
+  const parent = objectNode("group", { children: [inner] });
   const world: World = { layers: [layerNode("Main", [light, parent])], broom: { grid: -2, scale: 1 } };
   const { world: moved } = transformNodes(world, [light.id, parent.id], translation([0, 5, 0]));
   assert.equal(vec3Of(nodeById(moved, light.id)!.props, "position"), undefined,
@@ -98,13 +98,37 @@ test("an entity that was never placed is not given a position by being moved", (
   nearVec(boundsOf(moved, inner.id)!.min, [0, 5, 0], 1e-9);
 });
 
-test("an entity takes its children with it", () => {
+test("an object takes its children with it", () => {
   const inner = box([0, 0, 0], [1, 1, 1]);
-  const holder = entityNode("group", { props: setVec3([], "position", [0, 0, 0]), children: [inner] });
+  const holder = objectNode("group", { props: setVec3([], "position", [0, 0, 0]), children: [inner] });
   const world: World = { layers: [layerNode("Main", [holder])], broom: { grid: -2, scale: 1 } };
   const { world: moved } = transformNodes(world, [holder.id], translation([2, 0, 0]));
   nearVec(vec3Of(nodeById(moved, holder.id)!.props, "position")!, [2, 0, 0]);
   nearVec(boundsOf(moved, inner.id)!.min, [2, 0, 0], 1e-9);
+});
+
+test("an object turns and stretches, not only moves", () => {
+  const lamp = objectNode("pointLight", { props: setVec3([], "position", [2, 0, 0]) });
+  const world: World = { layers: [layerNode("Main", [lamp])], broom: { grid: -2, scale: 1 } };
+
+  const turned = transformNodes(world, [lamp.id], rotation([0, 1, 0], Math.PI / 2)).world;
+  const spun = nodeById(turned, lamp.id)!;
+  nearVec(vec3Of(spun.props, "position")!, [0, 0, -2], 1e-9, "swung a quarter turn about the origin");
+  nearVec(eulerOf(spun.props, "rotation")!, [0, Math.PI / 2, 0], 1e-6, "and turned with it");
+
+  const grown = transformNodes(turned, [spun.id], scaling([2, 2, 2])).world;
+  const big = nodeById(grown, spun.id)!;
+  nearVec(vec3Of(big.props, "scale")!, [2, 2, 2], 1e-6);
+  nearVec(eulerOf(big.props, "rotation")!, [0, Math.PI / 2, 0], 1e-6, "a scale leaves the turn alone");
+});
+
+test("a move writes a position and nothing else", () => {
+  const lamp = objectNode("pointLight", { props: setVec3([], "position", [1, 2, 3]) });
+  const world: World = { layers: [layerNode("Main", [lamp])], broom: { grid: -2, scale: 1 } };
+  const moved = nodeById(transformNodes(world, [lamp.id], translation([0, 1, 0])).world, lamp.id)!;
+  assert.equal(propOf(moved.props, "rotation"), undefined,
+    "a lamp dragged across the floor should not come back with an orientation it never had");
+  assert.equal(propOf(moved.props, "scale"), undefined);
 });
 
 // ---------------------------------------------------------------- groups and layers

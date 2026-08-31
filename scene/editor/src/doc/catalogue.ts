@@ -1,7 +1,7 @@
 /**
- * What the project says exists: the entity definitions and the materials.
+ * What the project says exists: the object definitions and the materials.
  *
- * A Quake editor reads its entity list out of a `.fgd` — a second file, in a second language, that says
+ * A Quake editor reads its object list out of a `.fgd` — a second file, in a second language, that says
  * what a `light` is and which of its keys are numbers. tscene needs no such file, because the project
  * already declares both things in the sheet itself: a `@template mesh.torch { … }` *is* the definition of
  * a torch, and a top-level `--wall: meshStandardMaterial { … }` *is* the material named `wall`. This turns
@@ -20,7 +20,8 @@
  */
 import type { Member, NodeBroom, Sheet, Statement, Template, Value } from "tscene";
 import { readBroom } from "../io/read.ts";
-import { entityNode, nodeTypeName, type EntityNode, type Node } from "./document.ts";
+import { declaredFieldsOf, fieldsOf, type FieldDef } from "./entity.ts";
+import { objectNode, nodeTypeName, type ObjectNode, type Node } from "./document.ts";
 import { asColour } from "./props.ts";
 
 /** which of the smart editors a value gets. `expression` is the one that is shown but not edited */
@@ -33,7 +34,7 @@ export type PropDef = {
   value?: Value;
 };
 
-export type EntityDef = {
+export type ObjectDef = {
   /** the `.class` the template declares — what an instance writes on its head */
   name: string;
   /** the node an instance is written as: `mesh`, `pointLight`, or `object3D` for a template of no type */
@@ -41,10 +42,26 @@ export type EntityDef = {
   /** whether it is placed as a point or wrapped around solids, the same split TrenchBroom draws */
   kind: "point" | "brush";
   icon?: string;
+  /** the group the browser files it under */
+  category?: string;
+  /** one line about what it is */
+  doc?: string;
   colour?: number;
   /** the box an instance is drawn and picked in, in metres about its origin */
   size?: number[];
   props: PropDef[];
+  /**
+   * The `@entity { … }` the template declares: the data an instance of it carries, and the defaults it
+   * carries when it says nothing. The editor's half of `object.entity` — the grid lists these greyed
+   * until somebody overrides one, exactly as it does the properties above.
+   */
+  fields: PropDef[];
+  /**
+   * The `@fields { … }` the template declares: what those keys *are*, where the project said so. A key
+   * with no declaration is still editable — typed by whatever value it holds — so this is only the half
+   * inference cannot reach: a range, a set of choices, a line of prose that wants room.
+   */
+  declared: FieldDef[];
   file?: string;
 };
 
@@ -93,12 +110,37 @@ export type MaterialDef = {
 /** a material declared with a `heightMap`, whatever it calls itself — the tier machinery follows the map */
 export const hasRelief = (def: MaterialDef): boolean => def.maps.heightMap !== undefined;
 
-export type Catalogue = { entities: EntityDef[]; materials: MaterialDef[] };
+export type Catalogue = {
+  objects: ObjectDef[];
+  materials: MaterialDef[];
+  /**
+   * The choice lists a field's `enum` names, by name without the dashes.
+   *
+   * A top-level `--damage: ["fire", "ice"]` is one. Nothing marks it as an enum — a `--var` holding a list
+   * of strings is the only shape a list of choices can have, and a project that wants one somewhere else
+   * has written it as `options` on the field instead.
+   */
+  enums: Record<string, string[]>;
+};
 
-export const EMPTY: Catalogue = { entities: [], materials: [] };
+export const EMPTY: Catalogue = { objects: [], materials: [], enums: {} };
 
 /** a template with no node type applies to any Object3D, and an instance of one is written as this */
 export const ANY_NODE = "object3D";
+
+/**
+ * The node an entity definition is written as.
+ *
+ * `@template entity.spawner { … }` is an entity type, and nothing else has to say so: the node it applies
+ * to is tscene's own `entity` class, which has no geometry and no material and exists to hold the record
+ * a level places at a point. So the entity browser is the catalogue filtered on this one name, and the
+ * object browser is the catalogue with it taken out.
+ */
+export const ENTITY_NODE = "entity";
+
+export const isEntityDef = (def: ObjectDef): boolean => def.node === ENTITY_NODE;
+
+export const entityDefs = (catalogue: Catalogue): ObjectDef[] => catalogue.objects.filter(isEntityDef);
 
 // ---------------------------------------------------------------- typing a value
 
@@ -135,7 +177,7 @@ const isTriple = (items: Value[]): boolean => items.length === 3 && items.every(
 /** whether a type is one the grid can edit, as against one it can only show */
 export const isEditable = (t: PropType): boolean => t !== "expression";
 
-// ---------------------------------------------------------------- entity definitions
+// ---------------------------------------------------------------- object definitions
 
 /**
  * The definition a `@template` declares.
@@ -143,16 +185,20 @@ export const isEditable = (t: PropType): boolean => t !== "expression";
  * Child nodes in the body are skipped rather than listed: `mesh.torch { pointLight { … } }` says a torch
  * carries a light, which is a fact about the instance's contents, not a property anyone edits in a grid.
  */
-export function defOf(statement: Template, file?: string): EntityDef {
+export function defOf(statement: Template, file?: string): ObjectDef {
   const broom = broomOf(statement.body);
   return {
     name: statement.name,
     node: statement.node ?? ANY_NODE,
     kind: broom.kind ?? "point",
     ...(broom.icon !== undefined ? { icon: broom.icon } : {}),
+    ...(broom.category !== undefined ? { category: broom.category } : {}),
+    ...(broom.doc !== undefined ? { doc: broom.doc } : {}),
     ...(broom.color !== undefined ? { colour: broom.color } : {}),
     ...(broom.size ? { size: broom.size } : {}),
     props: propsOf(statement.body),
+    fields: fieldsOf(statement.body).map((f) => ({ name: f.name, type: propType(f.value), value: f.value })),
+    declared: declaredFieldsOf(statement.body),
     ...(file !== undefined ? { file } : {}),
   };
 }
@@ -239,18 +285,28 @@ export type Placed = { file?: string; statement: Statement };
  * offering one that no longer exists.
  */
 export function catalogueOf(statements: Placed[]): Catalogue {
-  const entities = new Map<string, EntityDef>();
+  const objects = new Map<string, ObjectDef>();
   const materials = new Map<string, MaterialDef>();
+  const enums: Record<string, string[]> = {};
   for (const { file, statement } of statements) {
     if (statement.kind === "template") {
       const def = defOf(statement, file);
-      entities.set(`${def.node}.${def.name}`, def);
+      objects.set(`${def.node}.${def.name}`, def);
     } else if (statement.kind === "var") {
       const material = materialOf(statement, file);
       if (material) materials.set(material.name, material);
+      const words = wordListOf(statement.value);
+      if (words) enums[statement.name] = words;
     }
   }
-  return { entities: [...entities.values()], materials: [...materials.values()] };
+  return { objects: [...objects.values()], materials: [...materials.values()], enums };
+}
+
+/** a `--var` holding nothing but strings — a list of choices, and not a list of anything else */
+function wordListOf(v: Value): string[] | undefined {
+  if (v.kind !== "array" || !v.items.length) return undefined;
+  const words = v.items.filter((i) => i.kind === "string").map((i) => (i as { value: string }).value);
+  return words.length === v.items.length ? words : undefined;
 }
 
 /** the catalogue of parsed sheets, for the demo document and for anything read without following imports */
@@ -260,7 +316,7 @@ export const catalogueOfSheets = (sheets: Iterable<Sheet>): Catalogue =>
 // ---------------------------------------------------------------- reading it back
 
 /** the definition a node is an instance of, if it is an instance of one */
-export function defFor(catalogue: Catalogue, node: Node): EntityDef | undefined {
+export function defFor(catalogue: Catalogue, node: Node): ObjectDef | undefined {
   if (!node.classes.length) return undefined;
   const type = nodeTypeName(node);
   // the last class written wins, the same way the last `@template` declared does — a node with two
@@ -268,15 +324,15 @@ export function defFor(catalogue: Catalogue, node: Node): EntityDef | undefined 
   for (let i = node.classes.length - 1; i >= 0; i--) {
     const name = node.classes[i]!;
     const found =
-      catalogue.entities.find((d) => d.name === name && d.node === type) ??
-      catalogue.entities.find((d) => d.name === name && d.node === ANY_NODE);
+      catalogue.objects.find((d) => d.name === name && d.node === type) ??
+      catalogue.objects.find((d) => d.name === name && d.node === ANY_NODE);
     if (found) return found;
   }
   return undefined;
 }
 
-export const defByName = (catalogue: Catalogue, node: string, name: string): EntityDef | undefined =>
-  catalogue.entities.find((d) => d.node === node && d.name === name);
+export const defByName = (catalogue: Catalogue, node: string, name: string): ObjectDef | undefined =>
+  catalogue.objects.find((d) => d.node === node && d.name === name);
 
 export const materialByName = (catalogue: Catalogue, name: string): MaterialDef | undefined =>
   catalogue.materials.find((m) => m.name === name);
@@ -291,10 +347,47 @@ export const materialByName = (catalogue: Catalogue, name: string): MaterialDef 
  * `@template` rather than a text macro is that editing the template edits everything placed from it. What
  * the instance gets is its class, its position, and the box the definition says it occupies.
  */
-export function instanceOf(def: EntityDef, props: Member[]): EntityNode {
-  return entityNode(def.node === ANY_NODE ? "object3D" : def.node, {
+export function instanceOf(def: ObjectDef, props: Member[]): ObjectNode {
+  return objectNode(def.node === ANY_NODE ? "object3D" : def.node, {
     classes: [def.name],
     props,
     broom: def.size ? { size: def.size } : {},
   });
+}
+
+/** the choices a declared field offers: written on the field, or taken from the `--list` it names */
+export const optionsFor = (catalogue: Catalogue, field: FieldDef): string[] =>
+  field.options ?? (field.enum !== undefined ? catalogue.enums[field.enum] ?? [] : []);
+
+// ---------------------------------------------------------------- editing a definition
+
+/**
+ * The name a template answers to: `mesh.button`, `entity.spawn`, `object3D.wide`.
+ *
+ * Both halves, because `.trigger` on a group and `.trigger` on a mesh are two declarations and a designer
+ * editing one has not edited the other.
+ */
+export const defKey = (def: { node: string; name: string }): string => `${def.node}.${def.name}`;
+
+/** which half of a definition an edit is against: three's properties, or the `@entity { … }` defaults */
+export type DefHalf = "props" | "fields";
+
+/** one property of a definition set, in place if it was already declared and appended if it was not */
+export function setDefProp(def: ObjectDef, half: DefHalf, name: string, value: Value): ObjectDef {
+  const was = def[half];
+  const now: PropDef = { name, type: propType(value), value };
+  return {
+    ...def,
+    [half]: was.some((p) => p.name === name) ? was.map((p) => (p.name === name ? now : p)) : [...was, now],
+  };
+}
+
+export const clearDefProp = (def: ObjectDef, half: DefHalf, name: string): ObjectDef =>
+  ({ ...def, [half]: def[half].filter((p) => p.name !== name) });
+
+/** the same rule a node's properties follow: the new name wins whatever it was already holding */
+export function renameDefProp(def: ObjectDef, half: DefHalf, from: string, to: string): ObjectDef {
+  const was = def[half].find((p) => p.name === from);
+  if (!to || from === to || !was?.value) return def;
+  return setDefProp(clearDefProp(def, half, from), half, to, was.value);
 }

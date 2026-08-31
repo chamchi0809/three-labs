@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * The entity inspector: what the selected nodes are, and every property they carry.
+   * The object inspector: what the selected nodes are, and every property they carry.
    *
    * It edits the whole selection at once. Picking eight lamps and typing `12` into `intensity` writes
    * eight properties, and a field they disagree about says so rather than showing the first one's number —
@@ -14,19 +14,22 @@
   import type { Value } from "tscene";
   import {
     duplicate, enterGroup, group, hollowBrushes, intersectBrushes, leaveGroup, link, linkedDuplicate,
-    matchCopies, mergeBrushes, subtractBrushes, ungroup, unlink,
+    matchCopies, mergeBrushes, renameTemplate, subtractBrushes, ungroup, unlink,
   } from "../actions.ts";
+  import {
+    clearDefProp, ENTITY_NODE, renameDefProp, setDefProp, type DefHalf,
+  } from "../doc/catalogue.ts";
   import { isLinked, linkedWith, linkOf } from "../doc/groups.ts";
   import { nodeById } from "../doc/document.ts";
   import {
-    commonDef, describeNodes, removeNodesProp, renameNode, renameNodesProp, rowsFor, setClasses,
-    setNodesProp, setSheetId, sheetIds, typeName,
+    commonDef, defRows, describeNodes, entityRowsFor, removeNodesField, removeNodesProp, renameNode,
+    renameNodesField, renameNodesProp, rowsFor, setClasses, setNodesField, setNodesProp, setSheetId,
+    sheetIds, typeName,
   } from "../doc/inspect.ts";
   import { selectedNodes } from "../doc/selection.ts";
   import { library } from "../library.svelte.ts";
   import { session } from "../session.svelte.ts";
   import Panel from "../ui/Panel.svelte";
-  import EntityBrowser from "./EntityBrowser.svelte";
   import PatchInspector from "./PatchInspector.svelte";
   import PropertyGrid from "./PropertyGrid.svelte";
 
@@ -34,6 +37,12 @@
   const ids = $derived(nodes.map((n) => n.id));
   const def = $derived(commonDef(library.catalogue, nodes));
   const rows = $derived(rowsFor(nodes, def));
+  const fields = $derived(entityRowsFor(nodes, def, library.catalogue.enums));
+  // an `entity` node is nothing but its data, so its panel is the point of the whole inspector rather
+  // than a footnote under three's properties — see doc/entity.ts and the lib's `Entity` class
+  const allEntities = $derived(
+    nodes.length > 0 && nodes.every((n) => n.kind === "object" && n.type === ENTITY_NODE),
+  );
   const only = $derived(nodes.length === 1 ? nodes[0] : undefined);
   const names = $derived(library.materials.map((m) => m.name));
   const taken = $derived(sheetIds(session.editor.world));
@@ -51,6 +60,69 @@
 
   const rename = (from: string, to: string) =>
     session.run(`rename ${from}`, (e) => ({ ...e, world: renameNodesProp(e.world, ids, from, to) }));
+
+  // the same three against `@entity { … }` — the level's own data, which every object may carry
+  const setField = (name: string, value: Value) => {
+    session.run(`set ${name}`, (e) => ({ ...e, world: setNodesField(e.world, ids, name, value) }), {
+      repeatable: true,
+      again: (e) => ({ ...e, world: setNodesField(e.world, e.selection.nodes, name, value) }),
+    });
+    session.set((e) => ({ ...e, note: `${ids.length} × @entity ${name}` }));
+  };
+
+  const clearField = (name: string) =>
+    session.run(`clear ${name}`, (e) => ({ ...e, world: removeNodesField(e.world, ids, name) }));
+
+  const renameField = (from: string, to: string) =>
+    session.run(`rename ${from}`, (e) => ({ ...e, world: renameNodesField(e.world, ids, from, to) }));
+
+  // ---------------------------------------------------------------- the template half
+  //
+  // The prefab. `#switch mesh.button` is two things a designer edits separately: the switch, and what
+  // every switch is. The grids above write the node; these write the `@template` the node's class names,
+  // and the two buttons are the traffic between them — revert takes the template's value, override gives
+  // the template the node's. Unity's words, because it is Unity's model.
+
+  const defProps = $derived(def ? defRows(def, "props") : []);
+  const defFields = $derived(def ? defRows(def, "fields") : []);
+
+  const editDef = (half: DefHalf) => ({
+    set: (name: string, value: Value) => def && library.editTemplate(setDefProp(def, half, name, value)),
+    clear: (name: string) => def && library.editTemplate(clearDefProp(def, half, name)),
+    rename: (from: string, to: string) => def && library.editTemplate(renameDefProp(def, half, from, to)),
+  });
+  const propEdits = $derived(editDef("props"));
+  const fieldEdits = $derived(editDef("fields"));
+
+  /** the starred rows: what these nodes say and the template does not */
+  const over = $derived({ props: rows.filter((r) => r.differs), fields: fields.filter((r) => r.differs) });
+  const overs = $derived(over.props.length + over.fields.length);
+
+  /**
+   * Clearing an overridden property *is* reverting it: what is left showing is the template's value, or,
+   * where the template declares none, the node type's own default. One command, so one ⌘Z.
+   */
+  function revert() {
+    const props = over.props.map((r) => r.name);
+    const data = over.fields.map((r) => r.name);
+    session.run("revert changes", (e) => {
+      let world = e.world;
+      for (const name of props) world = removeNodesProp(world, ids, name);
+      for (const name of data) world = removeNodesField(world, ids, name);
+      return { ...e, world };
+    });
+  }
+
+  /** the other direction: the template takes what the node says. A row the selection disagrees about is
+      skipped — there is no one value to push up. */
+  function override() {
+    if (!def) return;
+    let next = def;
+    for (const half of ["props", "fields"] as const) {
+      for (const row of over[half]) if (row.value && !row.mixed) next = setDefProp(next, half, row.name, row.value);
+    }
+    if (next !== def) library.editTemplate(next, `override ${def.name}`);
+  }
 
   function setId(value: string) {
     const id = value.trim();
@@ -121,6 +193,43 @@
     <!-- a patch's shape is half in a number, so it gets rows here where a solid's shape needs none -->
     <PatchInspector />
   </Panel>
+
+  <!-- pixi-vania titles this panel with the entity type's own name, which is what a designer is looking
+       at when everything selected is one kind of thing -->
+  <Panel title={allEntities && def ? def.name : "entity"}>
+    <p class="what">
+      {allEntities
+        ? "the record this entity places — its type's fields, plus anything added here"
+        : "what the game reads off this node — the definition's fields, plus anything added here"}
+    </p>
+    <PropertyGrid rows={fields} {ids} materials={names}
+      set={setField} clear={clearField} rename={renameField} />
+  </Panel>
+{/if}
+
+{#if def}
+  <Panel title="template .{def.name}">
+    <p class="what">the declaration every <b>.{def.name}</b> follows — an edit here reaches all of them</p>
+    <div class="fields">
+      <label for="tpl-name">name</label>
+      <!-- renaming the declaration renames the class on every instance of it, in the same command -->
+      <input id="tpl-name" value={def.name} title="the class every instance carries — renaming it renames them too"
+        onchange={(e) => {
+          renameTemplate(def, (e.target as HTMLInputElement).value);
+          // whatever the rename decided is what the box should say — a refused name has to come back
+          (e.target as HTMLInputElement).value = def.name;
+        }} />
+    </div>
+    <div class="buttons pair">
+      <button disabled={!overs} title="put the template's value back on the selection (or the type's default, where the template has none)"
+        onclick={revert}>revert changes{#if overs}&nbsp;({overs}){/if}</button>
+      <button disabled={!overs} title="make the template say what the selection says"
+        onclick={override}>override</button>
+    </div>
+    <PropertyGrid rows={defProps} {ids} materials={names} {...propEdits} />
+    <p class="what">@entity defaults</p>
+    <PropertyGrid rows={defFields} {ids} materials={names} {...fieldEdits} />
+  </Panel>
 {/if}
 
 <Panel title="structure">
@@ -161,18 +270,17 @@
   </div>
 </Panel>
 
-<Panel title="definitions">
-  <EntityBrowser />
-</Panel>
-
 <style>
   .head { margin: 0 0 6px; font: var(--mono); color: var(--text); }
+  .what { margin: 0 0 5px; color: var(--dim); font: var(--mono); }
   .head b { color: var(--p9); font-weight: 600; }
   .def { color: var(--accent); }
   .none { margin: 2px 0; color: var(--dim); font: var(--mono); }
   .dim { color: var(--dim); font: var(--mono); }
   .fields { display: grid; grid-template-columns: 56px 1fr; gap: 5px; align-items: center; }
   .fields label, .fields .label { color: var(--muted); font: var(--mono); }
+  .buttons.pair { grid-template-columns: repeat(2, 1fr); }
+  .what b { color: var(--p9); font-weight: 600; }
   .buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin-bottom: 3px; }
   .buttons button, .inside button {
     height: 21px; padding: 0 2px; cursor: pointer;

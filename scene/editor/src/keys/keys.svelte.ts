@@ -69,6 +69,8 @@ class Keys {
   commandFor(event: KeyboardEvent): string | undefined {
     const target = event.target as HTMLElement | null;
     if (target?.isContentEditable || target instanceof HTMLInputElement) return undefined;
+    // a textarea is a field like any other: ⌫ in an entity's `lines` is a character, not the selection
+    if (target instanceof HTMLTextAreaElement) return undefined;
     const chord = chordOf(event);
     return chord && commandFor(this.bindings, chord);
   }

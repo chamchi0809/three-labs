@@ -6,7 +6,7 @@ import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeBounds, nodeById, removeNodes, updateNode,
+  brushNode, objectNode, groupNode, layerNode, nodeBounds, nodeById, removeNodes, updateNode,
   type BrushNode, type World,
 } from "./document.ts";
 import { octreeOf } from "./octree.ts";
@@ -24,7 +24,7 @@ function map() {
   const a = box([0, 0, 0], [1, 1, 1]);
   const b = box([2, 0, 0], [3, 1, 1]);
   const loose = box([0, 4, 0], [1, 5, 1]);
-  const light = entityNode("pointLight", { props: setVec3([], "position", [5, 5, 5]) });
+  const light = objectNode("pointLight", { props: setVec3([], "position", [5, 5, 5]) });
   const group = groupNode("pillars", [a, b]);
   const main = layerNode("Main", [group, loose, light]);
   const world: World = { layers: [main], broom: { grid: -2, scale: 1 } };

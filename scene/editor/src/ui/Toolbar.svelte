@@ -16,6 +16,7 @@
   import IconBulb from "@tabler/icons-svelte/icons/bulb";
   import IconCube from "@tabler/icons-svelte/icons/cube";
   import IconCubePlus from "@tabler/icons-svelte/icons/cube-plus";
+  import IconDatabase from "@tabler/icons-svelte/icons/database";
   import IconDeviceFloppy from "@tabler/icons-svelte/icons/device-floppy";
   import IconItalic from "@tabler/icons-svelte/icons/italic";
   import IconLayoutColumns from "@tabler/icons-svelte/icons/layout-columns";
@@ -39,6 +40,8 @@
   import type { Icon } from "@tabler/icons-svelte";
 
   import Bake from "../bake/Bake.svelte";
+  import Definitions from "../inspect/Definitions.svelte";
+  import Entities from "../inspect/Entities.svelte";
   import Files from "../io/Files.svelte";
   import Keymap from "../keys/Keymap.svelte";
   import Prefs from "./Prefs.svelte";
@@ -65,7 +68,8 @@
     shear: IconItalic,
     shape: IconCubePlus,
     patch: IconVectorBezier,
-    entity: IconBulb,
+    object: IconBulb,
+    entity: IconDatabase,
     extrude: IconStackPush,
     sweep: IconRoute,
     clip: IconSlice,
@@ -170,6 +174,8 @@
     </span>
 
     <span class="group">
+      <Definitions />
+      <Entities />
       <Bake />
       <Keymap />
       <Prefs />

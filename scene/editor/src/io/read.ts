@@ -19,7 +19,7 @@ import type {
 import { brushFromFaces, faceAttributes, type Brush, type FaceAttributes } from "../brush/brush.ts";
 import { gridFromRows, patchOf, patchUv, type Patch, type PatchUv } from "../patch/patch.ts";
 import {
-  brushNode, DEFAULT_LAYER, entityNode, groupNode, layerNode, patchNode, type LayerNode, type Node,
+  brushNode, DEFAULT_LAYER, objectNode, groupNode, layerNode, patchNode, type LayerNode, type Node,
   type World,
 } from "../doc/document.ts";
 import { asColour } from "../doc/props.ts";
@@ -32,7 +32,7 @@ export type Sheets = Map<string, Sheet>;
 
 export type ReadResult = {
   world: World;
-  /** the `@template` declarations, in the order they were seen — the editor's entity definitions */
+  /** the `@template` declarations, in the order they were seen — the editor's object definitions */
   templates: { file: string; statement: Template }[];
   /** the `@override` rules, in source order, which is the order the last-one-wins rule needs */
   overrides: { file: string; statement: Override }[];
@@ -154,7 +154,7 @@ export function readNode(o: ObjectValue, file: string, text: string, top = false
       ? layerNode(name, children, { ...shared, props: rest })
       : groupNode(name, children, { ...shared, props: rest });
   }
-  return entityNode(o.name, { ...shared, args: o.args, props, children });
+  return objectNode(o.name, { ...shared, args: o.args, props, children });
 }
 
 /** the members of a solid's body that the editor has taken over: its `@broom` and its `face(…)` list */
@@ -202,6 +202,10 @@ export function readBroom(record: Value): NodeBroom {
   if (kind === "point" || kind === "brush") out.kind = kind;
   const icon = literalString(entryOf(record, "icon"));
   if (icon !== undefined) out.icon = icon;
+  const category = literalString(entryOf(record, "category"));
+  if (category !== undefined) out.category = category;
+  const doc = literalString(entryOf(record, "doc"));
+  if (doc !== undefined) out.doc = doc;
   const color = literalNumber(entryOf(record, "color")) ?? hexOf(entryOf(record, "color"));
   if (color !== undefined) out.color = color;
   const layer = literalString(entryOf(record, "layer"));
@@ -239,7 +243,7 @@ const hexOf = (v: Value | undefined): number | undefined => asColour(v);
  *
  * A bare word, because that is what the checker insists on for an enumerated knob and what the runtime
  * hands back as a string anyway. The quoted form is read too and never written: sheets saved by an earlier
- * three-broom say `kind: "brush"`, and a map that stopped being a brush entity on the day the spelling was
+ * three-broom say `kind: "brush"`, and a map that stopped being a brush object on the day the spelling was
  * fixed would be a map the editor silently redrew.
  */
 const wordOf = (v: Value | undefined): string | undefined =>
@@ -250,7 +254,7 @@ const wordOf = (v: Value | undefined): string | undefined =>
 /**
  * The solid a `brush { face(…) … }` describes, or nothing when any part of it is an expression the
  * editor cannot evaluate. Nothing is the right answer there rather than a guess: the node stays an
- * entity, is drawn as whatever the runtime makes of it, and survives a save untouched.
+ * object, is drawn as whatever the runtime makes of it, and survives a save untouched.
  */
 export function readBrush(o: ObjectValue): Brush | undefined {
   const faces: BrushFace[] = [];

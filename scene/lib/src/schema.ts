@@ -335,22 +335,45 @@ function stamp(cwd: string, modules: string[]): string {
     .join(",");
 }
 
+/**
+ * The classes tscene declares on top of three's, injected rather than reflected.
+ *
+ * Reflecting this package's own typings to learn one class would mean running the compiler over the
+ * whole of tscene every time a schema is built, for a class whose shape is written out below in six
+ * lines. `Entity` adds nothing to `Object3D` that a sheet writes as a property — its data is the
+ * `@entity { … }` block — so it inherits Object3D's reflected members and declares none of its own.
+ */
+function withOurs(schema: Schema): Schema {
+  const base = schema.classes.Object3D;
+  if (!base || schema.classes.Entity) return schema;
+  const Entity: ClassInfo = {
+    bases: ["Object3D"],
+    ctors: [[]],
+    props: { ...base.props },
+    methods: { ...base.methods },
+    copyable: false,
+    abstract: false,
+    doc: "A node that is data rather than geometry: what `@entity { … }` places at a point in the level.",
+  };
+  return { ...schema, classes: { ...schema.classes, Entity } };
+}
+
 export function loadSchema(opts: SchemaOptions = {}): Schema {
   const entry = opts.entry ?? "three/webgpu";
   const modules = opts.modules ?? [];
   const cwd = opts.cwd ?? process.cwd();
   const declared = opts.declare?.length ? { declared: opts.declare } : {};
-  if (opts.cache === false) return buildSchema({ entry, modules, addons: opts.addons, cwd, declare: opts.declare });
+  if (opts.cache === false) return withOurs(buildSchema({ entry, modules, addons: opts.addons, cwd, declare: opts.declare }));
   const version = threeVersion(cwd, entry);
   const key = createHash("sha1").update(specifiers(entry, modules, opts.addons).join("+")).update(stamp(cwd, modules)).digest("hex").slice(0, 12);
   const file = path.join(cwd, "node_modules", ".cache", "tscene", `${entry.replace(/\W/g, "_")}-${version}-${key}-v${SCHEMA_VERSION}.json`);
   try {
-    return { ...(JSON.parse(fs.readFileSync(file, "utf8")) as Schema), ...declared };
+    return withOurs({ ...(JSON.parse(fs.readFileSync(file, "utf8")) as Schema), ...declared });
   } catch {}
   const schema = buildSchema({ entry, modules, addons: opts.addons, cwd });
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(schema));
   } catch {}
-  return { ...schema, ...declared };
+  return withOurs({ ...schema, ...declared });
 }

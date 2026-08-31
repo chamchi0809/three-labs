@@ -78,7 +78,7 @@ function colourProp(node: Node, name: string): number | undefined {
   return undefined;
 }
 
-/** which of the three punctual lights an entity is, if it is one at all */
+/** which of the three punctual lights an object is, if it is one at all */
 const LIGHT_KINDS: Record<string, ExportLight["kind"]> = {
   pointLight: "point",
   spotLight: "spot",
@@ -138,7 +138,7 @@ export function readForExport(world: World, options: ExportOptions = {}): Export
       return;
     }
 
-    if (node.kind === "entity") {
+    if (node.kind === "object") {
       const kind = LIGHT_KINDS[node.type];
       if (kind) {
         lights.push({
@@ -153,7 +153,7 @@ export function readForExport(world: World, options: ExportOptions = {}): Export
           penumbra: kind === "spot" ? (numberOf(node.props, "penumbra") ?? 0) : undefined,
         });
       }
-      // every other entity is a marker for a game to read out of the sheet, and a mesh format has no
+      // every other object is a marker for a game to read out of the sheet, and a mesh format has no
       // word for one. It stays in the tscene, which is where anything that reads it will be looking.
       return;
     }

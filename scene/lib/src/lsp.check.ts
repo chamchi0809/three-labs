@@ -401,9 +401,9 @@ await check("@ completes at-rules, never three's names", async () => {
   await new Promise((r) => setTimeout(r, 200));
 
   const sheet = await request("textDocument/completion", { textDocument: { uri }, position: { line: 0, character: 1 } });
-  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@broom", "@import", "@override", "@template"]);
+  assert.deepEqual(labels(sheet).sort(), ["@bakery", "@broom", "@import", "@locale", "@override", "@template"]);
   assert.equal(sheet[0].textEdit.newText, sheet[0].label); // the typed `@` is replaced, not doubled
-  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery", "@broom"]);
+  assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 3, character: 3 } })), ["@bakery", "@broom", "@entity", "@fields"]);
   // a record literal takes any key, so it takes neither three's names nor an at-rule
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 5, character: 4 } })), []);
 
@@ -482,7 +482,7 @@ await check("a brush completes its faces, and a face body its own table", async 
   await edit(doc);
   // `@broom` reads its own table, exactly as `@bakery` does
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 8, character: 4 } })).sort(),
-    ["at", "color", "hidden", "icon", "kind", "layer", "link", "locked", "protect", "size"]);
+    ["at", "category", "color", "doc", "hidden", "icon", "kind", "layer", "link", "locked", "protect", "size"]);
 
   const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, "brush", 2) });
   assert.match(hover.contents.value, /convex solid/);

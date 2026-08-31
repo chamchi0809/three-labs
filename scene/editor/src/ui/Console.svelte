@@ -57,7 +57,7 @@
     let faces = 0;
     let patches = 0;
     let triangles = 0;
-    let entities = 0;
+    let objects = 0;
     let groups = 0;
     const visit = (node: Node): void => {
       if (node.kind === "brush") {
@@ -71,12 +71,12 @@
         const spans = spansOf(node.patch.grid);
         const n = subdivisionsFor(node.patch);
         triangles += spans.across * n * spans.down * n * 2;
-      } else if (node.kind === "entity") entities++;
+      } else if (node.kind === "object") objects++;
       else if (node.kind === "group") groups++;
       for (const kid of childrenOf(node)) visit(kid);
     };
     for (const layer of session.editor.world.layers) visit(layer);
-    return { brushes, faces, patches, triangles, entities, groups };
+    return { brushes, faces, patches, triangles, objects, groups };
   });
 
   const ms = (n: number): string => (n >= 10 ? n.toFixed(0) : n.toFixed(1));
@@ -169,7 +169,7 @@
                 patch tris <b>{big(tally.triangles)}</b>
               </span>
             {/if}
-            <span>entities <b>{big(tally.entities)}</b></span>
+            <span>objects <b>{big(tally.objects)}</b></span>
             <span>groups <b>{big(tally.groups)}</b></span>
           {/if}
         </div>

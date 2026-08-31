@@ -121,12 +121,26 @@ export function printChord(chord: Chord): string {
   return (chord.alt ? "⌥" : "") + (chord.shift ? "⇧" : "") + (chord.ctrl ? "⌘" : "") + key;
 }
 
+/**
+ * The six keys the panes fly with, which nothing else may have.
+ *
+ * Flying is held down, not tapped, and it is the one gesture a designer is in the middle of while reaching
+ * for everything else — so a tool letter or a shortcut that lands on one of these does not merely conflict,
+ * it takes the navigation away for as long as that tool is in hand. Unmodified they belong to the camera;
+ * with ⌘ or ⌥ they are free, which is where ⌘S and ⌘D already are.
+ */
+export const FLY_KEYS = ["w", "a", "s", "d", "q", "e"] as const;
+
+/** whether a chord is one of the camera's own, and so not a chord anything else may be bound to */
+export const isFlyChord = (chord: Chord): boolean =>
+  !chord.ctrl && !chord.alt && (FLY_KEYS as readonly string[]).includes(chord.key);
+
 // ---------------------------------------------------------------- the map
 
 /** the rows in force: the defaults the designer kept, then the ones they added */
 export function bindingsOf(defaults: readonly Binding[], custom: Custom = NO_CUSTOM): Binding[] {
   const off = new Set(custom.off);
-  return [...defaults.filter((b) => !off.has(rowKey(b))), ...custom.on];
+  return [...defaults.filter((b) => !off.has(rowKey(b))), ...custom.on].filter((b) => !isFlyChord(b.chord));
 }
 
 /**
@@ -181,6 +195,7 @@ export const COMMANDS: readonly Command[] = [
   { id: "edit.redo", title: "redo", group: "edit" },
   { id: "edit.repeat", title: "repeat last action", group: "edit" },
   { id: "edit.duplicate", title: "duplicate", group: "edit" },
+  { id: "edit.delete", title: "delete the selection", group: "edit" },
 
   { id: "structure.group", title: "group", group: "structure" },
   { id: "structure.ungroup", title: "ungroup", group: "structure" },
@@ -226,6 +241,10 @@ export const DEFAULTS: readonly Binding[] = [
   bind(chord("y", { ctrl: true }), "edit.redo"),
   bind(chord("r", { ctrl: true }), "edit.repeat"),
   bind(chord("d", { ctrl: true }), "edit.duplicate"),
+  // both of them, unmodified: ⌦ is what the key is called on a full keyboard and ⌫ is the only one a
+  // laptop has, and a designer should not have to know which of the two this editor decided on
+  bind(chord("delete"), "edit.delete"),
+  bind(chord("backspace"), "edit.delete"),
 
   bind(chord("g", { ctrl: true }), "structure.group"),
   bind(chord("g", { ctrl: true, shift: true }), "structure.ungroup"),

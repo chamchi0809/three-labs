@@ -243,7 +243,7 @@ export const isOnGrid = (patch: Patch, size: number): boolean => gridError(patch
  * The grid a `patch { row(…) … }` describes, or nothing when it is not one.
  *
  * Ragged and even-sided grids are refused here rather than repaired: the sheet is somebody's file, and a
- * patch the editor could not read stays an entity, is drawn by the runtime, and survives a save untouched.
+ * patch the editor could not read stays an object, is drawn by the runtime, and survives a save untouched.
  */
 export function gridFromRows(rows: (Vec3 | undefined)[][]): PatchGrid | undefined {
   const grid: PatchGrid = [];

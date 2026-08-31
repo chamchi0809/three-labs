@@ -10,6 +10,7 @@
  * and the UI reads it; nothing mutates it in place.
  */
 import type { MaterialDrafts } from "../io/materials.ts";
+import type { TemplateDrafts } from "../io/templates.ts";
 import type { NodeId, World } from "./document.ts";
 import { DEFAULT_LAYER, emptyWorld, nodeById } from "./document.ts";
 import { NOTHING, prune, type Selection } from "./selection.ts";
@@ -32,12 +33,23 @@ export type Editor = {
    * What a save does with them is `io/materials.ts`.
    */
   materials: MaterialDrafts;
+  /**
+   * `@template` declarations this session changed, by `node.name`.
+   *
+   * Beside the materials for the same reason: editing a prefab is unsaved work a designer expects ⌘Z to
+   * reach, and "override" is one command that changes the declaration and nothing else. What a save does
+   * with them is `io/templates.ts`.
+   */
+  templates: TemplateDrafts;
   /** the last thing that happened, for the status line */
   note?: string;
 };
 
 export function newEditor(world = emptyWorld()): Editor {
-  return { world, selection: NOTHING, layer: world.layers[0]?.id ?? DEFAULT_LAYER, materials: new Map() };
+  return {
+    world, selection: NOTHING, layer: world.layers[0]?.id ?? DEFAULT_LAYER,
+    materials: new Map(), templates: new Map(),
+  };
 }
 
 /** the grid size in metres — the sheet stores the exponent, because that is the thing that is stepped */

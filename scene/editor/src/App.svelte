@@ -8,9 +8,9 @@
   // exactly the argument for a column rather than a tab in a panel that is also showing something else.
   import { onMount } from "svelte";
   import Views from "./viewport/Views.svelte";
+  import Hierarchy from "./inspect/Hierarchy.svelte";
   import Inspector from "./inspect/Inspector.svelte";
-  import LayersPanel from "./inspect/LayersPanel.svelte";
-  import TagsPanel from "./inspect/TagsPanel.svelte";
+  import TemplatesPanel from "./inspect/TemplatesPanel.svelte";
   import Notices from "./io/Notices.svelte";
   import Console from "./ui/Console.svelte";
   import HistoryPanel from "./ui/HistoryPanel.svelte";
@@ -45,7 +45,7 @@
     [
       ...SHOWN.map(([id, word]) => { const key = said(id); return key && `${key} ${word}`; }),
       said("grid.finer") && said("grid.coarser") && `${said("grid.finer")} / ${said("grid.coarser")} grid`,
-      "wasd fly",
+      "wasd / qe fly",
     ].filter(Boolean).join(" · "),
   );
 
@@ -116,8 +116,8 @@
   <div class="notices"><Notices /></div>
 
   <aside class="left">
-    <LayersPanel />
-    <TagsPanel />
+    <Hierarchy />
+    <TemplatesPanel />
     <HistoryPanel />
   </aside>
 
@@ -164,8 +164,8 @@
     overflow: hidden;
     background: var(--panel);
   }
-  /* the column scrolls, the panels in it keep their height: layers, tags and history are three lists and a
-     short window should push the third one below the fold rather than take a slice off each */
+  /* the column scrolls, the panels in it keep their height: the tree, the templates and the history are
+     three lists and a short window should push the third below the fold rather than slice each */
   .left { grid-column: 1; grid-row: 3; overflow-y: auto; border-right: 1px solid var(--border); }
   .center { grid-column: 2; grid-row: 3; position: relative; min-width: 0; min-height: 0; }
   .right { grid-column: 3; grid-row: 3; border-left: 1px solid var(--border); }

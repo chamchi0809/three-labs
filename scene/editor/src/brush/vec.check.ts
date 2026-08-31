@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import type { Vec3 } from "tscene";
 import { report, test } from "../check.ts";
 import {
-  IDENTITY, add, bounds, centroid, clean, cross, determinant, distance, dot, flip, intersectPlanes,
-  length, mul, multiply, neg, normalize, planeBasis, planeDistance, rotation, scaling, shear, sub,
-  transformDirection, transformPoint, translation,
+  IDOBJECT, add, bounds, centroid, clean, compose, cross, decompose, determinant, distance, dot, flip,
+  intersectPlanes, length, mul, multiply, neg, normalize, planeBasis, planeDistance, rotation, scaling,
+  shear, sub, transformDirection, transformPoint, translation, type Mat4, type Trs,
 } from "./vec.ts";
 
 const near = (a: number, b: number, why: string) => assert.ok(Math.abs(a - b) < 1e-9, `${why}: ${a} is not ${b}`);
@@ -69,10 +69,10 @@ test("a plane basis is right-handed for every direction", () => {
 // ---------------------------------------------------------------- transforms
 
 test("the identity does nothing, and translation only moves", () => {
-  nearV(transformPoint(IDENTITY, [1, 2, 3]), [1, 2, 3], "identity");
+  nearV(transformPoint(IDOBJECT, [1, 2, 3]), [1, 2, 3], "identity");
   nearV(transformPoint(translation([1, 2, 3]), [10, 0, 0]), [11, 2, 3], "translation");
   nearV(transformDirection(translation([1, 2, 3]), [10, 0, 0]), [10, 0, 0], "a direction ignores translation");
-  assert.equal(determinant(IDENTITY), 1);
+  assert.equal(determinant(IDOBJECT), 1);
 });
 
 test("scaling about a point leaves that point where it is", () => {
@@ -98,7 +98,7 @@ test("rotation is right-handed and about the point it is given", () => {
 
 test("four quarter turns are the identity, whatever the axis", () => {
   const axis: Vec3 = normalize([1, 2, -3])!;
-  let m = IDENTITY;
+  let m = IDOBJECT;
   for (let i = 0; i < 4; i++) m = multiply(rotation(axis, Math.PI / 2), m);
   nearV(transformPoint(m, [3, -1, 2]), [3, -1, 2], "back where it started");
 });
@@ -115,6 +115,41 @@ test("a shear slides one axis along another and pins the plane it is measured fr
   nearV(transformPoint(m, [0, 2, 0]), [2, 2, 0], "two up is two across");
   nearV(transformPoint(m, [5, 0, 0]), [5, 0, 0], "nothing moves at y = 0");
   near(determinant(m), 1, "a shear preserves volume");
+});
+
+// ---------------------------------------------------------------- compose and decompose
+
+const nearM = (a: Mat4, b: Mat4, why: string) =>
+  a.forEach((n, i) => near(n, b[i]!, `${why} [${i}]`));
+
+test("a trs composed and taken apart again is the same trs", () => {
+  const trs: Trs = { position: [1, -2, 3], rotation: [0.3, -0.7, 1.1], scale: [2, 0.5, 1.5] };
+  const out = decompose(compose(trs));
+  nearV(out.position, trs.position, "position");
+  nearV(out.rotation, trs.rotation, "rotation");
+  nearV(out.scale, trs.scale, "scale");
+});
+
+test("compose turns like three does — xyz euler order, and scale before rotation", () => {
+  const spun = compose({ position: [0, 0, 0], rotation: [0, Math.PI / 2, 0], scale: [1, 1, 1] });
+  nearV(transformPoint(spun, [1, 0, 0]), transformPoint(rotation([0, 1, 0], Math.PI / 2), [1, 0, 0]), "y turn");
+  const both = compose({ position: [0, 0, 0], rotation: [0, Math.PI / 2, 0], scale: [2, 1, 1] });
+  nearV(transformPoint(both, [1, 0, 0]), [0, 0, -2], "stretched along its own x, then turned");
+});
+
+test("gimbal lock gives up z rather than a NaN, and still lands the same matrix", () => {
+  const m = compose({ position: [1, 1, 1], rotation: [0.4, Math.PI / 2, 0.2], scale: [1, 1, 1] });
+  const out = decompose(m);
+  near(out.rotation[2], 0, "z is where the lost turn is charged");
+  nearM(compose(out), m, "the same orientation by another name");
+});
+
+test("a mirror is charged to scale.x, because that is where three puts it", () => {
+  const m = compose({ position: [0, 0, 0], rotation: [0.2, 0.3, -0.4], scale: [-2, 1, 3] });
+  const out = decompose(m);
+  assert.ok(out.scale[0]! < 0, "an inside-out transform has a negative scale somewhere");
+  near(determinant(m), determinant(compose(out)), "still inside out");
+  nearM(compose(out), m, "and the same matrix");
 });
 
 report("vec");

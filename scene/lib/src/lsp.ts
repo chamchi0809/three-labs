@@ -11,7 +11,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, PATCH_PROPS, PATCH_UV, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, FIELD, LOADERS, MATH, PATCH_PROPS, PATCH_UV, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Method, Param, Schema, TypeRef } from "./schema.ts";
 
@@ -290,10 +290,18 @@ connection.onCompletion((params) => {
   const block = enclosingBlock(text, offset);
   // `@bakery { … }` and `@broom { … }` are not three's namespace: their keys are fixed tables, and no three name belongs in either
   if (block?.name === "@bakery" || block?.name === "@broom") return knobCompletions(block.name, knobPosition(block.name, text, block.brace), head);
+  // `@entity { … }` is not three's either, and unlike those two it has no table: the keys are the
+  // project's own, so there is nothing to offer and offering `position` would be actively wrong
+  if (block?.name === "@entity") return [];
+  // `@fields { … }` and `@locale { … }` are the same: one names the project's own keys, the other the
+  // project's own strings. What *is* a table is a field's own record, and that is caught below
+  if (block?.name === "@fields" || block?.name === "@locale") return [];
   // an options bag: its keys are the fields the slot declares. A record in an `any` slot (userData) has none
   if (block?.name === ":record") {
     // a patch's `uv: { … }` is not a slot the schema declares — a patch names no class for it to hang off
     if (isPatchUv(text, block.brace)) return tableCompletions(PATCH_UV, head);
+    // `@fields { hp: { … } }` — a schema record, whose keys are the one fixed table an entity has
+    if (isFieldSchema(text, block.brace)) return knobCompletions("@fields", "node", head);
     return recordCompletions(recordAt(text, block.brace), head);
   }
   // a `face` body is the brush's own table, not a three class — `face` names no class at all
@@ -316,14 +324,17 @@ connection.onCompletion((params) => {
   return [...(cls ? propCompletions(cls) : []), ...objectCompletions()];
 });
 
-/** the at-rules legal here: a sheet takes all five, a body only takes the two knob tables */
+/** the at-rules legal here: a sheet takes six, a body the four that describe a node */
 function atCompletions(doc: TextDocument, start: number, offset: number, block: string | undefined) {
   // no at-rule nests inside a block of values
-  if (block === "@bakery" || block === "@broom" || block === ":record" || block === "face") return [];
+  if (block === "@bakery" || block === "@broom" || block === "@entity" || block === "@fields"
+    || block === "@locale" || block === ":record" || block === "face") return [];
   const rules: [string, string][] = block
     ? [
         ["@bakery", "lightmap baker settings for this node or material"],
         ["@broom", "editor settings for this node"],
+        ["@entity", "data this node carries into the game"],
+        ["@fields", "what those keys are: type, range, choices"],
       ]
     : [
         ["@import", "splice in another sheet"],
@@ -331,6 +342,7 @@ function atCompletions(doc: TextDocument, start: number, offset: number, block: 
         ["@override", "a body appended to every node a selector matches"],
         ["@bakery", "lightmap baker settings for the sheet"],
         ["@broom", "editor settings for the sheet"],
+        ["@locale", "translations, keyed by the source text"],
       ];
   // `@` is not a word character, so the typed sigil has to be replaced explicitly
   return rules.map(([label, detail]) => ({
@@ -479,6 +491,7 @@ function knobPosition(rule: string, text: string, brace: number): string {
 }
 
 const knobTable = (rule: string, position: string): Record<string, Knob> => {
+  if (rule === "@fields") return FIELD;
   const tables: Record<string, Record<string, Knob>> = rule === "@broom" ? BROOM : BAKERY;
   return tables[position] ?? {};
 };
@@ -557,6 +570,10 @@ function isPatchUv(text: string, brace: number): boolean {
   if (!/\buv\s*:\s*$/.test(text.slice(0, brace))) return false;
   return enclosingBlock(text, brace)?.name === "patch";
 }
+
+/** a record that is one field's schema: `@fields { hp: { | } }` */
+const isFieldSchema = (text: string, brace: number): boolean =>
+  enclosingBlock(text, brace)?.name === "@fields";
 
 /** index of the `(` that matches the `)` at the end of `text`, or -1 */
 function openingParen(text: string): number {

@@ -1,5 +1,5 @@
 /**
- * Every line in the map, in one buffer: brush edges, selection bounds, guides, spikes, entity links.
+ * Every line in the map, in one buffer: brush edges, selection bounds, guides, spikes, object links.
  *
  * Lines are the editor's other draw call. A solid is read from its silhouette long before it is read from
  * its shading, and in a wireframe view the edges *are* the picture — so they get the same treatment the
