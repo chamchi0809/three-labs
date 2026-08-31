@@ -91,10 +91,10 @@
     />
     {#if row.differs}
       <!-- Unity's mark for an overridden prefab property: this node says something its template does not -->
-      <i class="star" title="different from the template — revert changes puts the template's value back">*</i>
+      <i class="star" title="different from the template; revert changes restores the template's value">*</i>
     {/if}
     {#if field?.doc || field?.localized}
-      <i class="note" title={[field.doc, field.localized ? "localized — @locale translates it" : ""].filter(Boolean).join(" · ")}
+      <i class="note" title={[field.doc, field.localized ? "localized · translated by @locale" : ""].filter(Boolean).join(" · ")}
         >{field.localized ? "\u{1F310}" : "?"}</i>
     {/if}
   </span>
@@ -142,7 +142,7 @@
         {#each materials as name (name)}<option value={name}>--{name}</option>{/each}
       </select>
     {:else if row.type === "expression"}
-      <code title="an expression belongs to the sheet; the editor shows it and leaves it alone"
+      <code title="an expression from the sheet; the editor shows it but does not edit it"
         >{value ? printValue(value) : "mixed"}</code>
     {:else}
       <input value={mixed ? "" : text} placeholder={mixed ? "mixed" : ""}

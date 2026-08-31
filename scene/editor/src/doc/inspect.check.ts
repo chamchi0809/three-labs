@@ -93,6 +93,12 @@ test("a template's own rows are its declaration read straight out", () => {
   for (const row of [...defRows(def, "props"), ...defRows(def, "fields")]) {
     assert.deepEqual([row.written, row.mixed, row.inherited, row.differs], [1, false, false, false]);
   }
+  // a default whose key the definition also declared is drawn by that declaration, dropdown and all
+  const spawn = defByName(demoCatalogue(), "entity", "spawn")!;
+  for (const row of defRows(spawn, "fields")) {
+    assert.equal(row.field, spawn.declared.find((f) => f.name === row.name), row.name);
+  }
+  assert.ok(defRows(spawn, "fields").some((r) => r.field), "and the demo's spawn declares some");
 });
 
 test("a definition is common only when every one of them is an instance of it", () => {

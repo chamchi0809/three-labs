@@ -33,7 +33,8 @@ import {
   hollowSelection, intersectSelection, mergeSelection, subtractSelection, type Attempt,
 } from "./doc/csg.ts";
 import {
-  applyTemplate, hasTemplate, removeTemplate, renameClass, selectByTemplate, type Template,
+  applyTemplate, hasTemplate, nodesWithTemplate, removeTemplate, renameClass, selectByTemplate,
+  type Template,
 } from "./doc/templates.ts";
 import type { ObjectDef } from "./doc/catalogue.ts";
 import { cleanName } from "./io/materials.ts";
@@ -211,6 +212,32 @@ export function renameTemplate(def: ObjectDef, raw: string): void {
   }));
 }
 
+/**
+ * A kind deleted: the declaration and the things that were one, in the same command.
+ *
+ * Deleting instances is what pixi-vania's entity editor does, and it asks first. This does not ask: one
+ * ⌘Z puts the declaration and every instance back together, which is a better answer than a modal — and
+ * the status line says how many went, so nobody has to guess what the click cost.
+ */
+export function deleteTemplate(def: ObjectDef): void {
+  const t: Template = { name: def.name, node: def.node };
+  const key = library.keyOfTemplate(def);
+  // one this session invented was never in a file, so it goes rather than being marked for deletion
+  const declared = library.isDeclared(def);
+  session.run(`delete ${def.name}`, (e) => {
+    const ids = nodesWithTemplate(e.world, t);
+    const templates = new Map(e.templates);
+    if (declared) templates.set(key, null);
+    else templates.delete(key);
+    return {
+      ...e,
+      world: removeNodes(e.world, ids),
+      templates,
+      note: ids.length ? `${def.name} deleted, with ${ids.length} placed` : `${def.name} deleted`,
+    };
+  });
+}
+
 // ---------------------------------------------------------------- constructive solid geometry
 
 /**
@@ -256,7 +283,7 @@ export const fixIssues = (context: Context, issues: Issue[]): void => {
     return world === e.world ? e : { ...e, world, note: `${issues.length} fixed` };
   });
   if (session.editor.world === before) {
-    session.set((e) => ({ ...e, note: "nothing changed — that fix does not apply here" }));
+    session.set((e) => ({ ...e, note: "nothing changed · that fix does not apply here" }));
   }
 };
 

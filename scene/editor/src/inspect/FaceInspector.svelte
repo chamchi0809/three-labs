@@ -111,7 +111,7 @@
 
 <Panel title="surface">
   {#if !info}
-    <p class="none">pick a face, or a solid, to see what it is made of</p>
+    <p class="none">select a face or a solid to see its material</p>
   {:else}
     <p class="count">{counted}</p>
 
@@ -133,7 +133,7 @@
           {#each ["paraxial", "parallel"] as const as kind (kind)}
             <button
               class:on={!info.uv.mixed && info.uv.value.kind === kind}
-              title={kind === "paraxial" ? "axes from the nearest world plane — a wall stays aligned to the map" : "axes in the face's own plane — a slope keeps its material square to itself"}
+              title={kind === "paraxial" ? "axes from the nearest world plane, so walls stay aligned to the map" : "axes in the face's own plane, so a slope keeps its material square to itself"}
               onclick={() => setMode(kind)}>{kind}</button>
           {/each}
         </span>
@@ -174,16 +174,16 @@
           oninput={(e) => library.setDepth(relief.name, Number((e.target as HTMLInputElement).value))} />
         <span class="unit">{Math.round((library.depthOf(relief.name) ?? 0.03) * 1000)} mm</span>
         {#if library.overridden(relief.name)}
-          <button class="revert" title="back to the {relief.depth ?? 0.03} m the sheet declares"
+          <button class="revert" title="back to the {relief.depth ?? 0.03} m declared in the sheet"
             onclick={() => library.setDepth(relief.name, undefined)}>sheet</button>
         {/if}
       </div>
-      <p class="none">{relief.name} has relief · the slider is this session only, not the sheet</p>
+      <p class="none">{relief.name} has relief · this slider is preview only and is not saved</p>
     {/if}
 
     <div class="tools">
       <button onclick={() => edit("reset material", (b, i) => resetUv(b, i), "reset", resetPatchUv)} title="offset 0, scale 1, no rotation">reset</button>
-      <button disabled={!walls} onclick={() => edit("fit material", (b, i) => fitUv(b, i), "fitted")} title="one tile across the whole face — faces only, a patch has no outline in tiles">fit</button>
+      <button disabled={!walls} onclick={() => edit("fit material", (b, i) => fitUv(b, i), "fitted")} title="one tile across the whole face · faces only, a patch has no outline to fit to">fit</button>
       <button onclick={() => edit("flip material", (b, i) => flipUv(b, i, "u"), "flipped u", (p) => flipPatchUv(p, "u"))}>flip u</button>
       <button onclick={() => edit("flip material", (b, i) => flipUv(b, i, "v"), "flipped v", (p) => flipPatchUv(p, "v"))}>flip v</button>
       <button onclick={() => edit("nudge material", (b, i) => nudgeUv(b, i, [-grid, 0]), `nudged -${grid} u`, (p) => nudgePatchUv(p, [-grid, 0]))}>−u</button>
@@ -204,13 +204,13 @@
     {#if info.only}
       <UvEditor brush={info.only.brush} face={info.only.face} />
     {:else if info.patches === info.count}
-      <p class="none">a patch's material runs along the surface — the numbers above are all there is to it</p>
+      <p class="none">a patch maps its material along the surface; the numbers above are all it has</p>
     {:else}
-      <p class="none">pick one face to see where its material sits</p>
+      <p class="none">select a single face to see how its material is placed</p>
     {/if}
 
     {#if info.patches && info.patches < info.count}
-      <p class="none">fit and justify reach the {info.count - info.patches} face{info.count - info.patches === 1 ? "" : "s"} only</p>
+      <p class="none">fit and justify apply to the {info.count - info.patches} face{info.count - info.patches === 1 ? "" : "s"} only</p>
     {/if}
   {/if}
 </Panel>

@@ -45,7 +45,7 @@
         {#if renaming === key(t)}
           <RenameBox value={t.name} done={(to) => rename(t, to)} cancel={() => (renaming = undefined)} />
         {:else}
-          <button class="name" title="select every {t.name} — double-click to rename the kind"
+          <button class="name" title="select every {t.name} · double-click to rename the template"
             onclick={() => selectTemplate(t)} ondblclick={() => (renaming = key(t))}>{t.name}</button>
         {/if}
         <!-- the node type an instance is written as; a template of no type says nothing, because it fits any -->
@@ -57,7 +57,7 @@
     {/each}
   </ul>
 {:else}
-  <p class="none">the project declares no @template</p>
+  <p class="none">this project declares no @template</p>
 {/if}
 
 <style>

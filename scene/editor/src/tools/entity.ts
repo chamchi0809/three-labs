@@ -43,7 +43,7 @@ const place = (input: InputState, editor: Editor): Outcome => {
   const def = entitySettings.def;
   // nothing armed is not a failure to report as an error: the browser is right there, and a click that
   // silently created an entity of no type would be worse than one that says which button to press
-  if (!def) return { note: "pick an entity type in the entity browser first" };
+  if (!def) return { note: "select an entity type in the entities dialog first" };
   const at = placeAt(input, gridSize(editor));
   const made = (): ObjectNode => entityNode(at, def);
   const put = (e: Editor, node: ObjectNode): Editor => {
@@ -68,7 +68,7 @@ export const entityTool: Tool = {
   title: "entity",
   // `e` is fly-up and belongs to the camera; `o` is the letter next to `n`, the other tool that places
   key: "o",
-  hint: "click to place the armed entity type · pick one in the entity browser",
+  hint: "click to place the selected entity type · choose one in the entities dialog",
 
   click: (input, editor) => place(input, editor),
 };

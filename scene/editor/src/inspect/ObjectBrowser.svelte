@@ -21,7 +21,7 @@
   let filter = $state("");
   let armed = $state("");
 
-  // an entity type is not an object anybody draws, and it has a browser of its own — see EntityBrowser
+  // an entity type is not an object anybody draws, and it has a browser of its own — see EntityTypes
   const placeable = $derived(library.objects.filter((d) => !isEntityDef(d)));
   const matches = $derived(
     placeable.filter((d) => !filter || `${d.node}.${d.name}`.toLowerCase().includes(filter.toLowerCase())),

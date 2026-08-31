@@ -13,7 +13,10 @@
  * second printer is a second dialect, and the first `#00000080` it turns into `#000080` is a bug nobody
  * finds until a save.
  */
-import { print, type Member, type ObjectValue, type Sheet, type UvMode, type Value, type Vec2, type Vec3 } from "tscene";
+import {
+  print, type Member, type ObjectValue, type Sheet, type Statement, type UvMode, type Value, type Vec2,
+  type Vec3,
+} from "tscene";
 import { SYNTHETIC } from "../doc/props.ts";
 
 // ---------------------------------------------------------------- reading
@@ -61,10 +64,13 @@ export const literalVar = (v: Value | undefined): string | undefined => (v?.kind
 
 // ---------------------------------------------------------------- writing
 
-const sheetOf = (statements: Member[]): Sheet => ({ statements, comments: [], text: "", errors: [] });
+const sheetOf = (statements: Statement[]): Sheet => ({ statements, comments: [], text: "", errors: [] });
 
 /** one member as a sheet would write it, with no trailing newline */
 export const printMember = (m: Member): string => print(sheetOf([m])).trimEnd();
+
+/** the same for a whole top-level statement — a `@template`, which is not a member of anything */
+export const printStatement = (s: Statement): string => print(sheetOf([s])).trimEnd();
 
 /**
  * One value as a sheet would write it. Printed as the right-hand side of a property and then cut back

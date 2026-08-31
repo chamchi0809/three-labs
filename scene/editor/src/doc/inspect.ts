@@ -144,18 +144,24 @@ function gridFor(
  * The definition's own values as rows, for the grid that edits the *template* rather than an instance.
  *
  * Nothing is inherited or mixed here — a template is one declaration and every value in it is its own —
- * so this is the declaration read straight out, in the order it wrote it.
+ * so this is the declaration read straight out, in the order it wrote it. A default whose key the
+ * definition also declared carries that declaration, so an `enum` default is a dropdown of the same
+ * choices an instance's would be.
  */
 export const defRows = (def: ObjectDef, half: DefHalf): Row[] =>
-  def[half].map((p) => ({
-    name: p.name,
-    type: p.type,
-    ...(p.value ? { value: p.value } : {}),
-    written: 1,
-    mixed: false,
-    inherited: false,
-    differs: false,
-  }));
+  def[half].map((p) => {
+    const field = half === "fields" ? def.declared.find((f) => f.name === p.name) : undefined;
+    return {
+      name: p.name,
+      type: p.type,
+      ...(p.value ? { value: p.value } : {}),
+      written: 1,
+      mixed: false,
+      inherited: false,
+      differs: false,
+      ...(field ? { field } : {}),
+    };
+  });
 
 /** the definition every inspected node is an instance of, when they are all instances of the same one */
 export function commonDef(catalogue: Catalogue, nodes: Node[]): ObjectDef | undefined {

@@ -30,7 +30,7 @@
 </button>
 
 {#if open}
-  <Dialog title="preferences" say="yours, not the map's" width={380} onclose={() => (open = false)}>
+  <Dialog title="preferences" say="settings for this editor, not for the level" width={380} onclose={() => (open = false)}>
     {#snippet actions()}
       <button class="plain" disabled={!prefs.changed} onclick={() => prefs.reset()}>defaults</button>
     {/snippet}

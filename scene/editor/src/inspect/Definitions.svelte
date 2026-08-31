@@ -10,13 +10,13 @@
   let open = $state(false);
 </script>
 
-<button class="btn" class:on={open} use:tooltip={"definitions — the objects this project declares"}
+<button class="btn" class:on={open} use:tooltip={"definitions — objects this project declares"}
   onclick={() => (open = !open)}>
   <IconBulb size={16} />
 </button>
 
 {#if open}
-  <Dialog title="definitions" say="every @template a designer can put in a level" width={420}
+  <Dialog title="definitions" say="templates you can place in a level" width={420}
     onclose={() => (open = false)}>
     <div class="body"><ObjectBrowser /></div>
   </Dialog>

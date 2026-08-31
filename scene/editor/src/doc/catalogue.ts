@@ -142,6 +142,23 @@ export const isEntityDef = (def: ObjectDef): boolean => def.node === ENTITY_NODE
 
 export const entityDefs = (catalogue: Catalogue): ObjectDef[] => catalogue.objects.filter(isEntityDef);
 
+/**
+ * An entity type with nothing on it yet — what "add type" in the entity browser starts from.
+ *
+ * A colour and no fields. The colour is not decoration: an entity draws as nothing, so the gizmo's
+ * swatch is the only way one type is told from another in a viewport, and a type with no colour would be
+ * a type nobody can see.
+ */
+export const newEntityDef = (name: string): ObjectDef => ({
+  name,
+  node: ENTITY_NODE,
+  kind: "point",
+  colour: 0x66ccff,
+  props: [],
+  fields: [],
+  declared: [],
+});
+
 // ---------------------------------------------------------------- typing a value
 
 /**

@@ -182,7 +182,7 @@
       <span class="dim">{[...new Set(nodes.map(typeName))].join(", ")}</span>
     </div>
   {:else}
-    <p class="none">pick something to see what it is</p>
+    <p class="none">select something to see its properties</p>
   {/if}
 </Panel>
 
@@ -199,8 +199,8 @@
   <Panel title={allEntities && def ? def.name : "entity"}>
     <p class="what">
       {allEntities
-        ? "the record this entity places — its type's fields, plus anything added here"
-        : "what the game reads off this node — the definition's fields, plus anything added here"}
+        ? "the data this entity carries: its type's fields, plus anything added here"
+        : "the data the game reads from this node: the definition's fields, plus anything added here"}
     </p>
     <PropertyGrid rows={fields} {ids} materials={names}
       set={setField} clear={clearField} rename={renameField} />
@@ -209,11 +209,11 @@
 
 {#if def}
   <Panel title="template .{def.name}">
-    <p class="what">the declaration every <b>.{def.name}</b> follows — an edit here reaches all of them</p>
+    <p class="what">the declaration every <b>.{def.name}</b> follows; editing it changes all of them</p>
     <div class="fields">
       <label for="tpl-name">name</label>
       <!-- renaming the declaration renames the class on every instance of it, in the same command -->
-      <input id="tpl-name" value={def.name} title="the class every instance carries — renaming it renames them too"
+      <input id="tpl-name" value={def.name} title="the class every instance carries; renaming it renames them too"
         onchange={(e) => {
           renameTemplate(def, (e.target as HTMLInputElement).value);
           // whatever the rename decided is what the box should say — a refused name has to come back
@@ -221,9 +221,9 @@
         }} />
     </div>
     <div class="buttons pair">
-      <button disabled={!overs} title="put the template's value back on the selection (or the type's default, where the template has none)"
+      <button disabled={!overs} title="restore the template's value on the selection, or the type's default if the template has none"
         onclick={revert}>revert changes{#if overs}&nbsp;({overs}){/if}</button>
-      <button disabled={!overs} title="make the template say what the selection says"
+      <button disabled={!overs} title="copy the selection's values into the template"
         onclick={override}>override</button>
     </div>
     <PropertyGrid rows={defProps} {ids} materials={names} {...propEdits} />

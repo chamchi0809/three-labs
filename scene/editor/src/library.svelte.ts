@@ -17,7 +17,9 @@
  * deciding to keep it. It is never written, which is why it is a separate map.
  */
 import { demoCatalogue } from "./doc/demo.ts";
-import { defKey, type Catalogue, type ObjectDef, type MaterialDef } from "./doc/catalogue.ts";
+import {
+  defKey, entityDefs, newEntityDef, type Catalogue, type ObjectDef, type MaterialDef,
+} from "./doc/catalogue.ts";
 import { freeName, newMaterial, type MaterialDrafts } from "./io/materials.ts";
 import type { TemplateDrafts } from "./io/templates.ts";
 import { session } from "./session.svelte.ts";
@@ -43,9 +45,7 @@ class Library {
     }
     return {
       ...this.#loaded,
-      objects: templates.size
-        ? this.#loaded.objects.map((d) => templates.get(defKey(d)) ?? d)
-        : this.#loaded.objects,
+      objects: templates.size ? templated(this.#loaded.objects, templates) : this.#loaded.objects,
       materials: materials.map((m) => {
         const depth = depths.get(m.name);
         return depth === undefined ? m : { ...m, depth };
@@ -81,7 +81,7 @@ class Library {
    * patch the block that is there rather than append a second one.
    */
   keyOfTemplate(def: ObjectDef): string {
-    for (const [key, draft] of session.editor.templates) if (defKey(draft) === defKey(def)) return key;
+    for (const [key, draft] of session.editor.templates) if (draft && defKey(draft) === defKey(def)) return key;
     return defKey(def);
   }
 
@@ -144,7 +144,7 @@ class Library {
       ...e,
       materials: drafted(e.materials, def.name, def),
       material: def.name,
-      note: `${def.name} — a new material`,
+      note: `new material ${def.name}`,
     }));
     return def;
   }
@@ -160,6 +160,35 @@ class Library {
     });
   }
 
+  /**
+   * A `@template` this project did not have, named so as not to collide, and armed in the browser.
+   *
+   * An entity type and nothing else: the object browser's list is what a project's own sheets say exists,
+   * and inventing a `mesh.something` for a designer would be inventing geometry. A type that places data
+   * has no geometry to invent, which is why this is the one declaration the editor writes from nothing.
+   */
+  addEntityType(): ObjectDef {
+    const def = newEntityDef(freeName(entityDefs(this.#catalogue).map((d) => d.name), "entity"));
+    session.run(`new ${def.name}`, (e) => ({
+      ...e,
+      templates: new Map(e.templates).set(defKey(def), def),
+      note: `new entity type ${def.name}`,
+    }));
+    return def;
+  }
+
+  /**
+   * Whether a sheet declares this template, as against this session having invented it.
+   *
+   * What a delete needs to know: a declaration in a file is marked `null` so the save cuts it, and one
+   * that was never in a file is simply dropped. The delete itself is `deleteTemplate` in `actions.ts`,
+   * because the instances have to go in the same command.
+   */
+  isDeclared(def: ObjectDef): boolean {
+    const key = this.keyOfTemplate(def);
+    return this.#loaded.objects.some((d) => defKey(d) === key);
+  }
+
   /** try a depth; `undefined` puts the sheet's own number back */
   setDepth(name: string, metres: number | undefined): void {
     const next = new Map(this.#depths);
@@ -173,3 +202,16 @@ export const library = new Library();
 
 const drafted = (drafts: MaterialDrafts, was: string, def: MaterialDef): MaterialDrafts =>
   new Map(drafts).set(was, def);
+
+/** the declarations as this session has them: edits in place, deletions gone, new ones after the rest */
+function templated(objects: ObjectDef[], drafts: TemplateDrafts): ObjectDef[] {
+  const out: ObjectDef[] = [];
+  for (const d of objects) {
+    const draft = drafts.has(defKey(d)) ? drafts.get(defKey(d)) : d;
+    if (draft) out.push(draft);
+  }
+  for (const [key, draft] of drafts) {
+    if (draft && !objects.some((d) => defKey(d) === key)) out.push(draft);
+  }
+  return out;
+}

@@ -144,7 +144,7 @@
       <button
         class="btn"
         class:on={!look.pbr}
-        use:tooltip={"classic — flat shading, one material, one draw call: the shape of the level"}
+        use:tooltip={"classic — flat shading, one material: shows the shape of the level"}
         onclick={() => (look.current = "classic")}
       >
         <IconCube size={16} />
@@ -152,7 +152,7 @@
       <button
         class="btn"
         class:on={look.pbr}
-        use:tooltip={"modern — the sheet's own materials and the map's own lights: what a player will see"}
+        use:tooltip={"modern — the sheet's materials and the map's lights: how the level will look in game"}
         onclick={() => (look.current = "pbr")}
       >
         <IconSparkles size={16} />

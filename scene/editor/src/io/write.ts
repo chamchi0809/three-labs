@@ -73,7 +73,7 @@ export function writeWorld(
     for (const [file, list] of materialEdits(project.sheets, project.root, materials)) sink(ctx, file).push(...list);
   }
   if (templates?.size) {
-    for (const [file, list] of templateEdits(project.sheets, templates)) sink(ctx, file).push(...list);
+    for (const [file, list] of templateEdits(project.sheets, project.root, templates)) sink(ctx, file).push(...list);
   }
 
   const files = new Map<string, string>();

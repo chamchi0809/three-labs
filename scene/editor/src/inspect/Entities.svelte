@@ -5,20 +5,21 @@
   import IconDatabase from "@tabler/icons-svelte/icons/database";
   import Dialog from "../ui/Dialog.svelte";
   import { tooltip } from "../ui/tooltip.ts";
-  import EntityBrowser from "./EntityBrowser.svelte";
+  import EntityTypes from "./EntityTypes.svelte";
 
   let open = $state(false);
 </script>
 
-<button class="btn" class:on={open} use:tooltip={"entities — the data this project places"}
+<button class="btn" class:on={open} use:tooltip={"entities — place data in the level"}
   onclick={() => (open = !open)}>
   <IconDatabase size={16} />
 </button>
 
 {#if open}
-  <Dialog title="entities" say="what the level places that nothing draws" width={420}
-    onclose={() => (open = false)}>
-    <div class="body"><EntityBrowser /></div>
+  <!-- one screen, not two: the list that picks a type to place is the list that picks one to edit -->
+  <Dialog title="entities" say="entity types you can place, and the fields each one carries"
+    width={720} onclose={() => (open = false)}>
+    <div class="body"><EntityTypes /></div>
   </Dialog>
 {/if}
 
