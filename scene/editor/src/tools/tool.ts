@@ -171,7 +171,12 @@ export class ToolBox {
 
   press(key: string, input: InputState | undefined, editor: Editor): Outcome | undefined {
     if (key === "escape" && this.tracker) return this.cancel(editor);
-    return this.current.press?.(key, input, editor);
+    const answer = this.current.press?.(key, input, editor);
+    // A setting changed during a drag is a setting the drag should already be showing. The tracker is run
+    // again from where the pointer already is rather than waiting for it to move: otherwise deepening a
+    // solid with `+` does nothing at all until the hand twitches, which reads as the key not working.
+    if (!answer || !input || !this.tracker) return answer;
+    return merge(answer, this.tracker.move(input, editor));
   }
 
   cancel(editor: Editor): Outcome | undefined {

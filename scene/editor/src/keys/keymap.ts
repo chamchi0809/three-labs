@@ -62,15 +62,36 @@ export function parseChord(text: string): Chord | undefined {
   return chord;
 }
 
+/**
+ * The letter a press means, whatever an input method turned it into.
+ *
+ * With a Hangul (or kana, or Cyrillic) keyboard on, `event.key` for the W key is `ㅈ` — so every shortcut
+ * in the editor, flying included, silently stops working the moment somebody switches input modes to type
+ * a layer name. `event.code` is the physical key and is unaffected, so it is what a press falls back to
+ * when what came out was not a latin letter or a digit.
+ *
+ * The fallback is deliberately only a fallback: a Dvorak or AZERTY layout puts real latin letters under
+ * different keys, and those designers mean the letter they typed rather than the one QWERTY prints there.
+ */
+export function keyOf(event: { key: string; code?: string }): string {
+  const key = event.key.toLowerCase();
+  if (/^[a-z0-9]$/.test(key)) return key;
+  const code = event.code ?? "";
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  return key;
+}
+
 /** the chord a key press is, or nothing when the press is only a modifier being held down */
 export function chordOf(event: {
   key: string;
+  code?: string;
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
 }): Chord | undefined {
-  const key = event.key.toLowerCase();
+  const key = keyOf(event);
   if (key === "control" || key === "meta" || key === "shift" || key === "alt") return undefined;
   const chord: Chord = { key };
   if (event.ctrlKey || event.metaKey) chord.ctrl = true;

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { report, test } from "../check.ts";
 import {
   bindingsOf, chordKey, chordOf, chordsFor, commandFor, conflictsOf, COMMANDS, DEFAULTS, isViewCommand,
-  parseChord, printChord, rowKey, type Binding, type Custom,
+  keyOf, parseChord, printChord, rowKey, type Binding, type Custom,
 } from "./keymap.ts";
 
 const press = (key: string, mods: { ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean } = {}) =>
@@ -107,6 +107,24 @@ test("two commands on one chord is a conflict, and says which two", () => {
 test("the same command bound twice to the same chord is not a conflict with itself", () => {
   const on: Binding[] = [{ chord: { key: "s", ctrl: true }, command: "file.save" }];
   assert.deepEqual([...conflictsOf(bindingsOf(DEFAULTS, custom({ on }))).keys()], []);
+});
+
+// ---------------------------------------------------------------- input methods
+
+test("a key an input method rewrote is still the key that was pressed", () => {
+  // what Chrome reports for the W key with a Hangul keyboard on
+  assert.equal(keyOf({ key: "\u3148", code: "KeyW" }), "w");
+  assert.equal(keyOf({ key: "\u3141", code: "KeyA" }), "a");
+  assert.equal(keyOf({ key: "1", code: "Digit1" }), "1");
+  assert.equal(chordOf({ key: "\u3145", code: "KeyS", ctrlKey: false, metaKey: true, shiftKey: false, altKey: false })?.key, "s");
+});
+
+test("a latin layout is taken at its word, not by where QWERTY puts the key", () => {
+  // Dvorak: the key QWERTY calls S types O, and O is what the designer meant
+  assert.equal(keyOf({ key: "o", code: "KeyS" }), "o");
+  assert.equal(keyOf({ key: "Escape", code: "Escape" }), "escape");
+  assert.equal(keyOf({ key: "[", code: "BracketLeft" }), "[");
+  assert.equal(keyOf({ key: "w" }), "w", "an event with no code is still a key");
 });
 
 report("keys");

@@ -112,7 +112,7 @@ function nudge(input: InputState, editor: Editor, right: number, up: number): Ou
   const step: Vec3 = isZero(on) ? by : on;
   return {
     edit: {
-      name: "nudge",
+      name: "move",
       collate: "nudge",
       repeatable: true,
       apply: (e) => {
@@ -132,7 +132,7 @@ export const moveTool: Tool = {
   id: "move",
   title: "move",
   key: "g",
-  hint: "drag to move · alt lifts · shift holds one axis · arrows nudge by a cell",
+  hint: "drag to move · alt moves up and down · shift locks to one axis · arrows move one cell",
 
   click(input) {
     const id = input.hit?.node;

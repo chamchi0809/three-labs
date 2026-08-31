@@ -24,6 +24,7 @@
   } from "../render/scene.ts";
   import { bakery } from "../bake/bake.svelte.ts";
   import { keys } from "../keys/keys.svelte.ts";
+  import { keyOf } from "../keys/keymap.ts";
   import { library } from "../library.svelte.ts";
   import { prefs } from "../ui/prefs.svelte.ts";
   import { perf } from "./perf.ts";
@@ -719,7 +720,7 @@
    */
   function onKeydown(event: KeyboardEvent): void {
     if (typing(event) || event.defaultPrevented) return;
-    const key = event.key.toLowerCase();
+    const key = keyOf(event);
 
     const command = keys.commandFor(event);
     if (command && runView(command)) {
@@ -748,7 +749,7 @@
     }
   }
 
-  const onKeyup = (event: KeyboardEvent) => held.delete(event.key.toLowerCase());
+  const onKeyup = (event: KeyboardEvent) => held.delete(keyOf(event));
   const onBlur = () => held.clear();
 
   // ---------------------------------------------------------------- drawing the overlay

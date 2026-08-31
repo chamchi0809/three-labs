@@ -288,7 +288,7 @@ export const attributesTool: Tool = {
   title: "material",
   key: "m",
   hint:
-    "drag to slide a face · click picks · alt+click copies onto the picked faces · arrows nudge · , . turn · - = size · 0 reset · 9 fit · j l flip",
+    "drag to slide a face · click picks · alt+click copies the material · arrows move it · , . rotate · - = resize · 0 reset · 9 fit · j l flip",
   handles: { faces: true },
 
   click: pick,
@@ -300,16 +300,16 @@ export const attributesTool: Tool = {
     const turn = (fine ? 1 : 15) * DEGREE;
 
     const slide = (by: Vec2, say: string) =>
-      edited("nudge material", editor, (b, i) => nudgeUv(b, i, by), say, (p) => nudgePatchUv(p, by));
+      edited("move material", editor, (b, i) => nudgeUv(b, i, by), say, (p) => nudgePatchUv(p, by));
 
-    if (key === "arrowleft") return slide([-grid, 0], `nudged -${grid} u`);
-    if (key === "arrowright") return slide([grid, 0], `nudged +${grid} u`);
-    if (key === "arrowdown") return slide([0, -grid], `nudged -${grid} v`);
-    if (key === "arrowup") return slide([0, grid], `nudged +${grid} v`);
-    if (key === ",") return edited("turn material", editor, (b, i) => rotateUv(b, i, -turn), `turned -${round(turn / DEGREE)}°`, (p) => rotatePatchUv(p, -turn));
-    if (key === ".") return edited("turn material", editor, (b, i) => rotateUv(b, i, turn), `turned +${round(turn / DEGREE)}°`, (p) => rotatePatchUv(p, turn));
-    if (key === "-") return edited("size material", editor, (b, i) => scaleUv(b, i, [0.5, 0.5]), "halved", (p) => scalePatchUv(p, [0.5, 0.5]));
-    if (key === "=") return edited("size material", editor, (b, i) => scaleUv(b, i, [2, 2]), "doubled", (p) => scalePatchUv(p, [2, 2]));
+    if (key === "arrowleft") return slide([-grid, 0], `moved -${grid} u`);
+    if (key === "arrowright") return slide([grid, 0], `moved +${grid} u`);
+    if (key === "arrowdown") return slide([0, -grid], `moved -${grid} v`);
+    if (key === "arrowup") return slide([0, grid], `moved +${grid} v`);
+    if (key === ",") return edited("rotate material", editor, (b, i) => rotateUv(b, i, -turn), `rotated -${round(turn / DEGREE)}°`, (p) => rotatePatchUv(p, -turn));
+    if (key === ".") return edited("rotate material", editor, (b, i) => rotateUv(b, i, turn), `rotated +${round(turn / DEGREE)}°`, (p) => rotatePatchUv(p, turn));
+    if (key === "-") return edited("resize material", editor, (b, i) => scaleUv(b, i, [0.5, 0.5]), "halved", (p) => scalePatchUv(p, [0.5, 0.5]));
+    if (key === "=") return edited("resize material", editor, (b, i) => scaleUv(b, i, [2, 2]), "doubled", (p) => scalePatchUv(p, [2, 2]));
     if (key === "0") return edited("reset material", editor, (b, i) => resetUv(b, i), "reset", resetPatchUv);
     // fit needs the face's outline in tile coordinates and a patch has none, so it is a brush-only key
     if (key === "9") return edited("fit material", editor, (b, i) => fitUv(b, i), "fitted to the face");

@@ -53,36 +53,36 @@ const round = (kind: string) => kind === "cylinder" || kind === "cone" || kind =
 export const TOOL_OPTIONS: Partial<Record<ToolId, ToolOption[]>> = {
   shape: [
     {
-      kind: "choice", label: "shape", about: "the solid a drag draws", key: "tab", values: SHAPE_KINDS,
+      kind: "choice", label: "shape", about: "what a drag draws", key: "tab", values: SHAPE_KINDS,
       get: () => shapeSettings.kind,
       set: (v) => setShape({ kind: v as (typeof SHAPE_KINDS)[number] }).kind,
     },
     {
-      kind: "number", label: "sides", about: "how many sides a round solid is made of", keys: [",", "."],
+      kind: "number", label: "sides", about: "how many sides a round shape has", keys: [",", "."],
       get: () => shapeSettings.sides,
       set: (v) => `${setShape({ sides: clampSides(v) }).sides} sides`,
       shown: () => round(shapeSettings.kind),
     },
     {
-      kind: "number", label: "rings", about: "how many bands a sphere is stacked from",
+      kind: "number", label: "rings", about: "how many horizontal bands a sphere has",
       get: () => shapeSettings.rings,
       set: (v) => `${setShape({ rings: Math.max(1, Math.round(v)) }).rings} rings`,
       shown: () => shapeSettings.kind === "sphere" || shapeSettings.kind === "icosphere",
     },
     {
-      kind: "number", label: "depth", about: "how far the drag pulls the solid up, in grid cells", keys: ["-", "+"],
+      kind: "number", label: "depth", about: "how tall the shape is, in grid cells", keys: ["-", "+"],
       get: () => shapeSettings.cells,
       set: (v) => `${setShape({ cells: Math.max(1, Math.round(v)) }).cells} cells deep`,
     },
   ],
   patch: [
     {
-      kind: "choice", label: "patch", about: "the surface a drag draws", key: "tab", values: PATCH_SHAPES,
+      kind: "choice", label: "patch", about: "what a drag draws", key: "tab", values: PATCH_SHAPES,
       get: () => patchSettings.shape,
       set: (v) => setPatch({ shape: v as (typeof PATCH_SHAPES)[number] }).shape,
     },
     {
-      kind: "number", label: "depth", about: "how deep a curved patch bows, in grid cells", keys: ["-", "+"],
+      kind: "number", label: "depth", about: "how far the curve bends, in grid cells", keys: ["-", "+"],
       get: () => patchSettings.cells,
       set: (v) => `${setPatch({ cells: Math.max(1, Math.round(v)) }).cells} cells deep`,
       shown: () => patchSettings.shape !== "plane",
@@ -90,7 +90,7 @@ export const TOOL_OPTIONS: Partial<Record<ToolId, ToolOption[]>> = {
   ],
   entity: [
     {
-      kind: "choice", label: "type", about: "what the next click places", key: "tab", values: ENTITY_TYPES.map((e) => e.type),
+      kind: "choice", label: "type", about: "what a click places", key: "tab", values: ENTITY_TYPES.map((e) => e.type),
       // a definition picked in the browser is a type the row has no button for, so it reads the whole name
       get: () => (entitySettings.def ? placingName() : entitySettings.type),
       set: setEntityType,
@@ -98,14 +98,14 @@ export const TOOL_OPTIONS: Partial<Record<ToolId, ToolOption[]>> = {
   ],
   clip: [
     {
-      kind: "choice", label: "keep", about: "which side of the cut survives it", key: "tab", values: KEEPS,
+      kind: "choice", label: "keep", about: "which side of the cut to keep", key: "tab", values: KEEPS,
       get: () => clipState.keep,
       set: (v) => `keep ${(clipState.keep = v as (typeof KEEPS)[number])}`,
     },
   ],
   sweep: [
     {
-      kind: "number", label: "segments", about: "how many solids the sweep leaves behind", keys: [",", "."],
+      kind: "number", label: "segments", about: "how many copies to leave behind", keys: [",", "."],
       get: () => sweepState.segments,
       set: (v) => `${setSegments(Math.min(MAX_SEGMENTS, v))} segments`,
     },
@@ -120,20 +120,24 @@ export const TOOL_OPTIONS: Partial<Record<ToolId, ToolOption[]>> = {
  * find it in a hint or a keymap.
  */
 export const TOOL_KEYS: Partial<Record<ToolId, [string, string][]>> = {
-  select: [["⌘A", "everything"], ["esc", "nothing"], ["shift", "add"], ["alt", "a face"]],
-  move: [["arrows", "nudge a cell"], ["alt", "lift"], ["shift", "one axis"]],
+  select: [["⌘A", "select all"], ["esc", "deselect"], ["shift", "add to selection"], ["alt", "pick a face"]],
+  move: [["arrows", "move one cell"], ["alt", "move up and down"], ["shift", "lock to one axis"]],
   rotate: [["alt", "1° steps"]],
-  scale: [["shift", "uniform"], ["alt", "about the middle"]],
+  scale: [["shift", "keep the proportions"], ["alt", "scale from the middle"]],
   shear: [],
-  patch: [["r", "add a row"], ["c", "add a column"], ["shift", "take one off"], ["f", "flip"], ["s", "snap"]],
-  extrude: [["shift", "add a face"]],
-  clip: [["enter", "clip"], ["backspace", "back one"], ["esc", "clear"]],
-  vertex: [["shift", "add"], ["alt", "a standing plane"]],
-  edge: [["shift", "add"], ["alt", "a standing plane"]],
-  face: [["shift", "add"], ["alt", "a standing plane"], ["x", "extrude"]],
+  patch: [
+    ["r", "add a row"], ["c", "add a column"], ["shift", "remove instead"], ["f", "flip"],
+    ["s", "snap to the grid"],
+  ],
+  extrude: [["shift", "add to selection"]],
+  clip: [["enter", "cut"], ["backspace", "undo the last point"], ["esc", "clear the points"]],
+  vertex: [["shift", "add to selection"], ["alt", "drag up and down"]],
+  edge: [["shift", "add to selection"], ["alt", "drag up and down"]],
+  face: [["shift", "add to selection"], ["alt", "drag up and down"], ["x", "extrude"]],
   attributes: [
-    ["arrows", "nudge"], [", .", "turn"], ["- =", "size"], ["0", "reset"], ["9", "fit"],
-    ["j l", "flip"], ["enter", "apply the material"], ["alt+click", "copy onto the picked"],
+    ["arrows", "move the material"], [", .", "rotate"], ["- =", "resize"], ["0", "reset"],
+    ["9", "fit to the face"], ["j l", "flip"], ["enter", "apply the material"],
+    ["alt+click", "copy the material"],
   ],
 };
 

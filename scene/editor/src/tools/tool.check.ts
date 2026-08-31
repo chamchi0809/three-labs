@@ -129,6 +129,30 @@ test("escape cancels the drag rather than reaching the tool's own keys", () => {
   assert.deepEqual(log, ["drag 100", "move 200", "cancel"], "the button coming up afterwards is nothing");
 });
 
+test("a setting pressed mid-drag redraws the drag where the pointer already is", () => {
+  const { tool, log } = recorder();
+  tool.press = (key) => (log.push(`press ${key}`), { note: key });
+  const box = new ToolBox([tool]);
+  const e = editor();
+  box.down(at(100, 100), e);
+  box.move(at(200, 100), e);
+  const out = box.press("+", at(200, 100), e);
+  assert.deepEqual(log, ["drag 100", "move 200", "press +", "move 200"],
+    "the key changed a setting, so the shape under the pointer is built again from it");
+  assert.equal(out?.note, "move 200", "and what the status line says is the redrawn shape, not the key");
+});
+
+test("a key the tool does not answer to leaves the drag alone", () => {
+  const { tool, log } = recorder();
+  tool.press = () => undefined;
+  const box = new ToolBox([tool]);
+  const e = editor();
+  box.down(at(100, 100), e);
+  box.move(at(200, 100), e);
+  assert.equal(box.press("z", at(200, 100), e), undefined);
+  assert.deepEqual(log, ["drag 100", "move 200"]);
+});
+
 test("escape with nothing happening is left for the tool", () => {
   const log: string[] = [];
   const tool: Tool = {
