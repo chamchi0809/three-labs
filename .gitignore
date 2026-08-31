@@ -11,6 +11,9 @@ coverage/
 .turbo/
 .cache/
 
+# What the editor's bake button writes: an atlas is a build artefact of the map beside it
+.bake/
+
 # Environment files
 .env
 .env.*

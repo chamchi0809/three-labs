@@ -284,6 +284,39 @@ export function pointOnPlane(view: View, at: Point, size: Size): Vec3 {
   ];
 }
 
+/** a projected point: where it landed, and how far in front of the eye it was */
+export type Projected = { x: number; y: number; depth: number };
+
+/**
+ * Where a world point lands on the pane, in CSS pixels from its top left.
+ *
+ * The inverse of {@link pointOnPlane}, and written here beside it so the two cannot drift. Anything drawn
+ * *over* the picture rather than in it needs this — the dimension guides most of all, since a measurement
+ * has to sit exactly on the edge it is measuring or it is measuring nothing.
+ *
+ * Undefined means the point is behind the eye, where a perspective divide turns a point in front of you
+ * into a plausible-looking pixel on the wrong side of the pane. An orthographic view answers everywhere:
+ * its eye is {@link ORTHO_BACK} metres back precisely so that nothing is ever behind it.
+ */
+export function screenOf(view: View, at: Vec3, size: Size): Projected | undefined {
+  const { right, up, forward } = basisOf(view);
+  const eye = eyeOf(view);
+  const rel: Vec3 = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+  const depth = dot(rel, forward);
+
+  // metres per pixel is quoted at the pivot; a perspective view spreads with distance, in exact proportion
+  const scale = view.kind === "3d"
+    ? metresPerPixel(view, size) * (depth / view.reach)
+    : metresPerPixel(view, size);
+  if (!(scale > 0)) return undefined;
+
+  return {
+    x: size.width / 2 + dot(rel, right) / scale,
+    y: size.height / 2 - dot(rel, up) / scale,
+    depth,
+  };
+}
+
 export type Ray = { origin: Vec3; direction: Vec3 };
 
 /**

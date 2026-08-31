@@ -15,6 +15,7 @@ import { entityTool } from "./entity.ts";
 import { extrudeTool } from "./extrude.ts";
 import { rotateTool, scaleTool, shearTool } from "./gizmo.ts";
 import { moveTool } from "./move.ts";
+import { patchTool } from "./patch.ts";
 import { selectTool } from "./select.ts";
 import { shapeTool } from "./shape.ts";
 import { sweepTool } from "./sweep.ts";
@@ -22,7 +23,7 @@ import { ToolBox, type Tool } from "./tool.ts";
 
 export const TOOLS: Tool[] = [
   selectTool, moveTool, rotateTool, scaleTool, shearTool,
-  shapeTool, entityTool,
+  shapeTool, patchTool, entityTool,
   extrudeTool, sweepTool, clipTool,
   vertexTool, edgeTool, faceTool,
   attributesTool,

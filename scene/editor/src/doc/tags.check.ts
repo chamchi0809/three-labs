@@ -9,8 +9,9 @@ import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import { report, test } from "../check.ts";
 import { catalogueOfSheets } from "./catalogue.ts";
-import { brushNode, entityNode, isHidden, layerNode, nodeById, type World } from "./document.ts";
+import { brushNode, entityNode, isHidden, layerNode, nodeById, patchNode, type World } from "./document.ts";
 import { newEditor } from "./editor.ts";
+import { patchShape } from "../patch/patch.ts";
 import { NOTHING } from "./selection.ts";
 import {
   facesWithTag, hasTag, hideTag, isolateTag, key, nodesWithTag, selectByTag, tagByName, tagCounts,
@@ -75,6 +76,24 @@ test("things and surfaces are found separately, and counted the same way", () =>
   assert.equal(counts.get("node:torch"), 1);
   assert.equal(counts.get("face:water"), 6);
   assert.equal(counts.get("node:trigger"), undefined, "a tag nothing carries is not listed");
+});
+
+test("a patch made of a tagged material carries the tag on its one surface", () => {
+  const wet = box("water");
+  const curve = patchNode(patchShape("cylinder", [0, 0, 0], [2, 2, 2], { material: "water" }));
+  const dry = patchNode(patchShape("plane", [4, 0, 0], [6, 0, 2]));
+  const world: World = { layers: [layerNode("Main", [wet, curve, dry])], broom: { grid: -2, scale: 1 } };
+
+  assert.deepEqual(tagsForFace(world, { node: curve.id, face: 0 }, tags).map((t) => t.name), ["water"]);
+  assert.deepEqual(tagsForFace(world, { node: dry.id, face: 0 }, tags), []);
+  assert.deepEqual(tagsForFace(world, { node: curve.id, face: 1 }, tags), [],
+    "a patch has one surface, and it is numbered 0");
+
+  // seven, not six: `select by water` finds the curved bit of the pool as well as the flat bits
+  const found = facesWithTag(world, tagByName(tags, "water", "face")!);
+  assert.equal(found.length, 7);
+  assert.deepEqual(found.filter((f) => f.node === curve.id), [{ node: curve.id, face: 0 }]);
+  assert.equal(tagCounts(world, tags).get("face:water"), 7);
 });
 
 // ---------------------------------------------------------------- selecting and filtering

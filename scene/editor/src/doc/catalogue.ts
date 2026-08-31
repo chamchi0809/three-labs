@@ -20,7 +20,8 @@
  */
 import type { Member, NodeBroom, Sheet, Statement, Template, Value } from "tscene";
 import { readBroom } from "../io/read.ts";
-import { entityNode, type EntityNode, type Node } from "./document.ts";
+import { entityNode, nodeTypeName, type EntityNode, type Node } from "./document.ts";
+import { asColour } from "./props.ts";
 
 /** which of the smart editors a value gets. `expression` is the one that is shown but not edited */
 export type PropType = "number" | "vec3" | "colour" | "bool" | "ref" | "material" | "text" | "expression";
@@ -119,7 +120,12 @@ export function propType(v: Value | undefined): PropType {
     case "var": return "material";
     case "ident": return v.name === "true" || v.name === "false" ? "bool" : "text";
     case "array": return isTriple(v.items) ? "vec3" : "expression";
-    case "object": return v.name === "vec3" && isTriple(v.args) ? "vec3" : "expression";
+    case "object":
+      if (v.name === "vec3" && isTriple(v.args)) return "vec3";
+      // `color(#ff8000)` is how a colour has to be written for the runtime to make a `Color` of it, so it
+      // is the form the grid meets most often — a swatch, not the greyed source of an expression
+      if (asColour(v) !== undefined) return "colour";
+      return "expression";
     default: return "expression";
   }
 }
@@ -194,8 +200,8 @@ const propIn = (body: Member[], name: string): Value | undefined =>
 function colourOf(body: Member[]): number | undefined {
   for (const m of body) {
     if (m.kind !== "prop" || (m.name !== "color" && m.name !== "colour")) continue;
-    if (m.value.kind === "hex") return m.value.value;
-    if (m.value.kind === "number") return m.value.value;
+    const found = asColour(m.value);
+    if (found !== undefined) return found;
   }
   return undefined;
 }
@@ -256,7 +262,7 @@ export const catalogueOfSheets = (sheets: Iterable<Sheet>): Catalogue =>
 /** the definition a node is an instance of, if it is an instance of one */
 export function defFor(catalogue: Catalogue, node: Node): EntityDef | undefined {
   if (!node.classes.length) return undefined;
-  const type = node.kind === "entity" ? node.type : node.kind === "brush" ? "brush" : "group";
+  const type = nodeTypeName(node);
   // the last class written wins, the same way the last `@template` declared does — a node with two
   // templates on it is displayed as the more specific one, and the more specific one is written last
   for (let i = node.classes.length - 1; i >= 0; i--) {

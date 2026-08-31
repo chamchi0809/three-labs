@@ -480,6 +480,29 @@ Voronoi cells this used to hand out, with the seam between two cells softened in
 
 [`ProbeWeight`](#probeweight)[]
 
+***
+
+### validateBakery()
+
+```ts
+function validateBakery(root, where): void;
+```
+
+`@bakery { … }` is settings for a tool, so three drops nothing and a typo bakes silently wrong.
+The checker catches it in an editor; this is for a bake that loaded the sheet itself. `where` only
+names the source in the message.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `root` | `Object3D` |
+| `where` | `string` |
+
+#### Returns
+
+`void`
+
 ## References
 
 ### MaterialBakery

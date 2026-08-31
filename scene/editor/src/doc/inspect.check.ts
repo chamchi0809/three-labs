@@ -9,8 +9,9 @@ import { withFace } from "../brush/uv.ts";
 import { demoCatalogue } from "./demo.ts";
 import { defByName } from "./catalogue.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, type Node, type World,
+  brushNode, entityNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
 } from "./document.ts";
+import { patchShape } from "../patch/patch.ts";
 import {
   commonDef, describeNodes, faceInfo, facesInScope, mapStats, removeNodesProp, renameNode,
   renameNodesProp, rowsFor, setClasses, setNodesProp, setSheetId, sheetIds, uvPolygon,
@@ -206,11 +207,83 @@ test("a face that is not there is not asked about", () => {
   assert.equal(faceInfo(world, []), undefined);
 });
 
+// ---------------------------------------------------------------- faces of a patch
+
+const sheet = (over = {}) => patchNode(patchShape("plane", [0, 0, 0], [4, 0, 4], over));
+
+test("a selected patch puts its one surface in scope, numbered 0", () => {
+  const p = sheet();
+  const world = worldOf([p]);
+  assert.deepEqual(facesInScope(world, { ...NOTHING, nodes: [p.id] }), [{ node: p.id, face: 0 }]);
+  // and through a group, the same as a brush is
+  const g = groupNode("g", [sheet()]);
+  assert.equal(facesInScope(worldOf([g]), { ...NOTHING, nodes: [g.id] }).length, 1);
+});
+
+test("a patch and a brush together are seven surfaces, six of them faces", () => {
+  const [a, p] = [cube(), sheet()];
+  const world = worldOf([a, p]);
+  const info = faceInfo(world, facesInScope(world, { ...NOTHING, nodes: [a.id, p.id] }))!;
+  assert.equal(info.count, 7);
+  assert.equal(info.patches, 1);
+});
+
+test("a patch reports the same four knobs a face does, in the same units", () => {
+  const p = sheet({ material: "water", uv: { offset: [1, 2], scale: [3, 3], rotation: 0.25 } });
+  const world = worldOf([p]);
+  const info = faceInfo(world, [{ node: p.id, face: 0 }])!;
+  assert.equal(info.count, 1);
+  assert.equal(info.patches, 1);
+  assert.equal(info.material.value, "water");
+  assert.deepEqual(info.offset.value, [1, 2]);
+  assert.deepEqual(info.scale.value, [3, 3]);
+  assert.equal(info.rotation.value, 0.25);
+  // a patch's material runs along the surface, so there is no choice of axes to show and no outline to draw
+  assert.equal(info.uv, undefined, "offering paraxial or parallel here would be offering nothing");
+  assert.equal(info.only, undefined, "the uv editor draws a face's outline in tiles, and a patch has none");
+});
+
+test("the axes row speaks for the faces only, and is silent when there are none", () => {
+  const [a, p] = [cube(), sheet()];
+  const both = worldOf([a, p]);
+  const info = faceInfo(both, facesInScope(both, { ...NOTHING, nodes: [a.id, p.id] }))!;
+  assert.equal(info.uv?.value.kind, "paraxial");
+  // the patch does not get a vote, so a scope of six agreeing faces and one patch is not "mixed"
+  assert.equal(info.uv?.mixed, false);
+});
+
+test("a patch agrees with a face about a number they both carry", () => {
+  const a = brushNode(withFace(cube().brush, 0, { material: "water" }));
+  const p = sheet({ material: "water" });
+  const world = worldOf([a, p]);
+  const info = faceInfo(world, [{ node: a.id, face: 0 }, { node: p.id, face: 0 }])!;
+  assert.equal(info.material.mixed, false);
+  assert.equal(info.material.value, "water");
+  assert.equal(info.patches, 1);
+});
+
+test("a patch has no face but 0, and any other number names nothing", () => {
+  const p = sheet();
+  const world = worldOf([p]);
+  assert.equal(faceInfo(world, [{ node: p.id, face: 1 }]), undefined);
+});
+
 // ---------------------------------------------------------------- the map
 
 test("the map inspector counts what is there", () => {
   const world = worldOf([cube(), cube(), entityNode("pointLight"), groupNode("g", [cube()])]);
-  assert.deepEqual(mapStats(world), { brushes: 3, entities: 1, groups: 1, layers: 1, faces: 18 });
+  assert.deepEqual(mapStats(world), { brushes: 3, patches: 0, entities: 1, groups: 1, layers: 1, faces: 18 });
+});
+
+test("a patch is counted as itself, and contributes no faces", () => {
+  const surface = patchNode(patchShape("plane", [0, 0, 0], [4, 0, 4]));
+  const world = worldOf([cube(), surface]);
+  const stats = mapStats(world);
+  assert.equal(stats.patches, 1);
+  assert.equal(stats.brushes, 1);
+  // six, not six plus however many quads the tessellation happened to pick: a patch is one surface, and
+  // "faces" in this panel is the number a designer can click on
+  assert.equal(stats.faces, 6);
 });
 
 report("inspect");

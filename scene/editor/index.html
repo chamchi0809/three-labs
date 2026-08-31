@@ -3,26 +3,49 @@
 <title>three-broom</title>
 <style>
   /* The palette, in one place. Every panel reads these rather than repeating hexes, so that the shell,
-     the inspectors and the viewport chrome are one surface rather than three that nearly match. */
+     the inspectors and the viewport chrome are one surface rather than three that nearly match.
+
+     The ramp is pixi-vania's — Lospec "PurpleMorning8" (#cdd4a5 #cfa98a #c7786f #9a6278 #60556e #3b405e
+     #2e2a4f #211d38), extended with two shades below #211d38 and one tint of #9a6278, because the source
+     palette bottoms out too early for UI chrome. The two editors are the same tool in two dimensions and
+     there is no reason for them to look like different programs. */
   :root {
     color-scheme: dark;
-    --bg: #1b1d21;
-    --panel: #16181b;
-    --sunk: #121417;
-    --raised: #1b1e22;
-    --line: #24272c;
-    --edge: #3d4653;
-    --ink: #d6dae0;
-    --text: #9aa1ac;
-    --dim: #6d7480;
-    --on: #2a3038;
-    --accent: #7aa2f7;
-    --warn: #d08770;
-    --bad: #d16a72;
-    --mono: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    accent-color: #c7786f;
+
+    --p0: #0d0b18;
+    --p1: #171426;
+    --p2: #211d38;
+    --p3: #2e2a4f;
+    --p4: #3b405e;
+    --p5: #60556e;
+    --p6: #9a6278;
+    --p6-lt: #af7e7f;
+    --p7: #c7786f;
+    --p8: #cfa98a;
+    --p9: #cdd4a5;
+
+    /* pixi-vania's own names, so a component copied across needs no translating */
+    --bg: var(--p1);
+    --panel: var(--p2);
+    --panel-2: var(--p3);
+    --border: var(--p4);
+    --muted: var(--p6-lt);
+    --accent: var(--p7);
+    --accent-dim: #5b3d4b;
+
+    /* `dim` is a third tier of text below `muted`, which pixi-vania has no need of and this editor does:
+       a viewport has far more secondary readouts — units, counts, keys — to keep quiet */
+    --text: var(--p6-lt);
+    --dim: #8a6b74;
+    --warn: var(--p8);
+    --bad: #ff7676;
+
+    --ui: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+    --mono: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
-  body { font: 12px/1.5 system-ui, sans-serif; color: #d7dae0; }
+  body { font: var(--ui); color: var(--p9); }
   #app { height: 100%; }
 </style>
 <div id="app"></div>

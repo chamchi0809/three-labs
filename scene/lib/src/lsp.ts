@@ -11,7 +11,7 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { checkSource, fixSource, loadSchema, resolveSheet } from "./tools.ts";
-import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
+import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, PATCH_PROPS, PATCH_UV, className, concrete, nodeName, type Knob } from "./names.ts";
 import { expand, parse, tokenize, type Loader, type Member, type ObjectValue, type Pos, type Sheet, type Tok } from "./parse.ts";
 import type { ClassInfo, Method, Param, Schema, TypeRef } from "./schema.ts";
 
@@ -291,9 +291,15 @@ connection.onCompletion((params) => {
   // `@bakery { … }` and `@broom { … }` are not three's namespace: their keys are fixed tables, and no three name belongs in either
   if (block?.name === "@bakery" || block?.name === "@broom") return knobCompletions(block.name, knobPosition(block.name, text, block.brace), head);
   // an options bag: its keys are the fields the slot declares. A record in an `any` slot (userData) has none
-  if (block?.name === ":record") return recordCompletions(recordAt(text, block.brace), head);
+  if (block?.name === ":record") {
+    // a patch's `uv: { … }` is not a slot the schema declares — a patch names no class for it to hang off
+    if (isPatchUv(text, block.brace)) return tableCompletions(PATCH_UV, head);
+    return recordCompletions(recordAt(text, block.brace), head);
+  }
   // a `face` body is the brush's own table, not a three class — `face` names no class at all
   if (block?.name === "face") return faceCompletions(head);
+  // a `patch` body: three keys of its own, then the `Mesh` it becomes and the `row(…)` it is built from
+  if (block?.name === "patch") return patchCompletions(head);
 
   const owner = block?.name;
   const cls = owner ? schema.classes[className(owner)] : undefined;
@@ -514,6 +520,44 @@ function faceCompletions(head: string) {
   }));
 }
 
+/** one fixed table of keys, or — right after `key:` — nothing, since these keys take values three never names */
+function tableCompletions(table: Record<string, { summary: string }>, head: string) {
+  if (/([A-Za-z_]\w*)\s*:\s*[\w-]*$/.test(head)) return [];
+  return Object.entries(table).map(([name, k]) => ({
+    label: name,
+    kind: CompletionItemKind.Property,
+    detail: k.summary,
+    insertText: `${name}: `,
+  }));
+}
+
+/**
+ * A `patch` body. Its own three keys first, because they are the reason to have written `patch` rather than
+ * `mesh`; then `row(…)`, which is the grid; then everything a `Mesh` takes, since that is what a patch becomes.
+ */
+function patchCompletions(head: string) {
+  const key = /([A-Za-z_]\w*)\s*:\s*[\w-]*$/.exec(head)?.[1];
+  if (key === "material") return valueCompletions({ kind: "class", name: "Material" });
+  if (key) return [];
+  const mesh = schema.classes[className("mesh")];
+  return [
+    ...Object.entries(PATCH_PROPS).map(([name, p]) => ({
+      label: name,
+      kind: CompletionItemKind.Property,
+      detail: p.summary,
+      insertText: `${name}: `,
+    })),
+    { label: "row", kind: CompletionItemKind.Function, detail: BUILTINS.row!.signature, insertText: "row(" },
+    ...(mesh ? propCompletions(mesh) : []),
+  ];
+}
+
+/** is the `{` at `brace` a patch's `uv: { … }`? — the one record in the language the schema cannot describe */
+function isPatchUv(text: string, brace: number): boolean {
+  if (!/\buv\s*:\s*$/.test(text.slice(0, brace))) return false;
+  return enclosingBlock(text, brace)?.name === "patch";
+}
+
 /** index of the `(` that matches the `)` at the end of `text`, or -1 */
 function openingParen(text: string): number {
   let depth = 0;
@@ -716,8 +760,15 @@ connection.onHover(async (params) => {
   if (word && block?.name === "face" && FACE_PROPS[word]) {
     return { contents: md("```scene", `${word}: ${FACE_PROPS[word]!.type}`, "```", FACE_PROPS[word]!.summary), range: here };
   }
+  // a `patch` key is the language's too — all but these three belong to the `Mesh` and hover below as one
+  if (word && block?.name === "patch" && PATCH_PROPS[word]) {
+    return { contents: md("```scene", `${word}: ${PATCH_PROPS[word]!.type}`, "```", PATCH_PROPS[word]!.summary), range: here };
+  }
   // an options-bag key — `loftGeometry(sections, { capStart: true })`. A record in an `any` slot has no fields
   if (word && block?.name === ":record") {
+    if (PATCH_UV[word] && isPatchUv(text, block.brace)) {
+      return { contents: md("```scene", `${word}: ${PATCH_UV[word]!.type}`, "```", PATCH_UV[word]!.summary), range: here };
+    }
     const shape = recordAt(text, block.brace);
     const field = shape?.fields[word];
     if (field) {

@@ -21,6 +21,16 @@ function box(min: Vec3, max: Vec3): BrushMesh {
 const UNIT = box([0, 0, 0], [1, 1, 1]);
 const TALL = box([0, 0, 0], [1, 4, 1]);
 
+/** the unit box with its +x+y edge sliced off: a seventh face, and a vertex count of its own */
+const CUT = (() => {
+  const { mesh, problems } = buildBrush(
+    [...boxFaces([0, 0, 0], [1, 1, 1]), [[0.5, 1, 0], [0.5, 1, 1], [1, 0.5, 1]] as [Vec3, Vec3, Vec3]]
+      .map((points) => ({ points })),
+  );
+  assert.deepEqual(problems, []);
+  return mesh!;
+})();
+
 test("a cuboid is six faces of two triangles, which is what the batch has to hold", () => {
   assert.equal(UNIT.groups.length, 6);
   assert.equal(UNIT.positions.length / 3, 36, "six quads fanned into twelve triangles");
@@ -153,6 +163,24 @@ test("a hole is collapsed to the origin, so a deleted solid stops being drawn", 
   const hole = batch.position.slice(36 * 3, 72 * 3);
   assert.ok(hole.every((v) => v === 0), "every vertex of the hole is at the origin");
   assert.deepEqual(flushBatch(batch).ranges, [{ start: 36, count: 36 }], "and the zeroes were uploaded");
+});
+
+test("a solid rewritten to a different size leaves nothing behind in the space it gave up", () => {
+  const batch = newBatch();
+  setBrush(batch, "a", UNIT);
+  setBrush(batch, "b", UNIT);
+  setBrush(batch, "c", UNIT);
+  flushBatch(batch); // past the growth, so what follows is a partial upload rather than a whole one
+  setBrush(batch, "b", CUT); // clipped: more vertices than it had, so it cannot stay where it was
+
+  assert.equal(entryOf(batch, "b")!.span.start, 108, "past c, because its own hole was too small");
+  const hole = batch.position.slice(36 * 3, 72 * 3);
+  assert.ok(hole.every((v) => v === 0), "every vertex of the hole is at the origin");
+  assert.deepEqual(flushBatch(batch).ranges, [
+    { start: 36, count: 36 },
+    { start: 108, count: CUT.positions.length / 3 },
+  ], "the zeroes and the new vertices, both");
+  assert.deepEqual(overlaps(batch.arena), []);
 });
 
 test("dropping the last solid zeroes nothing, because the draw range already stops short", () => {

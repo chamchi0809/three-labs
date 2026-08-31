@@ -612,6 +612,113 @@ type Override = Extract<Statement, {
 
 ***
 
+### Patch
+
+```ts
+type Patch = {
+  grid: PatchGrid;
+  offset?: Vec2;
+  rotation?: number;
+  scale?: Vec2;
+  subdivisions?: number;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="grid"></a> `grid` | [`PatchGrid`](#patchgrid-1) | - |
+| <a id="offset-1"></a> `offset?` | [`Vec2`](#vec2) | metres along the surface's own u and v |
+| <a id="rotation-1"></a> `rotation?` | `number` | radians, in the material's own plane |
+| <a id="scale-1"></a> `scale?` | [`Vec2`](#vec2) | metres of world per full texture tile, along the surface — not a multiplier |
+| <a id="subdivisions"></a> `subdivisions?` | `number` | Segments per span. Omitted means "as many as the curvature needs", which is what keeps a barely-bent patch from costing sixteen rows and a tight one from looking like a folded map. |
+
+***
+
+### PatchGrid
+
+```ts
+type PatchGrid = Vec3[][];
+```
+
+The control points, row-major: `grid[row][column]`. Both counts are odd and at least three, which is
+what makes the grid an exact number of spans in each direction.
+
+Rows run along v and columns along u, the same way an image's rows run down and its columns run across.
+
+***
+
+### PatchMesh
+
+```ts
+type PatchMesh = {
+  columns: number;
+  indices: Uint32Array;
+  normals: Float32Array;
+  positions: Float32Array;
+  rows: number;
+  uvs: Float32Array;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="columns"></a> `columns` | `number` | - |
+| <a id="indices"></a> `indices` | `Uint32Array` | - |
+| <a id="normals-1"></a> `normals` | `Float32Array` | - |
+| <a id="positions-1"></a> `positions` | `Float32Array` | - |
+| <a id="rows"></a> `rows` | `number` | the tessellated grid, which is what a tool walks to find the row under the cursor |
+| <a id="uvs-1"></a> `uvs` | `Float32Array` | - |
+
+***
+
+### PatchProblem
+
+```ts
+type PatchProblem = {
+  message: string;
+  row: number;
+};
+```
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="message-1"></a> `message` | `string` | - |
+| <a id="row"></a> `row` | `number` | the row this is about, or -1 for the grid as a whole |
+
+***
+
+### PatchResult
+
+```ts
+type PatchResult = {
+  mesh?: PatchMesh;
+  problems: PatchProblem[];
+};
+```
+
+#### Properties
+
+| Property | Type |
+| ------ | ------ |
+| <a id="mesh-1"></a> `mesh?` | [`PatchMesh`](#patchmesh) |
+| <a id="problems-1"></a> `problems` | [`PatchProblem`](#patchproblem)[] |
+
+***
+
+### PatchShape
+
+```ts
+type PatchShape = typeof PATCH_SHAPES[number];
+```
+
+***
+
 ### Plane
 
 ```ts
@@ -734,8 +841,8 @@ map restores the session without a sidecar file next to it.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="grid"></a> `grid?` | `number` | grid size as a power of two in metres — -2 is 25 cm, the default the editor opens on |
-| <a id="scale-1"></a> `scale?` | `number` | metres per texture tile a new face is created with |
+| <a id="grid-1"></a> `grid?` | `number` | grid size as a power of two in metres — -2 is 25 cm, the default the editor opens on |
+| <a id="scale-2"></a> `scale?` | `number` | metres per texture tile a new face is created with |
 
 ***
 
@@ -1034,8 +1141,8 @@ is what the checker validates against, exactly as [BAKERY](#bakery) does for the
 const BRUSH_CLASSES: string[];
 ```
 
-What the runtime needs to turn a `brush` into a node. A sheet that writes one never names these, so
-the vite plugin imports them on the brush's behalf — the same deal every other three name in a sheet
+What the runtime needs to turn a `brush` or a `patch` into a node. A sheet that writes one never names
+these, so the vite plugin imports them on its behalf — the same deal every other three name in a sheet
 gets, and what keeps a brushless scene from paying for them.
 
 ***
@@ -1109,6 +1216,52 @@ What `calc()` can call. Numbers in, one number out — enough to write a paramet
 deliberately not enough to be a scripting language. `docs/language.md` is checked against this table,
 so a new function cannot be added without documenting it.
 
+***
+
+### MAX\_SUBDIVISIONS
+
+```ts
+const MAX_SUBDIVISIONS: 16 = 16;
+```
+
+the most segments a span is ever cut into, however bent it is — past this nobody can see the difference
+
+***
+
+### PATCH\_PROPS
+
+```ts
+const PATCH_PROPS: Record<string, {
+  summary: string;
+  type: "material" | "number" | "uv";
+}>;
+```
+
+what a `patch` body may set for the surface itself — the rest of it is the `Mesh`'s own
+
+***
+
+### PATCH\_SHAPES
+
+```ts
+const PATCH_SHAPES: readonly ["plane", "cylinder", "cone", "dome", "bevel"];
+```
+
+every primitive a patch can be made as, in the order the tool lists them
+
+***
+
+### PATCH\_UV
+
+```ts
+const PATCH_UV: Record<string, {
+  summary: string;
+  type: "vec2" | "angle";
+}>;
+```
+
+what a patch's `uv: { … }` record may set — a face spells these plainly, a patch cannot
+
 ## Functions
 
 ### applyFixes()
@@ -1129,6 +1282,28 @@ Apply non-overlapping single-range fixes to source text.
 #### Returns
 
 `string`
+
+***
+
+### bevelPatch()
+
+```ts
+function bevelPatch(min, max): PatchGrid;
+```
+
+A quarter-turn that fills the corner of the box — what a wall does when it turns, and the patch a
+designer reaches for most often after the plain cylinder.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
 
 ***
 
@@ -1210,6 +1385,31 @@ saying so.
 
 ***
 
+### buildPatch()
+
+```ts
+function buildPatch(patch): PatchResult;
+```
+
+The patch as a mesh: an indexed grid of quads, two triangles each, wound so the normal of the triangle
+agrees with the normal of the surface.
+
+Indexed rather than the loose triples a brush produces, because the whole point of a patch is that it is
+smooth — the vertices *are* shared, the normals *are* averaged by sharing them, and a patch tessellated
+flat-shaded would be a patch that looks exactly like the low-poly thing it exists to avoid.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `patch` | [`Patch`](#patch) |
+
+#### Returns
+
+[`PatchResult`](#patchresult)
+
+***
+
 ### className()
 
 ```ts
@@ -1284,6 +1484,27 @@ as other abstract classes turn up in paths; a per-object check would need the lo
 
 ***
 
+### conePatch()
+
+```ts
+function conePatch(min, max): PatchGrid;
+```
+
+a tube that closes to a point at the top of the box
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
 ### countable()
 
 ```ts
@@ -1299,6 +1520,27 @@ function countable(n): boolean;
 #### Returns
 
 `boolean`
+
+***
+
+### cylinderPatch()
+
+```ts
+function cylinderPatch(min, max): PatchGrid;
+```
+
+an open tube filling the box, nine columns round and three rows tall
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
 
 ***
 
@@ -1324,6 +1566,27 @@ asset cache is left alone: it is shared with every other use of the same url.
 
 ***
 
+### domePatch()
+
+```ts
+function domePatch(min, max): PatchGrid;
+```
+
+the top half of a sphere filling the box: five rows from the equator to a single point
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
 ### expand()
 
 ```ts
@@ -1342,6 +1605,89 @@ Resolves @import, substitutes var(--x) and applies .class templates.
 #### Returns
 
 `Promise`\<[`Expanded`](#expanded)\>
+
+***
+
+### flipPatch()
+
+```ts
+function flipPatch(grid): PatchGrid;
+```
+
+the grid with its rows reversed, which turns the surface inside out
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
+### gridProblems()
+
+```ts
+function gridProblems(grid): PatchProblem[];
+```
+
+What is wrong with a control grid, if anything. Reported as a list rather than thrown, because the
+checker wants to name every mistake in a sheet at once and a patch with two short rows has two.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+
+#### Returns
+
+[`PatchProblem`](#patchproblem)[]
+
+***
+
+### insertColumn()
+
+```ts
+function insertColumn(grid, span): PatchGrid;
+```
+
+the same, across: one more span of columns, and the surface it had before
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `span` | `number` |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
+### insertRow()
+
+```ts
+function insertRow(grid, span): PatchGrid;
+```
+
+the grid with one row of spans added after `span`, the surface unchanged — a de Casteljau split
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `span` | `number` |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
 
 ***
 
@@ -1497,6 +1843,36 @@ function nodeName(cls): string;
 
 ***
 
+### normalOn()
+
+```ts
+function normalOn(
+   grid, 
+   u, 
+   v): Vec3;
+```
+
+The outward normal at `(u, v)`, from the two partial derivatives.
+
+A patch can have a seam where both derivatives vanish — the tip of a cone is the usual one — and there
+the cross product is nothing at all. Rather than hand back a zero vector for the renderer to divide by,
+the sample is nudged a hair into the patch and taken again, which is the normal of the surface *beside*
+the singularity and is what any eye would call the normal of the tip.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `u` | `number` |
+| `v` | `number` |
+
+#### Returns
+
+[`Vec3`](#vec3)
+
+***
+
 ### onSceneChange()
 
 ```ts
@@ -1536,6 +1912,66 @@ function parse(text, file?): Sheet;
 
 ***
 
+### patchBounds()
+
+```ts
+function patchBounds(grid): {
+  max: Vec3;
+  min: Vec3;
+};
+```
+
+The box the patch fits in.
+
+The control points, not the surface: a quadratic Bezier lies inside the convex hull of its control
+points, so this never cuts the surface off, and it is what a designer sees when the control hull is
+drawn. Tessellating first would give a tighter box that changed every time the subdivision did.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+
+#### Returns
+
+```ts
+{
+  max: Vec3;
+  min: Vec3;
+}
+```
+
+| Name | Type |
+| ------ | ------ |
+| `max` | [`Vec3`](#vec3) |
+| `min` | [`Vec3`](#vec3) |
+
+***
+
+### patchOfShape()
+
+```ts
+function patchOfShape(
+   shape, 
+   min, 
+   max): PatchGrid;
+```
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `shape` | `"plane"` \| `"cylinder"` \| `"cone"` \| `"dome"` \| `"bevel"` |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
 ### planeFromPoints()
 
 ```ts
@@ -1557,6 +1993,52 @@ right-hand cross product and points away from the solid.
 
 ***
 
+### planePatch()
+
+```ts
+function planePatch(min, max): PatchGrid;
+```
+
+a flat 3 x 3 patch spanning a box's footprint at its floor — the thing to bend into everything else
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `min` | [`Vec3`](#vec3) |
+| `max` | [`Vec3`](#vec3) |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
+### pointOn()
+
+```ts
+function pointOn(
+   grid, 
+   u, 
+   v): Vec3;
+```
+
+where the surface is at `(u, v)`, each in `[0, spans]` of its own direction
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `u` | `number` |
+| `v` | `number` |
+
+#### Returns
+
+[`Vec3`](#vec3)
+
+***
+
 ### print()
 
 ```ts
@@ -1574,6 +2056,118 @@ Re-print a sheet with canonical formatting. Comments are kept but always land on
 #### Returns
 
 `string`
+
+***
+
+### removeColumn()
+
+```ts
+function removeColumn(grid, span): PatchGrid;
+```
+
+the same, across
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `span` | `number` |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
+### removeRow()
+
+```ts
+function removeRow(grid, span): PatchGrid;
+```
+
+the grid with a span of rows dropped, or the grid unchanged when it is down to its last one
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `span` | `number` |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
+
+***
+
+### spansIn()
+
+```ts
+function spansIn(points): number;
+```
+
+how many spans a count of control points is; 3 points is one span, 5 is two, and so on
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `points` | `number` |
+
+#### Returns
+
+`number`
+
+***
+
+### subdivisionsFor()
+
+```ts
+function subdivisionsFor(patch, tolerance?): number;
+```
+
+Segments per span, from the curvature, unless the patch says.
+
+One number for the whole patch rather than one per span, because the tessellation has to stay a regular
+grid for the index buffer — and a patch whose spans need wildly different densities is a patch that
+wants splitting, not a cleverer tessellator.
+
+The rule is the usual one: halving the segment count quadruples the error, so the count that keeps the
+error under a tolerance goes as the square root of the bow. A millimetre of tolerance puts a metre-deep
+bend at about the maximum and leaves a nearly flat patch as two triangles.
+
+#### Parameters
+
+| Parameter | Type | Default value |
+| ------ | ------ | ------ |
+| `patch` | [`Patch`](#patch) | `undefined` |
+| `tolerance` | `number` | `0.001` |
+
+#### Returns
+
+`number`
+
+***
+
+### transformPatch()
+
+```ts
+function transformPatch(grid, m): PatchGrid;
+```
+
+the grid with every control point moved through a 4x4, column-major the way three stores one
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `grid` | [`PatchGrid`](#patchgrid-1) |
+| `m` | `number`[] |
+
+#### Returns
+
+[`PatchGrid`](#patchgrid-1)
 
 ***
 

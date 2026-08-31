@@ -12,7 +12,7 @@
  * an editor that conflated them would offer to select six faces of a solid the designer thinks of as one.
  */
 import type { NodeId, World } from "./document.ts";
-import { childrenOf, nodeById, updateNode, type Node } from "./document.ts";
+import { childrenOf, nodeById, nodeTypeName, updateNode, type Node } from "./document.ts";
 import { ANY_NODE, type Catalogue } from "./catalogue.ts";
 import type { Editor } from "./editor.ts";
 import { hideSelected, isolateSelected } from "./layers.ts";
@@ -56,8 +56,7 @@ export const tagByName = (tags: Tag[], name: string, on: Tag["on"]): Tag | undef
 export function hasTag(node: Node, tag: Tag): boolean {
   if (tag.on !== "node" || !node.classes.includes(tag.name)) return false;
   if (!tag.node || tag.node === ANY_NODE) return true;
-  const type = node.kind === "entity" ? node.type : node.kind === "brush" ? "brush" : "group";
-  return tag.node === type;
+  return tag.node === nodeTypeName(node);
 }
 
 /** every tag a node carries, for the row of chips the inspector shows */
@@ -71,7 +70,9 @@ export const tagsForFace = (world: World, ref: FaceRef, tags: Tag[]): Tag[] => {
 
 function materialAt(world: World, ref: FaceRef): string | undefined {
   const node = nodeById(world, ref.node);
-  return node?.kind === "brush" ? node.brush.faces[ref.face]?.material : undefined;
+  if (node?.kind === "brush") return node.brush.faces[ref.face]?.material;
+  // a patch is one surface made of one material, and face 0 is what everything else calls it
+  return node?.kind === "patch" && ref.face === 0 ? node.patch.material : undefined;
 }
 
 // ---------------------------------------------------------------- finding
@@ -94,6 +95,9 @@ export function facesWithTag(world: World, tag: Tag): FaceRef[] {
         if (f.material === tag.name) out.push({ node: node.id, face });
       });
     }
+    // a patch made of a tagged material carries the tag on its one surface — so `select by water` finds the
+    // curved bit of the pool as well as the flat bits, which is what a designer means by asking
+    if (node.kind === "patch" && node.patch.material === tag.name) out.push({ node: node.id, face: 0 });
     for (const kid of childrenOf(node)) walk(kid);
   };
   for (const layer of world.layers) walk(layer);

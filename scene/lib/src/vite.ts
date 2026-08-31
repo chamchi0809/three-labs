@@ -46,8 +46,8 @@ function threeNames(statements: Statement[]): Set<string> {
   };
   // a builtin is the language's own, never a class — but its body still names plenty of three
   const object = (o: ObjectValue): void => {
-    // a brush is the one builtin that builds three objects of its own, and it names none of them
-    if (o.name === "brush") for (const cls of BRUSH_CLASSES) out.add(cls);
+    // a brush and a patch are the builtins that build three objects of their own, and neither names one
+    if (o.name === "brush" || o.name === "patch") for (const cls of BRUSH_CLASSES) out.add(cls);
     else if (!BUILTINS[o.name]) out.add(className(o.name));
     o.args.forEach(value);
     o.body.forEach(member);

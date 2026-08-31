@@ -11,8 +11,15 @@
    * face inspector are the same box because they are styled once, here, rather than in each component
    * that happens to need one.
    */
+  import IconAlertTriangle from "@tabler/icons-svelte/icons/alert-triangle";
+  import IconBulb from "@tabler/icons-svelte/icons/bulb";
+  import IconMap from "@tabler/icons-svelte/icons/map";
+  import IconPolygon from "@tabler/icons-svelte/icons/polygon";
+  import type { Icon } from "@tabler/icons-svelte";
+
   import { isEmpty } from "../doc/selection.ts";
   import { session } from "../session.svelte.ts";
+  import { tooltip } from "../ui/tooltip.ts";
   import EntityInspector from "./EntityInspector.svelte";
   import FaceInspector from "./FaceInspector.svelte";
   import IssueBrowser from "./IssueBrowser.svelte";
@@ -21,7 +28,12 @@
   // the issue browser is never *suggested*, only chosen: a panel that jumped to the checker because the
   // solid being dragged is briefly off the grid would be unusable
   type Tab = "map" | "entity" | "face" | "issues";
-  const TABS: Tab[] = ["map", "entity", "face", "issues"];
+  const TABS: { id: Tab; icon: Icon; say: string }[] = [
+    { id: "map", icon: IconMap, say: "map — grid, scale and what the level is made of" },
+    { id: "entity", icon: IconBulb, say: "entity — the properties of what is picked" },
+    { id: "face", icon: IconPolygon, say: "face — material and how it sits on the surface" },
+    { id: "issues", icon: IconAlertTriangle, say: "issues — what the checker has to say" },
+  ];
 
   let chosen = $state<Tab | undefined>(undefined);
 
@@ -31,10 +43,13 @@
   const tab = $derived(chosen ?? suggested);
 </script>
 
-<aside class="inspector">
+<div class="inspector">
   <nav>
-    {#each TABS as name (name)}
-      <button class:on={tab === name} onclick={() => (chosen = chosen === name ? undefined : name)}>{name}</button>
+    {#each TABS as { id, icon: Icon, say } (id)}
+      <button class:on={tab === id} use:tooltip={say} onclick={() => (chosen = chosen === id ? undefined : id)}>
+        <Icon size={15} />
+        <span>{id}</span>
+      </button>
     {/each}
   </nav>
   <div class="body">
@@ -43,31 +58,36 @@
     {:else if tab === "issues"}<IssueBrowser />
     {:else}<FaceInspector />{/if}
   </div>
-</aside>
+</div>
 
 <style>
   .inspector {
-    display: grid; grid-template-rows: auto 1fr; width: 320px; min-height: 0;
-    background: var(--panel); border-left: 1px solid var(--line);
+    display: grid; grid-template-rows: auto 1fr;
+    min-height: 0; height: 100%;
+    background: var(--panel);
   }
-  nav { display: flex; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  nav {
+    display: flex; gap: 3px; padding: 6px;
+    background: var(--panel-2); border-bottom: 1px solid var(--border);
+  }
   nav button {
-    flex: 1; height: 20px; cursor: pointer;
-    background: var(--raised); border: 1px solid var(--line); border-radius: 3px;
-    font: var(--mono); color: var(--dim);
+    /* a quarter of the column each while the inspector is a column, and no wider than a tab needs to be
+       once the narrow layout lays it across the whole window */
+    flex: 1 1 0; max-width: 140px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 4px 0 3px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+    font: var(--ui); font-size: 10px; color: var(--muted);
+    transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
   }
-  nav button:hover { border-color: var(--edge); color: var(--text); }
-  nav button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
-  .body { padding: 8px; overflow-y: auto; min-height: 0; }
+  nav button:hover { background: var(--accent-dim); color: var(--p9); }
+  nav button.on { background: var(--accent); border-color: var(--accent); color: var(--p0); }
+  .body { overflow-y: auto; min-height: 0; }
 
-  /* every control in the panel, styled once — the children ask for an input, not for a look */
-  .body :global(input), .body :global(select) {
-    box-sizing: border-box; height: 20px; min-width: 0; padding: 0 5px;
-    background: var(--sunk); border: 1px solid var(--line); border-radius: 3px;
-    font: var(--mono); color: var(--ink);
+  /* every control in the panel, sized once — the shell says what one looks like, this says how tall */
+  .body :global(input:not([type="checkbox"]):not([type="range"])), .body :global(select) {
+    height: 21px;
+    font: var(--mono);
   }
-  .body :global(input:focus), .body :global(select:focus) { outline: 1px solid var(--accent); outline-offset: -1px; }
-  .body :global(input::placeholder) { color: var(--dim); }
   .body :global(input[type="color"]) { padding: 1px; }
-  .body :global(input[type="checkbox"]) { height: auto; }
 </style>

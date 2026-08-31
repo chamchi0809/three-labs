@@ -20,7 +20,7 @@
  */
 import type { Compound, Member, Override, Pos, Template } from "tscene";
 import {
-  childrenOf, type Node, type NodeId, type World, walk,
+  childrenOf, hasChildren, nodeTypeName, type Node, type NodeId, type World, walk,
 } from "../doc/document.ts";
 import { copyOf, type Derived } from "./origin.ts";
 import { readNode, type ReadResult, type Sheets } from "./read.ts";
@@ -53,7 +53,7 @@ export type Inheritance = {
 
 /** what a selector's three parts are matched against — a node head, whatever kind of node it is */
 export const headOfNode = (node: Node): { type: string; id?: string; classes: string[] } => ({
-  type: node.kind === "brush" ? "brush" : node.kind === "entity" ? node.type : "group",
+  type: nodeTypeName(node),
   id: node.sheetId,
   classes: node.classes,
 });
@@ -256,7 +256,7 @@ function mark(node: Node, why: Derived, of: NodeId, id: NodeId): Node {
     id,
     origin: node.origin ? copyOf(node.origin, why, of) : undefined,
   } as Node;
-  if (marked.kind === "brush") return marked;
+  if (!hasChildren(marked)) return marked;
   return { ...marked, children: marked.children.map((k, i) => mark(k, why, of, `${id}.${i}`)) };
 }
 

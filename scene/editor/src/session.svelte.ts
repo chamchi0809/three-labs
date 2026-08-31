@@ -17,7 +17,15 @@ import {
 import { demoMap } from "./doc/demo.ts";
 
 class Session {
-  #history = $state(history(newEditor(demoMap())));
+  /**
+   * `raw`, and it matters twice.
+   *
+   * The history is a plain immutable value that is replaced on every change and never written into, so a
+   * deep proxy buys nothing and costs a wrapper on every node of the tree the renderer walks. And a proxy
+   * is not the thing it wraps: `editor.world === thatWorld` would be false for the world it was built from,
+   * which is exactly the comparison the unsaved-changes marker is.
+   */
+  #history = $state.raw(history(newEditor(demoMap())));
 
   get editor(): Editor {
     return this.#history.editor;
@@ -74,6 +82,17 @@ class Session {
    */
   set(apply: (e: Editor) => Editor): void {
     this.#history = { ...this.#history, editor: apply(this.#history.editor) };
+  }
+
+  /**
+   * A different document entirely: opened, reverted, or started from nothing.
+   *
+   * The history is replaced rather than added to, because the undo stack belongs to the file it was built
+   * against — pressing ⌘Z after opening a map and getting the previous designer's last edit back is not
+   * undo, it is two documents sharing a stack.
+   */
+  load(editor: Editor): void {
+    this.#history = history(editor);
   }
 
   undo(): void {

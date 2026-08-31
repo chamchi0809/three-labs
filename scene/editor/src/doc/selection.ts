@@ -17,8 +17,9 @@ import type { Vec3 } from "tscene";
 import type { Bounds } from "../brush/builder.ts";
 import {
   boundsContain, boundsOverlap, brushesUnder, childrenOf, groupOf, isHidden, isLocked, nodeBounds,
-  nodeById, pathTo, union, walk, type BrushNode, type Node, type NodeId, type World,
+  nodeById, pathTo, solidsUnder, union, walk, type BrushNode, type Node, type NodeId, type World,
 } from "./document.ts";
+import { columnsOf, rowsOf } from "../patch/patch.ts";
 import type { Item, Octree } from "./octree.ts";
 import { queryBounds } from "./octree.ts";
 
@@ -127,18 +128,29 @@ export function selectTouching(world: World, s: Selection, tree: Octree, open?: 
 
 // ---------------------------------------------------------------- faces and handles
 
+/**
+ * How many faces a node offers a click.
+ *
+ * One for a patch, not none: a patch is a single surface, and it being selectable as a surface is what
+ * lets the face inspector paint it with the same drag that paints a wall. Which one it is is always 0.
+ */
+export const faceCount = (node: Node | undefined): number =>
+  node?.kind === "brush" ? node.brush.poly.faces.length : node?.kind === "patch" ? 1 : 0;
+
 export function selectFaces(world: World, s: Selection, refs: FaceRef[], mode: SelectMode = "replace"): Selection {
-  const wanted = refs.filter((f) => isSelectable(world, f.node) && nodeById(world, f.node)?.kind === "brush");
+  const wanted = refs.filter((f) => isSelectable(world, f.node) && f.face < faceCount(nodeById(world, f.node)));
   return { ...NOTHING, faces: combine(s.faces, wanted, mode, faceKey) };
 }
 
-/** every face of the selected solids — what "select all faces of this brush" resolves to */
+/** every face of the selected surfaces — what "select all faces of this brush" resolves to */
 export function selectAllFaces(world: World, s: Selection): Selection {
   const faces: FaceRef[] = [];
   for (const id of s.nodes) {
     const node = nodeById(world, id);
     if (!node) continue;
-    for (const b of brushesUnder(node)) b.brush.poly.faces.forEach((_, face) => faces.push({ node: b.id, face }));
+    for (const solid of solidsUnder(node)) {
+      for (let face = 0; face < faceCount(solid); face++) faces.push({ node: solid.id, face });
+    }
   }
   return { ...NOTHING, faces };
 }
@@ -182,6 +194,12 @@ export function selectionBounds(world: World, s: Selection): Bounds | undefined 
   let box = selectedNodes(world, s).reduce<Bounds | undefined>((acc, n) => union(acc, nodeBounds(n)), undefined);
   for (const f of s.faces) {
     const node = nodeById(world, f.node);
+    // a patch's one surface is the whole patch, so its box is the patch's — there is no sub-part of it to
+    // narrow down to, which is the same reason it has exactly one face to select in the first place
+    if (node?.kind === "patch") {
+      box = union(box, nodeBounds(node));
+      continue;
+    }
     if (node?.kind !== "brush") continue;
     const loop = node.brush.poly.faces[f.face]?.loop ?? [];
     for (const c of loop) {
@@ -203,13 +221,16 @@ export const selectionCentre = (world: World, s: Selection): Vec3 | undefined =>
  */
 export function prune(world: World, s: Selection): Selection {
   const nodes = s.nodes.filter((id) => isSelectable(world, id));
-  const faces = s.faces.filter((f) => {
-    const node = nodeById(world, f.node);
-    return isSelectable(world, f.node) && node?.kind === "brush" && f.face < node.brush.poly.faces.length;
-  });
+  const faces = s.faces.filter(
+    (f) => isSelectable(world, f.node) && f.face < faceCount(nodeById(world, f.node)),
+  );
   const corners = (id: NodeId) => {
     const node = nodeById(world, id);
-    return node?.kind === "brush" ? node.brush.poly.vertices.length : 0;
+    if (node?.kind === "brush") return node.brush.poly.vertices.length;
+    // a patch's control points are picked into the same list, numbered `row * columns + column` — a grid
+    // that lost a span has fewer of them, and the ones past the end are points that no longer exist
+    if (node?.kind === "patch") return rowsOf(node.patch.grid) * columnsOf(node.patch.grid);
+    return 0;
   };
   const vertices = s.vertices.filter((v) => v.vertex < corners(v.node) && isSelectable(world, v.node));
   const edges = s.edges.filter((e) => Math.max(e.a, e.b) < corners(e.node) && isSelectable(world, e.node));

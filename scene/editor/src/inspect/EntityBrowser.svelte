@@ -83,8 +83,8 @@
     background: transparent; border: 1px solid transparent; border-radius: 3px;
     font: var(--mono); color: var(--text); text-align: left;
   }
-  button:hover { background: var(--raised); border-color: var(--line); }
-  button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
+  button:hover { background: var(--panel-2); border-color: var(--border); }
+  button.on { background: var(--accent-dim); border-color: var(--p5); color: var(--p9); }
   .dot { flex: none; width: 8px; height: 8px; border-radius: 2px; }
   .name { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .kind { flex: none; color: var(--dim); }

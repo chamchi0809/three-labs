@@ -8,13 +8,32 @@
  */
 let failed = 0;
 
-export function test(name: string, fn: () => void): void {
+/** the asynchronous checks still running, which {@link settle} is how a suite waits for */
+const pending: Promise<void>[] = [];
+
+export function test(name: string, fn: () => void | Promise<void>): void {
   try {
-    fn();
+    const running = fn();
+    if (running) pending.push(running.catch((e) => blame(name, e)));
   } catch (e) {
-    failed++;
-    console.error(`✗ ${name}\n  ${(e as Error).message.split("\n").slice(0, 4).join("\n  ")}`);
+    blame(name, e);
   }
+}
+
+function blame(name: string, e: unknown): void {
+  failed++;
+  console.error(`✗ ${name}\n  ${(e as Error).message.split("\n").slice(0, 4).join("\n  ")}`);
+}
+
+/**
+ * Waits for every check that returned a promise.
+ *
+ * A suite with asynchronous checks must `await settle()` before {@link report}, or it reports before its
+ * own failures have happened. Top-level await is what makes that safe: `checks.ts` imports each suite with
+ * `await import(...)`, so a suite that has not settled has not finished loading and the next one waits.
+ */
+export function settle(): Promise<void> {
+  return Promise.all(pending.splice(0)).then(() => undefined);
 }
 
 /**

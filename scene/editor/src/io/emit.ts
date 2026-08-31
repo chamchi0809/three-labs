@@ -9,8 +9,9 @@
  * tscene's own printer, so that a brush the editor wrote and a brush a person wrote come out of `print`
  * looking the same — which is the only way a generated file stays a file anyone is willing to edit.
  */
-import type { Member, ObjectValue, UvMode, Value, Vec3 } from "tscene";
+import type { Member, ObjectValue, UvMode, Value, Vec2, Vec3 } from "tscene";
 import { brushToFaces, type Brush } from "../brush/brush.ts";
+import type { Patch } from "../patch/patch.ts";
 import { childrenOf, DEFAULT_LAYER, type GroupNode, type LayerNode, type Node, type World } from "../doc/document.ts";
 import { call, ident, num, setProp, str, SYNTHETIC, vec3 } from "../doc/props.ts";
 import { tidy } from "./literal.ts";
@@ -49,7 +50,9 @@ const isIdent = (name: string): boolean => /^[A-Za-z_][\w-]*$/.test(name);
  */
 export function broomMember(broom: Node["broom"]): Member | undefined {
   const entries: [string, Value][] = [];
-  if (broom.kind) entries.push(["kind", str(broom.kind)]);
+  // a bare word, not a string: an enumerated knob is written the way `@bakery { include: none }` is, and
+  // the checker rejects the quoted form outright
+  if (broom.kind) entries.push(["kind", ident(broom.kind)]);
   if (broom.icon !== undefined) entries.push(["icon", str(broom.icon)]);
   if (broom.color !== undefined) {
     entries.push(["color", { ...SYNTHETIC, kind: "hex", value: broom.color, digits: 6 }]);
@@ -65,9 +68,23 @@ export function broomMember(broom: Node["broom"]): Member | undefined {
   return entries.length ? at("broom", entries) : undefined;
 }
 
-/** the world's `@broom { grid, scale }`, which is a statement rather than a member of anything */
-export const worldBroom = (world: World): Member =>
-  at("broom", [["grid", num(world.broom.grid)], ["scale", num(tidy(world.broom.scale))]]);
+/**
+ * The world's `@broom { grid, scale }`, which is a statement rather than a member of anything.
+ *
+ * `said` is the statement the sheet already has, if it has one. `scale` is written when the designer has
+ * moved off one metre per unit, or when the sheet was already saying it — adding `scale: 1` to a file that
+ * never mentioned it would make every save of every map rewrite a line nobody touched.
+ */
+export const worldBroom = (world: World, said?: Member): Member => {
+  const entries: [string, Value][] = [["grid", num(world.broom.grid)]];
+  if (world.broom.scale !== 1 || mentions(said, "scale")) {
+    entries.push(["scale", num(tidy(world.broom.scale))]);
+  }
+  return at("broom", entries);
+};
+
+const mentions = (member: Member | undefined, name: string): boolean =>
+  member?.kind === "at" && member.value.kind === "record" && member.value.entries.some((e) => e.name === name);
 
 // ---------------------------------------------------------------- solids
 
@@ -81,8 +98,8 @@ export function faceMembers(brush: Brush): Member[] {
     const material = brush.faces[i]?.material;
     if (material) inner.push(prop("material", varOf(material)));
     if (f.uv) inner.push(prop("uv", uvValue(f.uv)));
-    if (f.offset) inner.push(prop("offset", call("vec2", [num(tidy(f.offset[0])), num(tidy(f.offset[1]))])));
-    if (f.scale) inner.push(prop("scale", call("vec2", [num(tidy(f.scale[0])), num(tidy(f.scale[1]))])));
+    if (f.offset) inner.push(prop("offset", vec2Of(f.offset)));
+    if (f.scale) inner.push(prop("scale", vec2Of(f.scale)));
     if (f.rotation) inner.push(prop("rotation", angle(f.rotation)));
 
     const head = call("face", f.points.map((p) => vec3([tidy(p[0]), tidy(p[1]), tidy(p[2])])));
@@ -91,6 +108,38 @@ export function faceMembers(brush: Brush): Member[] {
 }
 
 const tidyVec3 = (v: Vec3): Vec3 => [tidy(v[0]), tidy(v[1]), tidy(v[2])];
+
+// ---------------------------------------------------------------- patches
+
+/**
+ * What the surface is made of: the material, the subdivision count, and the layout.
+ *
+ * The layout keys go in a `uv: { … }` record rather than at the top level the way a face writes them,
+ * because a patch *is* a `Mesh` and `scale`, `offset` and `rotation` on a `Mesh` are its transform. Only
+ * what has been moved off the default is written, so a patch nobody has textured says nothing at all here.
+ */
+export function patchSettings(patch: Patch): Member[] {
+  const out: Member[] = [];
+  if (patch.material) out.push(prop("material", varOf(patch.material)));
+  if (patch.subdivisions !== undefined) out.push(prop("subdivisions", num(patch.subdivisions)));
+
+  const uv: [string, Value][] = [];
+  const { offset, scale, rotation } = patch.uv;
+  if (scale[0] !== 1 || scale[1] !== 1) uv.push(["scale", vec2Of(scale)]);
+  if (offset[0] || offset[1]) uv.push(["offset", vec2Of(offset)]);
+  if (rotation) uv.push(["rotation", angle(rotation)]);
+  if (uv.length) out.push(prop("uv", record(uv)));
+  return out;
+}
+
+/**
+ * The `row(…)` grid — one row per line, because a grid wrapped by column count is a grid nobody can read,
+ * and the rows are the thing a person hand-editing a patch actually reaches for.
+ */
+export const rowMembers = (patch: Patch): Member[] =>
+  patch.grid.map((line) => child(call("row", line.map((p) => vec3(tidyVec3(p))))));
+
+const vec2Of = (v: Vec2): Value => call("vec2", [num(tidy(v[0])), num(tidy(v[1]))]);
 
 const uvValue = (uv: UvMode): Value =>
   uv.kind === "parallel" && uv.u && uv.v
@@ -135,6 +184,9 @@ export function ownMembers(node: Node): Member[] {
     const props = nameAt(node) === "prop" ? setProp(node.props, "name", str(node.name)) : node.props;
     return [...head, ...props];
   }
+  // a patch's three surface keys are settings, not geometry: they are diffed by name like any other
+  // property, which is what lets a `uv` that went back to the default be dropped rather than blanked
+  if (node.kind === "patch") return [...head, ...patchSettings(node.patch), ...node.props];
   return [...head, ...node.props];
 }
 
@@ -142,6 +194,7 @@ export function ownMembers(node: Node): Member[] {
 export function headOf(node: Node): ObjectValue {
   const name =
     node.kind === "brush" ? "brush"
+    : node.kind === "patch" ? "patch"
     : node.kind === "entity" ? node.type
     : "group";
   // a group whose name lives in a `name:` property still keeps whatever `#id` the sheet gave it: the two
@@ -165,7 +218,9 @@ export function headOf(node: Node): ObjectValue {
 export function toObject(node: Node): ObjectValue {
   const head = headOf(node);
   const inside =
-    node.kind === "brush" ? faceMembers(node.brush) : childrenOf(node).map((k) => child(toObject(k)));
+    node.kind === "brush" ? faceMembers(node.brush)
+    : node.kind === "patch" ? rowMembers(node.patch)
+    : childrenOf(node).map((k) => child(toObject(k)));
   const members = [...ownMembers(node), ...inside];
   // a node with nothing inside it is written as a call, which is how `pointLight(#fff, 2)` stays one line
   return members.length ? body(head, members) : head;

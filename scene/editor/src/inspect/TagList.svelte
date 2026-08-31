@@ -46,20 +46,26 @@
 
 <style>
   ul { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; gap: 4px; align-items: center; padding: 1px 2px; font: var(--mono); }
-  .swatch { flex: none; width: 6px; height: 6px; border: 1px solid var(--line); border-radius: 2px; }
+  li {
+    display: flex; gap: 4px; align-items: center;
+    padding: 1px 3px; border-radius: 4px; font: var(--mono);
+  }
+  li:hover { background: color-mix(in srgb, var(--accent-dim) 55%, transparent); }
+  .swatch { flex: none; width: 7px; height: 7px; border: 1px solid var(--border); border-radius: 2px; }
   .name {
     flex: 1; min-width: 0; overflow: hidden; text-align: left; white-space: nowrap; text-overflow: ellipsis;
-    background: transparent; border: 0; padding: 1px 2px; color: var(--ink); cursor: pointer;
+    background: transparent; border: 0; padding: 1px 2px; color: var(--p9); cursor: pointer;
   }
   .name:hover { color: var(--accent); }
   .on { color: var(--dim); }
   .count { width: 20px; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
   li button:not(.name) {
     flex: none; padding: 0 5px; cursor: pointer;
-    background: var(--raised); border: 1px solid var(--line); border-radius: 3px; font: var(--mono); color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
+    font: var(--mono); color: var(--muted);
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
   }
-  li button:not(.name):hover { border-color: var(--edge); color: var(--ink); }
-  .mark { color: var(--ink); background: var(--on); }
+  li button:not(.name):hover { background: var(--accent-dim); border-color: var(--p5); color: var(--p9); }
+  .mark { color: var(--p0) !important; background: var(--accent) !important; border-color: var(--accent) !important; }
   .none { margin: 4px 0; color: var(--dim); font: var(--mono); }
 </style>

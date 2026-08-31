@@ -64,7 +64,7 @@
     const at = (p: Vec2): [number, number] => [ox + p[0] * k, oy - p[1] * k];
 
     c.lineWidth = 1;
-    c.strokeStyle = style("--line") || "#24272c";
+    c.strokeStyle = style("--border") || "#3b405e";
     c.beginPath();
     for (let u = Math.floor(lo[0]); u <= Math.ceil(hi[0]); u++) {
       const [x] = at([u, 0]);
@@ -79,7 +79,7 @@
     c.stroke();
 
     // the material's origin, which is the corner every offset is measured from
-    c.strokeStyle = style("--edge") || "#3d4653";
+    c.strokeStyle = style("--p5") || "#60556e";
     c.beginPath();
     const [zx, zy] = at([0, 0]);
     c.moveTo(Math.round(zx) + 0.5, 0);
@@ -95,13 +95,13 @@
       else c.moveTo(x, y);
     });
     c.closePath();
-    c.fillStyle = "#7aa2f722";
+    c.fillStyle = "#c7786f22";
     c.fill();
-    c.strokeStyle = style("--accent") || "#7aa2f7";
+    c.strokeStyle = style("--accent") || "#c7786f";
     c.lineWidth = 1.5;
     c.stroke();
 
-    c.fillStyle = style("--accent") || "#7aa2f7";
+    c.fillStyle = style("--accent") || "#c7786f";
     for (const p of loop) {
       const [x, y] = at(p);
       c.fillRect(x - 1.5, y - 1.5, 3, 3);
@@ -114,6 +114,6 @@
 <style>
   canvas {
     display: block; width: 100%;
-    background: var(--sunk); border: 1px solid var(--line); border-radius: 3px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
   }
 </style>

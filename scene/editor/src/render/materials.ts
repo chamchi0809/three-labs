@@ -24,8 +24,8 @@ import {
 import type { Node } from "three/webgpu";
 import {
   attribute, bitAnd, cameraPosition, cameraProjectionMatrix, color, float, floor, fwidth, int, max, mix,
-  mod, modelViewMatrix, normalWorld, oneMinus, positionGeometry, positionWorld, screenDPR, select,
-  smoothstep, uniform, vec3, vec4, viewportSize,
+  mod, modelViewMatrix, normalWorld, oneMinus, positionGeometry, positionWorld, round, screenDPR,
+  select, smoothstep, uniform, vec3, vec4, viewportSize,
 } from "three/tsl";
 import { FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED } from "./batch.ts";
 import { HANDLE_PIXELS } from "./handles.ts";
@@ -35,27 +35,33 @@ import { HANDLE_PIXELS } from "./handles.ts";
 /**
  * The editor's own colours, which are not the map's.
  *
- * Selection is a warm red because that is what every brush editor since Worldcraft has used and a level
- * designer's hands already know it. Everything else is chosen to stay legible against both a lit map and
- * an unlit one.
+ * The same ramp the panels are on — Lospec "PurpleMorning8" — so that a viewport is part of the window
+ * rather than a rectangle of somebody else's editor set into it. Selection is a warm red because that is
+ * what every brush editor since Worldcraft has used and a level designer's hands already know it, and the
+ * ramp's accent happens to be exactly that hue.
+ *
+ * Two things deliberately leave the palette. The axes stay red/green/blue, because they are read as a
+ * convention rather than as decoration and there is no green or blue in the ramp to read them as. And the
+ * hover is the pale end of the ramp rather than another warm tone, because hover and selection have to be
+ * told apart at a glance and two reds cannot be.
  */
 export const COLOURS = {
   /** what a viewport clears to, and what the 2D grid is drawn onto */
-  background: 0x1b1d21,
-  face: 0x9a9a9e,
-  edge: 0x24242a,
-  selected: 0xd0402f,
-  faceSelected: 0xff6a3d,
-  hovered: 0xffc14d,
-  locked: 0x5c6470,
-  outside: 0x6a6a72,
-  grid: 0x14141a,
-  axisX: 0xd0402f,
-  axisY: 0x4caf50,
-  axisZ: 0x3f7fd0,
-  handle: 0xf0f0f4,
-  link: 0x62c2a8,
-  guide: 0xffc14d,
+  background: 0x171426,
+  face: 0xa6a0ae,
+  edge: 0x211d38,
+  selected: 0xc7584c,
+  faceSelected: 0xe0836b,
+  hovered: 0xcdd4a5,
+  locked: 0x60556e,
+  outside: 0x6b6379,
+  grid: 0x0d0b18,
+  axisX: 0xc7584c,
+  axisY: 0x8fae62,
+  axisZ: 0x6a7fc0,
+  handle: 0xe9edd2,
+  link: 0x6fb39c,
+  guide: 0xcfa98a,
 } as const;
 
 // ---------------------------------------------------------------- reading the flags
@@ -64,12 +70,22 @@ const flag = /*@__PURE__*/ attribute<"float">("flag", "float");
 const pick = /*@__PURE__*/ attribute<"vec2">("pick", "vec2");
 
 /**
- * How much of one flag bit is set, as 0 or 1.
+ * The bit field as an integer again, rounded rather than truncated.
  *
- * The bit field arrives as a float because a vertex attribute is the cheapest thing there is and floats
- * are what every backend agrees on; `int()` is where it becomes a number with bits in it again.
+ * The rounding is not a nicety. A vertex attribute is *interpolated*, and the barycentric weights a
+ * rasteriser interpolates with do not sum to exactly one at every pixel — so a face whose six vertices all
+ * carry `8` arrives as `7.9999995` at some of them, and `int()`, which truncates, reads `7`. Seven has the
+ * lock bit in it. That is a whole face flickering between hovered and locked as the cursor moves a pixel,
+ * and in the pick pass — where locked means "writes no identity" — it is a hover that switches itself off,
+ * which is precisely the bug this line existed to cause.
+ *
+ * Rounding is enough because the value is always a small integer at the vertices, so the interpolated
+ * value is always within a hair of it.
  */
-const has = (bit: number) => select(bitAnd(int(flag), int(bit)).greaterThan(int(0)), float(1), float(0));
+const flags = /*@__PURE__*/ int(/*@__PURE__*/ round(flag));
+
+/** how much of one flag bit is set, as 0 or 1 */
+const has = (bit: number) => select(bitAnd(flags, int(bit)).greaterThan(int(0)), float(1), float(0));
 
 /**
  * Everything the flags say about a surface, in the order a designer expects to see: lock and out-of-group
@@ -317,9 +333,17 @@ export function pickMaterial(): MeshBasicNodeMaterial {
   return material;
 }
 
-/** the pick attribute as a colour: sixteen bits across red and green, eight more in blue */
-const encode = () =>
-  vec3(mod(pick.x, 256).div(255), floor(pick.x.div(256)).div(255), pick.y.div(255));
+/**
+ * The pick attribute as a colour: sixteen bits across red and green, eight more in blue.
+ *
+ * Rounded first, for the same reason {@link flags} is: the identity is an integer at every vertex of the
+ * face, but it arrives here interpolated, and `floor` on `255.99999` is `255` where `floor` on `256` is
+ * `256` — one ordinal in every 256 would otherwise lose its high byte at some pixels and not others.
+ */
+const encode = () => {
+  const id = round(pick);
+  return vec3(mod(id.x, 256).div(255), floor(id.x.div(256)).div(255), id.y.div(255));
+};
 
 /** the ordinal and face a pick pixel was written with — the exact inverse of {@link encode} */
 export const decodePick = (rgba: Uint8Array | Uint8ClampedArray, at = 0): { ordinal: number; face: number } => ({

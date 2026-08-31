@@ -13,7 +13,7 @@
    */
   import type { Value } from "tscene";
   import type { Row } from "../doc/inspect.ts";
-  import { asVec3, bool, hex, ident, num, read, ref, str, vec3 } from "../doc/props.ts";
+  import { asColour, asVec3, bool, colour as colourValue, ident, num, read, ref, str, vec3 } from "../doc/props.ts";
   import { printValue } from "../io/literal.ts";
 
   type Props = {
@@ -34,7 +34,7 @@
   const number = $derived(value?.kind === "number" ? value.value : 0);
   const unit = $derived(value?.kind === "number" ? value.unit : "");
   const triple = $derived(asVec3(value) ?? [0, 0, 0]);
-  const colour = $derived(value?.kind === "hex" ? value.value : value?.kind === "number" ? value.value : 0);
+  const colour = $derived(asColour(value) ?? 0);
   const flag = $derived(value?.kind === "ident" && value.name === "true");
   const named = $derived(value?.kind === "ref" || value?.kind === "var" ? value.name : "");
   // an `ident` is a bare word, not a quoted string, and writing it back as one would change what it means
@@ -77,10 +77,11 @@
         {/each}
       </span>
     {:else if row.type === "colour"}
+      <!-- written back as `color(#rrggbb)`, never as the bare hex: see `colour` in doc/props.ts -->
       <input class="swatch" type="color" value={swatch(colour)}
-        onchange={(e) => set(hex(parseInt(textOf(e.target).slice(1), 16)))} />
+        onchange={(e) => set(colourValue(parseInt(textOf(e.target).slice(1), 16)))} />
       <input class="hexed" value={mixed ? "" : swatch(colour)} placeholder={mixed ? "mixed" : ""}
-        onchange={(e) => set(hex(parseInt(textOf(e.target).replace("#", ""), 16) || 0))} />
+        onchange={(e) => set(colourValue(parseInt(textOf(e.target).replace("#", ""), 16) || 0))} />
     {:else if row.type === "bool"}
       <input type="checkbox" checked={flag} indeterminate={mixed}
         onchange={(e) => set(bool((e.target as HTMLInputElement).checked))} />
@@ -120,7 +121,7 @@
     font: var(--mono); color: var(--text);
     overflow: hidden; text-overflow: ellipsis;
   }
-  .name:hover, .name:focus { border-color: var(--line); background: var(--sunk); }
+  .name:hover, .name:focus { border-color: var(--border); background: var(--bg); }
   .name[readonly] { cursor: default; }
   .name[readonly]:hover { border-color: transparent; background: transparent; }
   .value { display: flex; gap: 4px; align-items: center; min-width: 0; }
@@ -128,7 +129,7 @@
   .unit { flex: none; color: var(--dim); font: var(--mono); }
   code {
     flex: 1; min-width: 0; padding: 2px 4px;
-    background: var(--sunk); border: 1px solid var(--line); border-radius: 2px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 2px;
     font: var(--mono); color: var(--dim);
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
@@ -137,8 +138,8 @@
     background: transparent; border: none; border-radius: 2px;
     font: var(--mono); color: var(--dim);
   }
-  .clear:hover:not(:disabled) { background: var(--on); color: var(--ink); }
+  .clear:hover:not(:disabled) { background: var(--accent-dim); color: var(--p9); }
   .clear:disabled { opacity: 0.25; cursor: default; }
-  .swatch { flex: none; width: 22px; height: 18px; padding: 0; border: 1px solid var(--line); background: none; }
+  .swatch { flex: none; width: 22px; height: 18px; padding: 0; border: 1px solid var(--border); background: none; }
   .hexed { width: 72px; flex: none; }
 </style>

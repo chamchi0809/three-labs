@@ -22,5 +22,8 @@
  */
 export { applyLightmap, loadLightmap, decodeFloats, encodeFloats, MANIFEST_VERSION, type Lightmap, type LightmapManifest } from "./apply.ts";
 export { probeDirection, probeWeights, type PlacedProbe, type ProbeWeight } from "./probe.ts";
-export { bakeEnabled, bakeGeometry, bakerySettings, nodeKey } from "./scene.ts";
+// `validateBakery` alongside them: it reads a loaded scene and nothing else, so a tool that builds the
+// scene itself — an editor baking the document it has open — can check the sheet's `@bakery` blocks
+// without going through `bakeSceneFile`, which is the only thing that used to call it
+export { bakeEnabled, bakeGeometry, bakerySettings, nodeKey, validateBakery } from "./scene.ts";
 export type { MaterialBakery, NodeBakery, SceneBakery } from "../names.ts";

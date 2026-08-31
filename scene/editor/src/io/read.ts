@@ -14,12 +14,15 @@
  */
 import type {
   BrushFace, Compound, Diagnostic, Member, NodeBroom, ObjectValue, Override, Pos, Sheet, Statement,
-  Template, Value,
+  Template, Value, Vec3,
 } from "tscene";
 import { brushFromFaces, faceAttributes, type Brush, type FaceAttributes } from "../brush/brush.ts";
+import { gridFromRows, patchOf, patchUv, type Patch, type PatchUv } from "../patch/patch.ts";
 import {
-  brushNode, DEFAULT_LAYER, entityNode, groupNode, layerNode, type LayerNode, type Node, type World,
+  brushNode, DEFAULT_LAYER, entityNode, groupNode, layerNode, patchNode, type LayerNode, type Node,
+  type World,
 } from "../doc/document.ts";
+import { asColour } from "../doc/props.ts";
 import { literalBool, literalNumber, literalString, literalUv, literalVar, literalVec2, literalVec3 } from "./literal.ts";
 import { fileOrigin, originOf, type Origin } from "./origin.ts";
 import { findBraces } from "./scan.ts";
@@ -140,6 +143,10 @@ export function readNode(o: ObjectValue, file: string, text: string, top = false
     // somebody parented to one
     if (brush) return brushNode(brush, { ...shared, props: o.body.filter((m) => !isOwn(m)) });
   }
+  if (o.name === "patch") {
+    const patch = readPatch(o);
+    if (patch) return patchNode(patch, { ...shared, props: o.body.filter((m) => !isPatchOwn(m)) });
+  }
   if (o.name === "group") {
     const name = literalString(valueOfProp(props, "name")) ?? o.id ?? (top ? DEFAULT_LAYER : "Group");
     const rest = props.filter((m) => !(m.kind === "prop" && m.name === "name"));
@@ -153,6 +160,12 @@ export function readNode(o: ObjectValue, file: string, text: string, top = false
 /** the members of a solid's body that the editor has taken over: its `@broom` and its `face(…)` list */
 const isOwn = (m: Member): boolean =>
   (m.kind === "at" && m.name === "broom") || (m.kind === "node" && m.object.name === "face");
+
+/** the same for a patch: its `@broom`, its `row(…)` grid, and the three keys that describe the surface */
+const isPatchOwn = (m: Member): boolean =>
+  (m.kind === "at" && m.name === "broom") ||
+  (m.kind === "node" && m.object.name === "row") ||
+  (m.kind === "prop" && (m.name === "material" || m.name === "subdivisions" || m.name === "uv"));
 
 function originAt(o: ObjectValue, file: string, text: string): Origin {
   const span: Pos = { start: o.start, end: o.end, file };
@@ -185,7 +198,7 @@ const valueOfProp = (props: Member[], name: string): Value | undefined =>
 /** the `@broom { … }` of a node, read against the same table the checker validates it with */
 export function readBroom(record: Value): NodeBroom {
   const out: NodeBroom = {};
-  const kind = literalString(entryOf(record, "kind"));
+  const kind = wordOf(entryOf(record, "kind"));
   if (kind === "point" || kind === "brush") out.kind = kind;
   const icon = literalString(entryOf(record, "icon"));
   if (icon !== undefined) out.icon = icon;
@@ -214,7 +227,23 @@ export function readBroom(record: Value): NodeBroom {
   return out;
 }
 
-const hexOf = (v: Value | undefined): number | undefined => (v?.kind === "hex" ? v.value : undefined);
+/**
+ * `@broom { color: #ffcc66 }` — a bare hex, because this block is settings for a tool rather than
+ * properties for three, and a number is what it is read back as. `color(#ffcc66)` is read too, for a
+ * sheet written by hand by somebody who learned the spelling the scene properties need.
+ */
+const hexOf = (v: Value | undefined): number | undefined => asColour(v);
+
+/**
+ * A setting written from a fixed list of words — `kind: brush`, the way `@bakery` writes `include: none`.
+ *
+ * A bare word, because that is what the checker insists on for an enumerated knob and what the runtime
+ * hands back as a string anyway. The quoted form is read too and never written: sheets saved by an earlier
+ * three-broom say `kind: "brush"`, and a map that stopped being a brush entity on the day the spelling was
+ * fixed would be a map the editor silently redrew.
+ */
+const wordOf = (v: Value | undefined): string | undefined =>
+  v?.kind === "ident" ? v.name : v?.kind === "string" ? v.value : undefined;
 
 // ---------------------------------------------------------------- solids
 
@@ -281,6 +310,65 @@ export function readBrush(o: ObjectValue): Brush | undefined {
       return material ? { ...f, material } : f;
     }),
   };
+}
+
+// ---------------------------------------------------------------- patches
+
+/**
+ * The surface a `patch { row(…) … }` describes, or nothing when any part of it is an expression — the
+ * same deal a brush gets, and for the same reason. A grid that is ragged or even-sided is nothing too:
+ * the runtime refuses to build it, and an editor that quietly repaired it would be writing a different
+ * map back than the one it opened.
+ */
+export function readPatch(o: ObjectValue): Patch | undefined {
+  const rows: (Vec3 | undefined)[][] = [];
+  let material: string | undefined;
+  let subdivisions: number | undefined;
+  let uv = patchUv();
+
+  for (const m of o.body) {
+    if (m.kind === "node" && m.object.name === "row") {
+      rows.push(m.object.args.map(literalVec3));
+      continue;
+    }
+    if (m.kind !== "prop") continue;
+    if (m.name === "material") {
+      const name = literalVar(m.value);
+      if (!name) return undefined;
+      material = name;
+    } else if (m.name === "subdivisions") {
+      const n = literalNumber(m.value);
+      if (n === undefined) return undefined;
+      subdivisions = n;
+    } else if (m.name === "uv") {
+      const read = readPatchUv(m.value);
+      if (!read) return undefined;
+      uv = read;
+    }
+  }
+
+  const grid = gridFromRows(rows);
+  if (!grid) return undefined;
+  return patchOf(grid, { ...(material ? { material } : {}), ...(subdivisions !== undefined ? { subdivisions } : {}), uv });
+}
+
+/** `uv: { scale: …; offset: …; rotation: … }` — the record a patch keeps its layout in, since it is a Mesh */
+function readPatchUv(v: Value): PatchUv | undefined {
+  if (v.kind !== "record") return undefined;
+  const uv = patchUv();
+  for (const e of v.entries) {
+    if (e.name === "rotation") {
+      const angle = literalNumber(e.value);
+      if (angle === undefined) return undefined;
+      uv.rotation = angle;
+      continue;
+    }
+    if (e.name !== "scale" && e.name !== "offset") return undefined;
+    const pair = literalVec2(e.value);
+    if (!pair) return undefined;
+    uv[e.name] = pair;
+  }
+  return uv;
 }
 
 // ---------------------------------------------------------------- selectors, for @override

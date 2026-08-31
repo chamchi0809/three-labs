@@ -482,7 +482,7 @@ await check("a brush completes its faces, and a face body its own table", async 
   await edit(doc);
   // `@broom` reads its own table, exactly as `@bakery` does
   assert.deepEqual(labels(await request("textDocument/completion", { textDocument: { uri }, position: { line: 8, character: 4 } })).sort(),
-    ["color", "hidden", "icon", "kind", "layer", "locked", "size"]);
+    ["at", "color", "hidden", "icon", "kind", "layer", "link", "locked", "protect", "size"]);
 
   const hover = await request("textDocument/hover", { textDocument: { uri }, position: posIn(doc, "brush", 2) });
   assert.match(hover.contents.value, /convex solid/);

@@ -17,6 +17,7 @@ import { entityTool } from "./entity.ts";
 import { extrudeTool } from "./extrude.ts";
 import { rotateTool, scaleTool, shearTool } from "./gizmo.ts";
 import { moveTool } from "./move.ts";
+import { patchTool } from "./patch.ts";
 import { selectTool } from "./select.ts";
 import { shapeTool } from "./shape.ts";
 import { sweepTool } from "./sweep.ts";
@@ -25,7 +26,7 @@ import { TOOLS, newToolBox } from "./tools.ts";
 
 /** every tool this editor has, named one at a time so a new one that never reaches `TOOLS` is caught */
 const EVERY: Tool[] = [
-  selectTool, moveTool, rotateTool, scaleTool, shearTool, shapeTool, entityTool,
+  selectTool, moveTool, rotateTool, scaleTool, shearTool, shapeTool, patchTool, entityTool,
   extrudeTool, sweepTool, clipTool, vertexTool, edgeTool, faceTool, attributesTool,
 ];
 
@@ -38,7 +39,7 @@ test("every tool that exists is in the bar, and nothing is in it twice", () => {
 test("the order is the order of a working day: pick and place, draw, shape, dress", () => {
   const ids: ToolId[] = [
     "select", "move", "rotate", "scale", "shear",
-    "shape", "entity",
+    "shape", "patch", "entity",
     "extrude", "sweep", "clip",
     "vertex", "edge", "face",
     "attributes",
@@ -71,6 +72,9 @@ test("every tool says what it is and what to do with it", () => {
 
 test("the tools that work on parts of a solid are the ones that ask for handles", () => {
   assert.deepEqual(vertexTool.handles, { vertices: true });
+  // the patch tool asks for the same kind, and gets a patch's control points instead — they are the one
+  // thing about a patch a designer takes hold of, and there is no other kind of handle they could be
+  assert.deepEqual(patchTool.handles, { vertices: true });
   assert.deepEqual(edgeTool.handles, { edges: true });
   assert.deepEqual(faceTool.handles, { faces: true });
   assert.deepEqual(sweepTool.handles, { faces: true });

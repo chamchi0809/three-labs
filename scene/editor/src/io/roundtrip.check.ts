@@ -8,9 +8,10 @@ import { report, test } from "../check.ts";
 import { cuboid } from "../brush/builder.ts";
 import { brushOf } from "../brush/brush.ts";
 import {
-  brushNode, entityNode, moveNodes, removeNodes, updateNode, type BrushNode, type EntityNode,
-  type GroupNode, type Node, type World,
+  brushNode, childrenOf, entityNode, moveNodes, patchNode, removeNodes, updateNode, type BrushNode,
+  type EntityNode, type GroupNode, type Node, type PatchNode, type World,
 } from "../doc/document.ts";
+import { addRow, movePoints, patchShape, patchUv, rowsOf } from "../patch/patch.ts";
 import { setNumber, setString } from "../doc/props.ts";
 import { readWorld, type Sheets } from "./read.ts";
 import { writeWorld, type Project } from "./write.ts";
@@ -40,7 +41,7 @@ const find = (world: World, sheetId: string): Node => {
 };
 const search = (node: Node, sheetId: string): Node | undefined => {
   if (node.sheetId === sheetId) return node;
-  for (const kid of node.kind === "brush" ? [] : node.children) {
+  for (const kid of childrenOf(node)) {
     const hit = search(kid, sheetId);
     if (hit) return hit;
   }
@@ -273,7 +274,11 @@ test("a sheet that never mentioned the grid gets one only when it stops being th
   const { project: p, world } = project({ [ROOT]: before });
   assert.equal(saved(world, p), before, "the default says nothing");
   const next: World = { ...world, broom: { grid: 1, scale: 1 } };
-  assert.equal(saved(next, p), `@broom { grid: 1; scale: 1 };\n\nmesh #a (boxGeometry(1, 1, 1));\n`);
+  // and only the grid: `scale` is at its default too, and a sheet that never said it does not start now
+  assert.equal(saved(next, p), `@broom { grid: 1 };\n\nmesh #a (boxGeometry(1, 1, 1));\n`);
+
+  const scaled: World = { ...world, broom: { grid: 1, scale: 100 } };
+  assert.equal(saved(scaled, p), `@broom { grid: 1; scale: 100 };\n\nmesh #a (boxGeometry(1, 1, 1));\n`);
 });
 
 // ---------------------------------------------------------------- names and heads
@@ -346,6 +351,97 @@ test("two saves in a row produce the same thing", () => {
   const once = saved(world, p);
   const twice = project({ [ROOT]: once });
   assert.equal(saved(twice.world, twice.project), once);
+});
+
+// ---------------------------------------------------------------- patches
+
+const SHEET_PATCH = `group #Hall {
+  // one surface, so there is no seam down the middle of the vault to light twice
+  patch #roof {
+    material: var(--wall);
+    uv: { scale: vec2(2, 2) };
+    row(vec3(0, 0, 0), vec3(2, 0, 0), vec3(4, 0, 0))
+    row(vec3(0, 2, 2), vec3(2, 3, 2), vec3(4, 2, 2))
+    row(vec3(0, 0, 4), vec3(2, 0, 4), vec3(4, 0, 4))
+  }
+}
+`;
+
+test("a hand-written patch is read as one and written back byte for byte", () => {
+  const { project: p, world } = project({ [ROOT]: SHEET_PATCH });
+  const roof = find(world, "roof") as PatchNode;
+  assert.equal(roof.kind, "patch");
+  assert.equal(roof.patch.material, "wall");
+  assert.deepEqual(roof.patch.uv.scale, [2, 2]);
+  assert.equal(rowsOf(roof.patch.grid), 3);
+  assert.equal(saved(world, p), SHEET_PATCH);
+});
+
+test("a control point dragged rewrites the row it is in, and only that row", () => {
+  const { project: p, world } = project({ [ROOT]: SHEET_PATCH });
+  const roof = find(world, "roof") as PatchNode;
+  const next = updateNode<PatchNode>(world, roof.id, (n) => ({
+    ...n,
+    patch: movePoints(n.patch, [{ row: 1, column: 1 }], [0, 1, 0]),
+  }));
+  const text = saved(next, p);
+  assert.ok(text.includes("row(vec3(0, 2, 2), vec3(2, 4, 2), vec3(4, 2, 2))"), text);
+  // the comment, the material, the layout and the two rows nobody touched are all where they were
+  for (const line of ["  // one surface", "    material: var(--wall);", "    uv: { scale: vec2(2, 2) };",
+    "    row(vec3(0, 0, 0), vec3(2, 0, 0), vec3(4, 0, 0))",
+    "    row(vec3(0, 0, 4), vec3(2, 0, 4), vec3(4, 0, 4))"]) {
+    assert.ok(text.includes(line), line);
+  }
+});
+
+test("a grid that gained a span is rewritten whole, because row 1 is no longer row 1", () => {
+  const { project: p, world } = project({ [ROOT]: SHEET_PATCH });
+  const roof = find(world, "roof") as PatchNode;
+  const next = updateNode<PatchNode>(world, roof.id, (n) => ({ ...n, patch: addRow(n.patch, 0) }));
+  const text = saved(next, p);
+  assert.equal(text.match(/row\(/g)?.length, 5, text);
+  assert.ok(text.includes("material: var(--wall);"), "the settings are not geometry and did not move");
+  assert.ok(text.includes("// one surface"), "nor is the comment above the node");
+});
+
+test("a layout back at its default is dropped rather than written out blank", () => {
+  const { project: p, world } = project({ [ROOT]: SHEET_PATCH });
+  const roof = find(world, "roof") as PatchNode;
+  const next = updateNode<PatchNode>(world, roof.id, (n) => ({ ...n, patch: { ...n.patch, uv: patchUv() } }));
+  const text = saved(next, p);
+  assert.ok(!text.includes("uv:"), text);
+  assert.ok(text.includes("material: var(--wall);"), "and the material beside it stayed");
+});
+
+test("a material painted onto a patch is one line changed", () => {
+  const { project: p, world } = project({ [ROOT]: SHEET_PATCH });
+  const roof = find(world, "roof") as PatchNode;
+  const next = updateNode<PatchNode>(world, roof.id, (n) => ({ ...n, patch: { ...n.patch, material: "stone" } }));
+  assert.equal(saved(next, p), SHEET_PATCH.replace("var(--wall)", "var(--stone)"));
+});
+
+test("a new patch is printed with its rows one per line", () => {
+  const { project: p, world } = project({ [ROOT]: `group #Hall {\n}\n` });
+  const fresh = patchNode(patchShape("plane", [0, 0, 0], [4, 0, 4]));
+  const next = updateNode<GroupNode>(world, find(world, "Hall").id, (n) => ({ ...n, children: [fresh] }));
+  assert.equal(
+    saved(next, p),
+    `group #Hall {\n` +
+      `  patch {\n` +
+      `    row(vec3(0, 0, 0), vec3(2, 0, 0), vec3(4, 0, 0))\n` +
+      `    row(vec3(0, 0, 2), vec3(2, 0, 2), vec3(4, 0, 2))\n` +
+      `    row(vec3(0, 0, 4), vec3(2, 0, 4), vec3(4, 0, 4))\n` +
+      `  }\n` +
+      `}\n`,
+  );
+});
+
+test("a patch the editor could not read stays an entity and survives untouched", () => {
+  // two rows: the runtime would refuse it too, and neither of us is going to guess at a third
+  const weird = `patch #odd {\n  row(vec3(0, 0, 0), vec3(1, 0, 0), vec3(2, 0, 0))\n  row(vec3(0, 0, 1), vec3(1, 0, 1), vec3(2, 0, 1))\n}\n`;
+  const { project: p, world } = project({ [ROOT]: weird });
+  assert.equal(find(world, "odd").kind, "entity", "an unreadable patch is not a patch");
+  assert.equal(saved(world, p), weird);
 });
 
 report("roundtrip");

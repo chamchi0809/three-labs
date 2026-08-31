@@ -4,6 +4,7 @@ import type { Diagnostic, Member, ObjectValue, Override, Pos, Template, Value } 
 import type { ClassInfo, Param, Schema, TypeRef } from "./schema.ts";
 import { ALIASES, BAKERY, BROOM, BUILTINS, FACE_PROPS, LOADERS, MATH, className, concrete, nodeName, type Knob } from "./names.ts";
 import { buildBrush, type BrushFace, type UvMode, type Vec3 } from "./brush.ts";
+import { gridProblems, type Patch } from "./patch.ts";
 
 /** Levenshtein distance, two rows at a time */
 function distance(a: string, b: string): number {
@@ -557,6 +558,71 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
     for (const p of buildBrush(faces).problems) err(p.message, p.face === -1 ? o : where[p.face] ?? o);
   }
 
+  // ---------------------------------------------------------------- patch
+
+  /**
+   * `patch { row(…) … }` — a grid of control points. Like a brush, the rows are judged as a set: "this
+   * grid has an even number of rows" is a statement about the whole surface, and a row is only wrong in
+   * relation to the others.
+   */
+  function checkPatch(o: ObjectValue) {
+    if (o.args.length) err("patch takes no arguments — its shape is its rows", o.args[0]!);
+    const grid: Vec3[][] = [];
+    const where: Pos[] = [];
+    const rest: Member[] = [];
+    const shape: Patch = { grid };
+    let opaque = false;
+    for (const m of o.body) {
+      if (m.kind === "node" && m.object.name === "row") {
+        const r = m.object;
+        if (r.body.length) err("a row has no body — a control point is a place, and the surface is the patch's", r);
+        for (const a of r.args) checkValue(a, { type: POINT, what: "a control point" });
+        const points = r.args.map(literalVec3);
+        if (points.some((p) => !p)) opaque = true;
+        else { grid.push(points as Vec3[]); where.push(r); }
+        continue;
+      }
+      if (m.kind === "prop" && m.name === "material") {
+        checkValue(m.value, { type: { kind: "class", name: "Material" }, what: "patch material" });
+        continue;
+      }
+      if (m.kind === "prop" && m.name === "subdivisions") {
+        checkValue(m.value, { type: { kind: "number" }, what: "patch subdivisions" });
+        if (m.value.kind === "number") shape.subdivisions = m.value.value;
+        continue;
+      }
+      if (m.kind === "prop" && m.name === "uv") { checkPatchUv(m.value, shape); continue; }
+      rest.push(m);
+    }
+    // everything that is not a row or a surface setting is the Mesh's own: position, castShadow, @broom
+    checkBody("Mesh", rest);
+    if (opaque || !grid.length) return;
+    for (const p of gridProblems(grid)) err(p.message, p.row === -1 ? o : where[p.row] ?? o);
+  }
+
+  /** `uv: { scale: vec2(…); offset: vec2(…); rotation: 30deg }` — the material's layout, not the Mesh's */
+  function checkPatchUv(v: Value, shape: Patch) {
+    if (v.kind !== "record") {
+      err("a patch's uv is a record: { scale: vec2(1, 1); offset: vec2(0, 0); rotation: 0deg }", v);
+      return;
+    }
+    for (const e of v.entries) {
+      if (e.name === "rotation") {
+        checkValue(e.value, { type: { kind: "number" }, what: "patch uv rotation" });
+        if (e.value.kind === "number") shape.rotation = e.value.unit === "deg" ? (e.value.value * Math.PI) / 180 : e.value.value;
+        continue;
+      }
+      if (e.name !== "scale" && e.name !== "offset") {
+        const alt = suggest(e.name, ["scale", "offset", "rotation"]);
+        err(`a patch's uv has no ${JSON.stringify(e.name)}` + (alt ? `; did you mean ${alt}?` : ""), e.value);
+        continue;
+      }
+      checkValue(e.value, { type: PAIR, what: `patch uv ${e.name}` });
+      const pair = literalVec2(e.value);
+      if (pair) shape[e.name] = pair;
+    }
+  }
+
   function checkKnob(v: Value, knob: Knob, what: string) {
     // a raw template body is checked before expansion, so var() and calc() are still unresolved here
     if (v.kind === "var" || v.kind === "calc") return;
@@ -612,7 +678,13 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
           checkBrush(m.object);
           continue;
         }
+        if (m.object.name === "patch") {
+          if (info(cls) && !isA(cls, "Object3D")) err(`${cls} cannot have children`, m.object);
+          checkPatch(m.object);
+          continue;
+        }
         if (m.object.name === "face") { err("face() is one plane of a brush, so it only works inside one", m.object); continue; }
+        if (m.object.name === "row") { err("row() is one row of a patch's control points, so it only works inside one", m.object); continue; }
         // repeat() is unrolled by expand(); this only runs for template bodies, which are checked raw
         if (m.object.name === "repeat") { checkBody(cls, m.object.body); continue; }
         // `lookAt(0, 1, 0);` — a name that is a method of this class and not a class of its own
@@ -755,6 +827,7 @@ export function check(nodes: Member[], schema: Schema, templates: Template[] = [
         continue;
       }
       if (m.object.name === "brush") { checkBrush(m.object); continue; }
+      if (m.object.name === "patch") { checkPatch(m.object); continue; }
       const cls = className(m.object.name);
       if (info(cls) && !isA(cls, "Object3D")) err(`top-level ${cls} is not an Object3D`, m.object);
       checkObject(m.object);

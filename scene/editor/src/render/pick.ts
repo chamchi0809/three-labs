@@ -130,9 +130,11 @@ const at = /*@__PURE__*/ new Vector3();
 /**
  * One pick pass.
  *
- * Everything is put back afterwards — the material, the visibility, the render target and the camera's
- * view offset. A pick happens in the middle of a frame the user is looking at, and a pass that left any of
- * that changed would be visible as a flicker.
+ * Everything is put back the instant the draw call is recorded — the material, the visibility, the render
+ * target. A pick happens in the middle of a frame the user is looking at, and the scene is shared with the
+ * loop that is drawing it, so the window in which it is dressed for picking has to be shorter than a frame.
+ * The camera is the exception and needs no putting back: the pass narrows a private proxy, never the real
+ * one, which is the whole reason {@link Picker.proxies} exists.
  */
 async function pass(
   renderer: Renderer,
@@ -175,8 +177,11 @@ async function pass(
   renderer.clear();
   renderer.render(rs.scene, proxy);
 
-  const pixels = (await renderer.readRenderTargetPixelsAsync(picker.target, 0, 0, 1, 1)) as Uint8Array;
-
+  // Put everything back *before* waiting for the pixel, not after. `render` has already read the material
+  // and the visibility flags and recorded its commands, so the pass no longer needs them — but the readback
+  // resolves a frame or more later, and the animation loop goes on drawing the whole time. Restoring after
+  // the await meant every frame in that window drew the map in identity colours with no edges, no labels
+  // and no grid, which is the flicker a moving cursor makes: the map blinks for as long as a hover lasts.
   renderer.setRenderTarget(wasTarget);
   renderer.setClearColor(wasClear, wasAlpha);
   rs.faceMesh.material = faceMaterial;
@@ -187,6 +192,7 @@ async function pass(
   rs.labels.group.visible = shown.labels;
   rs.gridPlane.visible = shown.grid;
 
+  const pixels = (await renderer.readRenderTargetPixelsAsync(picker.target, 0, 0, 1, 1)) as Uint8Array;
   return decodePick(pixels);
 }
 

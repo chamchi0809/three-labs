@@ -44,8 +44,7 @@ test("the properties of a definition are the ones it wrote, typed by what it wro
   assert.deepEqual(button.props.map((p) => [p.name, p.type]), [
     ["geometry", "expression"],
     ["material", "material"],
-    ["target", "ref"],
-  ], "a `box(…)` is not a number, and the grid says so rather than guessing");
+  ], "a `boxGeometry(…)` is not a number, and the grid says so rather than guessing");
 });
 
 test("a template with no node type is a definition for anything", () => {

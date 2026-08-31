@@ -22,7 +22,7 @@
  */
 import type { Member, ObjectValue, Sheet } from "tscene";
 import { childrenOf, type Node, type NodeId, type World } from "../doc/document.ts";
-import { broomMember, faceMembers, headOf, ownMembers, toObject, worldBroom } from "./emit.ts";
+import { broomMember, faceMembers, headOf, ownMembers, rowMembers, toObject, worldBroom } from "./emit.ts";
 import { printMember, printNode } from "./literal.ts";
 import {
   applyEdits, dedent, deleteAt, indentAt, insertAt, lineRange, newlineOf, reindent, replaceAt, withComments,
@@ -91,10 +91,10 @@ function writeBroom(ctx: Ctx, world: World) {
     ctx.problems.push(`the root file ${root} is not in the project`);
     return;
   }
-  const now = worldBroom(world);
   const was = sheet.statements.find(
     (s): s is Member & { kind: "at" } => s.kind === "at" && s.name === "broom",
   );
+  const now = worldBroom(world, was);
   if (was) {
     if (printMember(was) !== printMember(now)) {
       sink(ctx, root).push(replaceAt(was.start, was.end, printMember(now), "@broom"));
@@ -198,8 +198,11 @@ function writeNode(ctx: Ctx, node: Node & { origin: Origin }, out: TextEdit[]) {
   const nl = newlineOf(text);
 
   const members = ownMembers(node);
-  const kids = node.kind === "brush" ? [] : childrenOf(node).filter((k) => !k.origin?.derived);
-  const wants = members.length > 0 || kids.length > 0 || node.kind === "brush";
+  const kids = childrenOf(node).filter((k) => !k.origin?.derived);
+  // a solid and a patch always want a body: their geometry lives in one, and neither has any other place
+  // to put it. Everything else wants one only when it has something to say
+  const own = node.kind === "brush" || node.kind === "patch";
+  const wants = members.length > 0 || kids.length > 0 || own;
 
   // a node written without braces that now has something to put in them is reprinted whole; there is no
   // range to patch, and inventing one would mean writing the head twice
@@ -223,7 +226,7 @@ function writeNode(ctx: Ctx, node: Node & { origin: Origin }, out: TextEdit[]) {
   // -------- the node's own members
   const olds = new Map<string, Member>();
   for (const m of was.body) {
-    if (isFace(node, m)) continue; // part of the solid, diffed below
+    if (isGeometry(node, m)) continue; // part of the shape itself, diffed below
     olds.set(keyOf(m), m);
   }
 
@@ -253,20 +256,22 @@ function writeNode(ctx: Ctx, node: Node & { origin: Origin }, out: TextEdit[]) {
     drop(left, `${keyOf(left)} was unset`);
   }
 
-  // -------- the faces of a solid, or the children of everything else
-  if (node.kind === "brush") {
-    const oldFaces = was.body.filter((m) => isFace(node, m));
-    const nowFaces = faceMembers(node.brush);
-    if (oldFaces.length === nowFaces.length) {
-      for (const [i, old] of oldFaces.entries()) {
-        const now = nowFaces[i]!;
+  // -------- the faces of a solid or the rows of a patch, or the children of everything else
+  if (own) {
+    const what = node.kind === "brush" ? "face" : "row";
+    const olderParts = was.body.filter((m) => isGeometry(node, m));
+    const nowParts = node.kind === "brush" ? faceMembers(node.brush) : rowMembers(node.patch);
+    if (olderParts.length === nowParts.length) {
+      for (const [i, old] of olderParts.entries()) {
+        const now = nowParts[i]!;
         if (same(old, now)) continue;
-        out.push(replaceAt(old.start, old.end, reindent(printMember(now), indentAt(text, old.start)), `face ${i}`));
+        out.push(replaceAt(old.start, old.end, reindent(printMember(now), indentAt(text, old.start)), `${what} ${i}`));
       }
     } else {
-      // the solid has a different number of sides than it was written with, so face `i` is not face `i`
-      for (const old of oldFaces) drop(old, "the solid was reshaped");
-      fresh.push(...nowFaces.map(printMember));
+      // a different number of parts than it was written with, so part `i` is not part `i` — a solid that
+      // grew a side, a patch that had a row inserted. Rewriting the lot is the only honest answer
+      for (const old of olderParts) drop(old, node.kind === "brush" ? "the solid was reshaped" : "the grid was resized");
+      fresh.push(...nowParts.map(printMember));
     }
   } else {
     const olderKids = was.body.filter((m): m is Member & { kind: "node" } => m.kind === "node");
@@ -290,8 +295,10 @@ function writeNode(ctx: Ctx, node: Node & { origin: Origin }, out: TextEdit[]) {
   if (fresh.length) out.push(insertInBody(text, origin, fresh, nl, notBefore));
 }
 
-const isFace = (node: Node, m: Member): boolean =>
-  node.kind === "brush" && m.kind === "node" && m.object.name === "face";
+/** the members that *are* the shape rather than settings on it: a solid's faces, a patch's rows */
+const isGeometry = (node: Node, m: Member): boolean =>
+  m.kind === "node" &&
+  ((node.kind === "brush" && m.object.name === "face") || (node.kind === "patch" && m.object.name === "row"));
 
 /**
  * New members put inside a body: at the end of it, or — for a node's own settings — on the line the first

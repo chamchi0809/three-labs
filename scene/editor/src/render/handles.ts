@@ -11,7 +11,7 @@
  * and the whole point of them is being grabbable.
  */
 import type { NodeId } from "../doc/document.ts";
-import type { Flags } from "./batch.ts";
+import { SELECTED, type Flags } from "./batch.ts";
 
 /** what a handle is for, which is also what it is drawn as */
 export type HandleKind = "vertex" | "edge" | "face" | "pivot";
@@ -150,6 +150,37 @@ export function brushHandles(
           });
         }
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * The handles for a patch: one per control point, and nothing else.
+ *
+ * `part` is `row * columns + column`, so a tool holding the grid can turn a handle back into a place in it
+ * without the handle having to carry two numbers no other handle has.
+ *
+ * Control points that sit on top of each other collapse to one handle — a cylinder's seam column is the
+ * same point written twice, and a cone's tip is nine copies of one. Drawing nine squares in one place would
+ * be nine chances to grab the wrong one, and there is no wrong one to grab: the drag welds them anyway, so
+ * the first of the stack speaks for all of them.
+ */
+export function patchHandles(
+  of: NodeId,
+  grid: readonly (readonly (readonly number[])[])[],
+  picked?: ReadonlySet<number>,
+): Handle[] {
+  const out: Handle[] = [];
+  const seen = new Set<string>();
+  const columns = grid[0]?.length ?? 0;
+  for (const [row, line] of grid.entries()) {
+    for (const [column, p] of line.entries()) {
+      const key = `${p[0]},${p[1]},${p[2]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const part = row * columns + column;
+      out.push({ kind: "vertex", at: [p[0]!, p[1]!, p[2]!], of, part, flags: picked?.has(part) ? SELECTED : 0 });
     }
   }
   return out;

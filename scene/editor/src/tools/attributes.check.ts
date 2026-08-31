@@ -15,9 +15,12 @@ import { report, test } from "../check.ts";
 import { brushOf, faceNormal, type Brush } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
 import { uvOf, withFace } from "../brush/uv.ts";
-import { brushNode, layerNode, nodeById, type BrushNode, type NodeId, type World } from "../doc/document.ts";
+import {
+  brushNode, layerNode, nodeById, patchNode, type BrushNode, type NodeId, type PatchNode, type World,
+} from "../doc/document.ts";
 import { newEditor, type Editor } from "../doc/editor.ts";
 import { NOTHING, selectFaces } from "../doc/selection.ts";
+import { patchShape, type Patch } from "../patch/patch.ts";
 import { metresPerPixel, newView, projectPoint, type Size } from "../viewport/view.ts";
 import { attributesTool, changeFaces } from "./attributes.ts";
 import { newInput, type InputState } from "./input.ts";
@@ -296,6 +299,107 @@ test("a drag with nothing under it is declined, and a cancelled one puts the wor
   const after = tracker.move(at(start.x + PIXELS, start.y), editor)!.edit!.apply(editor);
   const undone = tracker.cancel(after)!.edit!.apply(after);
   near(attributesIn(undone.world, one.id, north).offset[0]!, 0);
+});
+
+// ---------------------------------------------------------------- a patch is a face here too
+
+/** the same two cubes, with a flat patch standing beside them in the front pane */
+function withPatch() {
+  const s = scene();
+  const surface = patchNode(patchShape("plane", [8, 0, 0], [10, 0, 2]));
+  const world: World = {
+    ...s.world,
+    layers: [layerNode("Main", [...s.world.layers[0]!.children, surface])],
+  };
+  return { ...s, world, surface, editor: { ...s.editor, world, layer: world.layers[0]!.id } };
+}
+
+const patchIn = (world: World, id: NodeId): Patch => (nodeById(world, id) as PatchNode).patch;
+
+test("a patch takes the same keys a face does, on the one surface it has", () => {
+  const { surface, editor } = withPatch();
+  const picked = picking(editor, [{ node: surface.id, face: 0 }]);
+
+  near(patchIn(pressed(picked, "arrowright", at(0, 0)).world, surface.id).uv.offset[0]!, 0.25);
+  near(patchIn(pressed(picked, ".", at(0, 0)).world, surface.id).uv.rotation, 15 * DEGREE);
+  near(patchIn(pressed(picked, "=", at(0, 0)).world, surface.id).uv.scale[0]!, 2);
+  near(patchIn(pressed(picked, "j", at(0, 0)).world, surface.id).uv.scale[0]!, -1);
+
+  const named = pressed(picked, "enter", at(0, 0));
+  assert.equal(patchIn(named.world, surface.id).material, "brick", "enter writes the current material");
+});
+
+test("reset puts a patch's material back where a fresh one has it", () => {
+  const { surface, editor } = withPatch();
+  const picked = picking(editor, [{ node: surface.id, face: 0 }]);
+  const moved = pressed(pressed(picked, "arrowright", at(0, 0)), ".", at(0, 0));
+  const back = pressed(moved, "0", at(0, 0));
+  assert.deepEqual(patchIn(back.world, surface.id).uv, { offset: [0, 0], scale: [1, 1], rotation: 0 });
+});
+
+test("one key reaches a wall and the curve beside it at once, in the same units", () => {
+  const { one, north, surface, editor } = withPatch();
+  const picked = picking(editor, [{ node: one.id, face: north }, { node: surface.id, face: 0 }]);
+  const slid = pressed(picked, "arrowup", at(0, 0));
+  near(attributesIn(slid.world, one.id, north).offset[1]!, 0.25);
+  near(patchIn(slid.world, surface.id).uv.offset[1]!, 0.25);
+});
+
+test("fit is a face's operation, and a patch picked alongside one keeps what it had", () => {
+  const { one, north, surface, editor } = withPatch();
+  const picked = picking(editor, [{ node: one.id, face: north }, { node: surface.id, face: 0 }]);
+  const fitted = pressed(picked, "9", at(0, 0));
+  assert.notDeepEqual(attributesIn(fitted.world, one.id, north).scale, [1, 1], "the face was fitted");
+  assert.deepEqual(patchIn(fitted.world, surface.id).uv, patchIn(editor.world, surface.id).uv,
+    "and the patch, which has no outline in tiles, was left exactly as it was");
+});
+
+test("alt+click copies a wall's material onto a patch, everything but the axes it has not got", () => {
+  const { one, north, surface, editor } = withPatch();
+  const dressed: Editor = {
+    ...editor,
+    world: changeFaces(editor.world, [{ node: one.id, face: north }],
+      (b, i) => withFace(b, i, { material: "brick", uv: { kind: "parallel", u: [1, 0, 0] }, scale: [3, 3], rotation: 0.5 })),
+  };
+  const picked = picking(dressed, [{ node: surface.id, face: 0 }]);
+  const out = attributesTool.click!(at(0, 0, { mods: ALT, hit: { node: one.id, face: north } }), picked)!;
+  const after = out.edit!.apply(picked);
+  const p = patchIn(after.world, surface.id);
+  assert.equal(p.material, "brick");
+  assert.deepEqual(p.uv.scale, [3, 3]);
+  near(p.uv.rotation, 0.5);
+});
+
+test("alt+click copies a patch's material onto a wall, and clicking one arms it", () => {
+  const { one, north, surface, editor } = withPatch();
+  const dressed: Editor = {
+    ...editor,
+    world: changeFaces(editor.world, [{ node: surface.id, face: 0 }], (b) => b,
+      (p) => ({ ...p, material: "water", uv: { offset: [1, 1], scale: [4, 4], rotation: 0 } })),
+  };
+  const picked = picking(dressed, [{ node: one.id, face: north }]);
+  const copied = attributesTool.click!(at(0, 0, { mods: ALT, hit: { node: surface.id, face: 0 } }), picked)!
+    .edit!.apply(picked);
+  assert.equal(attributesIn(copied.world, one.id, north).material, "water");
+  assert.deepEqual(attributesIn(copied.world, one.id, north).scale, [4, 4]);
+
+  // a plain click picks the surface and makes what it is made of the current material
+  const armed = attributesTool.click!(at(0, 0, { hit: { node: surface.id, face: 0 } }), dressed)!.set!(dressed);
+  assert.equal(armed.material, "water");
+  assert.deepEqual(armed.selection.faces, [{ node: surface.id, face: 0 }]);
+});
+
+test("a drag on a patch is declined, because there is no plane to keep a point on", () => {
+  const { surface, editor } = withPatch();
+  const hit = { node: surface.id, face: 0, point: [9, 0, 1] as Vec3 };
+  assert.equal(attributesTool.drag!(at(400, 200, { hit }), editor), undefined);
+});
+
+test("a patch named by a face it has not got is stepped over", () => {
+  const { surface, editor } = withPatch();
+  const after = changeFaces(editor.world, [{ node: surface.id, face: 1 }], (b) => b,
+    (p) => ({ ...p, material: "brick" }));
+  assert.deepEqual(after, editor.world);
 });
 
 report("attributes");

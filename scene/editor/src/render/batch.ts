@@ -120,8 +120,13 @@ export function setBrush(
   slots: (face: number) => number = () => 0,
 ): void {
   const count = mesh.positions.length / 3;
+  // where it was before the arena is asked: a solid whose vertex count changed is handed a *different*
+  // span, and the one it gave up is a hole holding the triangles it was last drawn with
+  const before = batch.entries.get(id)?.span;
   const span = reserve(batch.arena, id, count);
   fit(batch);
+  // blanked before the new vertices go in, so a solid that shrank in place keeps what it is about to write
+  if (before && (before.start !== span.start || before.count !== span.count)) blank(batch, before);
 
   const ordinal = batch.entries.get(id)?.ordinal ?? nextOrdinal(batch, id);
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -164,16 +169,81 @@ export function dropBrush(batch: BrushBatch, id: NodeId): void {
   batch.spare.push(entry.ordinal);
   batch.groupsDirty = true;
 
-  // A hole in the middle is still inside the draw range, and the vertices in it are the ones this solid
-  // left behind — so a deleted wall would go on being drawn until something else claimed its space.
-  // Collapsing every vertex to the origin makes each triangle zero-area, which rasterises nothing.
-  // A span at the tail needs none of this: the draw range simply stops short of it.
-  const { start, count } = entry.span;
-  if (start + count !== batch.arena.used) {
-    batch.position.fill(0, start * 3, (start + count) * 3);
-    markDirty(batch.arena, entry.span);
-  }
+  // released first, because that is what pulls the high-water mark back over a span at the tail — and a
+  // span above the mark is one `blank` then knows it has no work to do
   release(batch.arena, id);
+  blank(batch, entry.span);
+}
+
+/**
+ * Vertices a solid has stopped using, collapsed to the origin.
+ *
+ * A hole in the middle is still inside the draw range, and the vertices in it are the ones the solid left
+ * behind — so a deleted wall would go on being drawn until something else claimed its space. Collapsing
+ * every vertex to the origin makes each triangle zero-area, which rasterises nothing. Only the part still
+ * below the high-water mark is worth touching: above it the draw range simply stops short.
+ */
+function blank(batch: BrushBatch, at: Span): void {
+  const end = Math.min(at.start + at.count, batch.arena.used);
+  if (end <= at.start) return;
+  batch.position.fill(0, at.start * 3, end * 3);
+  markDirty(batch.arena, { start: at.start, count: end - at.start });
+}
+
+/**
+ * Where a ray meets one solid's own triangles — the nearest hit, in world metres.
+ *
+ * The pick buffer says *what* is under the cursor and the tools want to know *where*, and for a flat face
+ * that second question is answered by meeting the face's plane: exact, and free. A patch has no plane. Its
+ * surface is curved, so the only honest answer is the triangles it was actually drawn as — which the batch
+ * is already holding, in the span this solid was written into. Nothing is rebuilt or tessellated again, and
+ * only the one solid the pick already named is walked.
+ */
+export function meetSolid(
+  batch: BrushBatch,
+  id: NodeId,
+  ray: { origin: readonly number[]; direction: readonly number[] },
+): [number, number, number] | undefined {
+  const entry = batch.entries.get(id);
+  if (!entry) return undefined;
+  const [ox, oy, oz] = [ray.origin[0]!, ray.origin[1]!, ray.origin[2]!];
+  const [dx, dy, dz] = [ray.direction[0]!, ray.direction[1]!, ray.direction[2]!];
+  const p = batch.position;
+  let nearest = Infinity;
+  const end = entry.span.start + entry.span.count;
+  for (let v = entry.span.start; v + 2 < end; v += 3) {
+    const t = meetTriangle(p, v, ox, oy, oz, dx, dy, dz);
+    if (t !== undefined && t < nearest) nearest = t;
+  }
+  return nearest === Infinity ? undefined : [ox + dx * nearest, oy + dy * nearest, oz + dz * nearest];
+}
+
+/**
+ * Möller–Trumbore, written out over the flat attribute array rather than over vectors.
+ *
+ * Both faces of the triangle count. A patch is a surface with an inside, a designer routinely stands in the
+ * hollow of a cylinder they are building, and a hit test that only saw the front would leave them clicking
+ * on nothing in exactly the place they meant.
+ */
+function meetTriangle(
+  p: Float32Array, v: number,
+  ox: number, oy: number, oz: number, dx: number, dy: number, dz: number,
+): number | undefined {
+  const a = v * 3, b = (v + 1) * 3, c = (v + 2) * 3;
+  const e1x = p[b]! - p[a]!, e1y = p[b + 1]! - p[a + 1]!, e1z = p[b + 2]! - p[a + 2]!;
+  const e2x = p[c]! - p[a]!, e2y = p[c + 1]! - p[a + 1]!, e2z = p[c + 2]! - p[a + 2]!;
+  const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+  const det = e1x * hx + e1y * hy + e1z * hz;
+  if (Math.abs(det) < 1e-12) return undefined; // edge on: it covers no pixels, so it was not clicked
+  const inv = 1 / det;
+  const sx = ox - p[a]!, sy = oy - p[a + 1]!, sz = oz - p[a + 2]!;
+  const u = (sx * hx + sy * hy + sz * hz) * inv;
+  if (u < 0 || u > 1) return undefined;
+  const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+  const w = (dx * qx + dy * qy + dz * qz) * inv;
+  if (w < 0 || u + w > 1) return undefined;
+  const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+  return t > 1e-9 ? t : undefined;
 }
 
 export function clearBatch(batch: BrushBatch): void {

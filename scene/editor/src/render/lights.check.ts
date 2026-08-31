@@ -9,8 +9,22 @@ import { report, test } from "../check.ts";
 import { EMPTY, type Catalogue } from "../doc/catalogue.ts";
 import { demoCatalogue, demoMap } from "../doc/demo.ts";
 import { entityNode, groupNode, layerNode, type Node, type World } from "../doc/document.ts";
+import { newEditor } from "../doc/editor.ts";
 import { hex, num, setProp, setVec3, str } from "../doc/props.ts";
 import { editorLights, mapLights } from "./lights.ts";
+import { newRenderScene, syncLook } from "./scene.ts";
+
+// a render scene rasterises label text, and node has no canvas; nothing here looks at one
+(globalThis as { document?: unknown }).document = {
+  createElement: () => ({
+    width: 0, height: 0,
+    getContext: () => ({
+      font: "", textBaseline: "", fillStyle: "",
+      measureText: (text: string) => ({ width: text.length * 7 }),
+      beginPath() {}, moveTo() {}, arcTo() {}, closePath() {}, fill() {}, fillText() {},
+    }),
+  }),
+};
 
 const worldOf = (children: Node[]): World => ({
   layers: [layerNode("Default", children)],
@@ -132,6 +146,45 @@ test("the demo room lights itself, which is the whole claim the modern look make
   assert.ok(lights.some((l) => l instanceof PointLight));
   const sun = lights.find((l) => l instanceof DirectionalLight)!;
   assert.ok(sun.position.length() > 1, "and the sun is out where a direction can be read off it");
+});
+
+// ---------------------------------------------------------------- and how often they are installed
+
+// Installing a light is what recompiles every shader in the map, and an edit hands `syncLook` a brand new
+// `World` object every time — so "has the world changed" is the wrong question and these pin the right one.
+
+/** what is actually in the light group, by identity — which is the thing that must not churn */
+const rig = (rs: ReturnType<typeof newRenderScene>): Object3D[] => [...rs.lights.children];
+
+const lamp = (at: [number, number, number]) =>
+  worldOf([entityNode("pointLight", { props: place(at) })]);
+
+test("the same lights declared by a different world object are the same rig", () => {
+  const rs = newRenderScene();
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  const first = rig(rs);
+  assert.equal(first.length, 1);
+
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  assert.deepEqual(rig(rs), first, "an edit hands over a new world every frame; the lamp did not move");
+});
+
+test("a lamp that did move relights, so the guard is on the lights and not on the clock", () => {
+  const rs = newRenderScene();
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  const first = rig(rs);
+
+  syncLook(rs, newEditor(lamp([3, 2, 0])), EMPTY, "pbr");
+  assert.notDeepEqual(rig(rs), first);
+  assert.deepEqual((rs.lights.children[0] as PointLight).position.toArray(), [3, 2, 0]);
+});
+
+test("switching look relights even when the map did not change", () => {
+  const rs = newRenderScene();
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "classic");
+  assert.equal(rig(rs).filter((l) => "isLight" in l).length, 3, "the editor's own rig");
+  assert.ok(rig(rs).every((l) => !(l instanceof PointLight)), "and no lamp from the map");
 });
 
 report("lights");

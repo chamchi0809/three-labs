@@ -17,6 +17,7 @@
   import { facesInScope } from "../doc/inspect.ts";
   import { isEmpty } from "../doc/selection.ts";
   import { library } from "../library.svelte.ts";
+  import { withPatchMaterial } from "../patch/uv.ts";
   import { session } from "../session.svelte.ts";
   import { changeFaces } from "../tools/attributes.ts";
 
@@ -38,10 +39,12 @@
       session.set((e) => ({ ...e, note: `${material} — the next solid drawn` }));
       return;
     }
+    const onFace = (b: Parameters<typeof withFace>[0], i: number) => withFace(b, i, { material });
+    const onPatch = (p: Parameters<typeof withPatchMaterial>[0]) => withPatchMaterial(p, material);
     session.run(
       "set material",
-      (e) => ({ ...e, world: changeFaces(e.world, faces, (b, i) => withFace(b, i, { material })) }),
-      { repeatable: true, again: (e) => ({ ...e, world: changeFaces(e.world, e.selection.faces, (b, i) => withFace(b, i, { material })) }) },
+      (e) => ({ ...e, world: changeFaces(e.world, faces, onFace, onPatch) }),
+      { repeatable: true, again: (e) => ({ ...e, world: changeFaces(e.world, e.selection.faces, onFace, onPatch) }) },
     );
     session.set((e) => ({ ...e, note: `${faces.length} × ${material}` }));
   }
@@ -50,9 +53,10 @@
 <div class="browser">
   <input class="filter" placeholder="filter materials…" bind:value={filter} />
   <p class="scope">
-    {#if scope.length}{scope.length} face{scope.length === 1 ? "" : "s"} will take it
+    <!-- "surface" rather than "face", because a patch's one surface is in this count too -->
+    {#if scope.length}{scope.length} surface{scope.length === 1 ? "" : "s"} will take it
     {:else if isEmpty(session.editor.selection)}nothing picked — a click just arms it
-    {:else}the selection has no faces{/if}
+    {:else}the selection has no surfaces{/if}
   </p>
   <ul>
     {#each matches as m (m.name)}
@@ -77,12 +81,13 @@
   .none { padding: 4px; color: var(--dim); font: var(--mono); }
   button {
     display: flex; gap: 6px; align-items: center; width: 100%; padding: 3px 5px; cursor: pointer;
-    background: transparent; border: 1px solid transparent; border-radius: 3px;
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
     font: var(--mono); color: var(--text); text-align: left;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
   }
-  button:hover { background: var(--raised); border-color: var(--line); }
-  button.on { background: var(--on); border-color: var(--edge); color: var(--ink); }
-  .chip { flex: none; width: 16px; height: 16px; border-radius: 3px; border: 1px solid #0006; }
+  button:hover { background: color-mix(in srgb, var(--accent-dim) 55%, transparent); color: var(--p9); }
+  button.on { background: var(--accent-dim); border-color: var(--accent); color: var(--p9); }
+  .chip { flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1px solid #0006; }
   .name { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .type { flex: none; color: var(--dim); }
 </style>

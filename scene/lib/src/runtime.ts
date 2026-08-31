@@ -7,7 +7,8 @@ import { AnimationClip, AnimationMixer, EquirectangularReflectionMapping, Group,
 import type { LoadingManager, Object3D } from "three/webgpu";
 import { expand, lineCol, parse, SceneSyntaxError, type Diagnostic, type Loader, type Member, type ObjectValue, type Pos, type Value } from "./parse.ts";
 import { className, LOADERS, math } from "./names.ts";
-import { buildBrush, type BrushFace, type UvMode } from "./brush.ts";
+import { buildBrush, type BrushFace, type UvMode, type Vec3 } from "./brush.ts";
+import { buildPatch, type Patch, type PatchGrid } from "./patch.ts";
 
 /** What the vite plugin's `import scene from "./main.tscene"` gives you: one sheet, one module. */
 export type SceneModule = {
@@ -454,6 +455,7 @@ function construct(o: ObjectValue, ctx: Ctx): Promise<any> {
 
 async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   if (o.name === "brush") return brush(o, ctx);
+  if (o.name === "patch") return patch(o, ctx);
   const args: unknown[] = [];
   for (const a of o.args) {
     // constructor arguments are needed before the node exists, so they cannot wait for a later ref()
@@ -530,7 +532,7 @@ const couple = (value: unknown): [number, number] | undefined => {
 
 async function point(v: Value, ctx: Ctx): Promise<[number, number, number]> {
   const out = triple(await evaluate(v, ctx));
-  return out ?? fail("a face() point is a vec3(x, y, z) or three numbers", v, ctx);
+  return out ?? fail("a point is a vec3(x, y, z) or three numbers", v, ctx);
 }
 
 /**
@@ -607,6 +609,84 @@ async function brush(o: ObjectValue, ctx: Ctx): Promise<any> {
     await apply(node, m, ctx);
   }
   return node;
+}
+
+// ---------------------------------------------------------------- patch
+
+/**
+ * `patch { row(…) … }` — a grid of control points tessellated into one smooth `Mesh`.
+ *
+ * One material rather than a slot per row: a patch is a single surface, and the reason to reach for one
+ * instead of a wall of brushes is that it is continuous. Splitting it by material would put a seam back in
+ * exactly the place the patch exists to remove.
+ */
+async function patch(o: ObjectValue, ctx: Ctx): Promise<any> {
+  const grid: PatchGrid = [];
+  let material: unknown;
+  const shape: Patch = { grid };
+  for (const m of o.body) {
+    if (m.kind === "node" && m.object.name === "row") {
+      const row: Vec3[] = [];
+      for (const a of m.object.args) row.push(await point(a, ctx));
+      if (row.length < 3) fail("a row of a patch needs at least three control points", m.object, ctx);
+      grid.push(row);
+      continue;
+    }
+    if (m.kind !== "prop") continue;
+    if (m.name === "material") { material = await evaluate(m.value, ctx); continue; }
+    if (m.name === "subdivisions") { shape.subdivisions = Number(await evaluate(m.value, ctx)); continue; }
+    // the material's own layout, kept in a record of its own because a patch *is* a `Mesh` and `scale`,
+    // `offset` and `rotation` at the top level are the Mesh's transform. A face can spell them plainly
+    // because a face is not an object; a patch cannot, and quietly stealing them would be worse.
+    if (m.name === "uv") Object.assign(shape, await uvLayout(m.value, ctx));
+  }
+
+  const { mesh, problems } = buildPatch(shape);
+  // the checker says all of this at build time; a sheet loaded from a string has had no checker
+  if (!mesh) fail(problems[0]?.message ?? "this grid is not a patch", o, ctx);
+
+  const Attribute = brushClass("BufferAttribute", o, ctx);
+  const geometry = new (brushClass("BufferGeometry", o, ctx))();
+  geometry.setAttribute("position", new Attribute(mesh.positions, 3));
+  geometry.setAttribute("normal", new Attribute(mesh.normals, 3));
+  geometry.setAttribute("uv", new Attribute(mesh.uvs, 2));
+  geometry.setIndex(new Attribute(mesh.indices, 1));
+  geometry.computeBoundingSphere();
+
+  const node = new (brushClass("Mesh", o, ctx))(geometry, material ?? new (brushClass("MeshStandardMaterial", o, ctx))());
+  if (o.id) {
+    node.name = o.id;
+    ctx.ids.set(o.id, node);
+  }
+  // everything that is not a row is the Mesh's own, minus the four the surface itself consumed
+  for (const m of o.body) {
+    if (m.kind === "node" && m.object.name === "row") continue;
+    if (m.kind === "prop" && PATCH_PROPS.has(m.name)) continue;
+    await apply(node, m, ctx);
+  }
+  return node;
+}
+
+/** the properties a `patch` reads for itself, which are the ones three's `Mesh` must not be handed */
+const PATCH_PROPS = new Set(["material", "subdivisions", "uv"]);
+
+/**
+ * `uv: { scale: vec2(1, 1); offset: vec2(0, 0); rotation: 30deg }` — how a patch lays its material out.
+ *
+ * A record rather than three properties, so that the names a `Mesh` already owns keep meaning what they
+ * mean everywhere else in a sheet.
+ */
+async function uvLayout(v: Value, ctx: Ctx): Promise<Partial<Patch>> {
+  if (v.kind !== "record") return fail("a patch's uv is a record: { scale: …; offset: …; rotation: … }", v, ctx);
+  const out: Partial<Patch> = {};
+  for (const e of v.entries) {
+    if (e.name === "rotation") { out.rotation = Number(await evaluate(e.value, ctx)); continue; }
+    if (e.name !== "scale" && e.name !== "offset") fail(`a patch's uv has no ${e.name} — it takes scale, offset and rotation`, e.value, ctx);
+    const pair = couple(await evaluate(e.value, ctx));
+    if (!pair) fail(`a patch's uv ${e.name} is a vec2(u, v) or two numbers`, e.value, ctx);
+    out[e.name as "scale" | "offset"] = pair;
+  }
+  return out;
 }
 
 /** textures from a `texture()` whose body did not state a `colorSpace`, so this module may pick one */

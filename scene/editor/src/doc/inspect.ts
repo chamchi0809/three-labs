@@ -23,7 +23,7 @@ import { uvOf } from "../brush/uv.ts";
 import { sameValue } from "../io/literal.ts";
 import { defFor, propType, type Catalogue, type EntityDef, type PropType } from "./catalogue.ts";
 import {
-  brushesUnder, nodeById, updateNode, type Node, type NodeId, type World,
+  childrenOf, nodeById, solidsUnder, updateNode, type Node, type NodeId, type World,
 } from "./document.ts";
 import { propOf, removeProp, setProp } from "./props.ts";
 import type { FaceRef, Selection } from "./selection.ts";
@@ -145,7 +145,7 @@ export function sheetIds(world: World): string[] {
   const out: string[] = [];
   const visit = (node: Node) => {
     if (node.sheetId && !out.includes(node.sheetId)) out.push(node.sheetId);
-    for (const kid of node.kind === "brush" ? [] : node.children) visit(kid);
+    for (const kid of childrenOf(node)) visit(kid);
   };
   for (const layer of world.layers) visit(layer);
   return out;
@@ -166,7 +166,12 @@ export function facesInScope(world: World, selection: Selection): FaceRef[] {
   for (const id of selection.nodes) {
     const node = nodeById(world, id);
     if (!node) continue;
-    for (const b of brushesUnder(node)) b.brush.poly.faces.forEach((_, face) => out.push({ node: b.id, face }));
+    for (const s of solidsUnder(node)) {
+      // a patch is one surface and it is numbered 0, so a selected patch is one face in scope — which is
+      // what makes clicking a material in the browser reach it, the same click that reaches six walls
+      if (s.kind === "patch") out.push({ node: s.id, face: 0 });
+      else s.brush.poly.faces.forEach((_, face) => out.push({ node: s.id, face }));
+    }
   }
   return out;
 }
@@ -176,8 +181,18 @@ export type Agreed<T> = { value: T; mixed: boolean };
 
 export type FaceInfo = {
   count: number;
+  /** how many of them are a patch's one surface, which the axes row and the fit buttons do not apply to */
+  patches: number;
   material: Agreed<string | undefined>;
-  uv: Agreed<UvMode>;
+  /**
+   * The choice of uv axes — absent when nothing in scope has any.
+   *
+   * A patch's material runs along the surface itself and there is no other set of axes it could use, so a
+   * scope of nothing but patches has no such choice to show. Left as `undefined` rather than reported as
+   * one of the two kinds, because a button that is lit for a thing it does not describe is worse than no
+   * button: the designer would press the other one and see nothing happen.
+   */
+  uv?: Agreed<UvMode>;
   offset: Agreed<Vec2>;
   scale: Agreed<Vec2>;
   rotation: Agreed<number>;
@@ -185,12 +200,29 @@ export type FaceInfo = {
   only?: { brush: Brush; face: number };
 };
 
+/**
+ * The four knobs, read off whatever is in scope — brush faces, patches, or a mix of both.
+ *
+ * A patch's uv is the same three numbers in the same units as a face's, so they compare directly and a
+ * selection of a wall and the curved bit that meets it reports one offset when they agree. The two things
+ * a patch has not got are handled by leaving them out rather than by faking them: no axes, and no place in
+ * the uv editor, which draws a face's outline in tile coordinates and a patch has none to draw.
+ */
 export function faceInfo(world: World, faces: FaceRef[]): FaceInfo | undefined {
-  const all: { brush: Brush; face: number; a: FaceAttributes }[] = [];
+  const all: { brush?: Brush; face: number; a: FaceAttributes; patch: boolean }[] = [];
   for (const f of faces) {
     const node = nodeById(world, f.node);
+    if (node?.kind === "patch") {
+      // face 0 is the patch's one surface; any other number names a face it does not have
+      if (f.face !== 0) continue;
+      // the three numbers are the same three in the same units; the `uv` axes the default leaves behind are
+      // never read, because `patch` is what decides whether this entry gets a say in them
+      const { material, uv } = node.patch;
+      all.push({ face: 0, patch: true, a: { ...faceAttributes(), ...(material ? { material } : {}), ...uv } });
+      continue;
+    }
     if (node?.kind !== "brush" || !node.brush.poly.faces[f.face]) continue;
-    all.push({ brush: node.brush, face: f.face, a: node.brush.faces[f.face] ?? faceAttributes() });
+    all.push({ brush: node.brush, face: f.face, patch: false, a: node.brush.faces[f.face] ?? faceAttributes() });
   }
   if (!all.length) return undefined;
   const first = all[0]!.a;
@@ -198,14 +230,18 @@ export function faceInfo(world: World, faces: FaceRef[]): FaceInfo | undefined {
     value,
     mixed: !all.every((x) => same(x.a)),
   });
+  const withAxes = all.filter((x) => !x.patch);
+  const axes = withAxes[0]?.a.uv;
+  const only = all.length === 1 && all[0]!.brush ? { brush: all[0]!.brush!, face: all[0]!.face } : undefined;
   return {
     count: all.length,
+    patches: all.length - withAxes.length,
     material: agree(first.material, (x) => x.material === first.material),
-    uv: agree(first.uv, (x) => sameUv(x.uv, first.uv)),
+    ...(axes ? { uv: { value: axes, mixed: !withAxes.every((x) => sameUv(x.a.uv, axes)) } } : {}),
     offset: agree(first.offset, (x) => x.offset[0] === first.offset[0] && x.offset[1] === first.offset[1]),
     scale: agree(first.scale, (x) => x.scale[0] === first.scale[0] && x.scale[1] === first.scale[1]),
     rotation: agree(first.rotation, (x) => x.rotation === first.rotation),
-    ...(all.length === 1 ? { only: { brush: all[0]!.brush, face: all[0]!.face } } : {}),
+    ...(only ? { only } : {}),
   };
 }
 
@@ -227,20 +263,24 @@ export const uvPolygon = (brush: Brush, face: number): Vec2[] =>
 
 // ---------------------------------------------------------------- the map
 
-export type MapStats = { brushes: number; entities: number; groups: number; layers: number; faces: number };
+export type MapStats = {
+  brushes: number; patches: number; entities: number; groups: number; layers: number; faces: number;
+};
 
 export function mapStats(world: World): MapStats {
-  const stats: MapStats = { brushes: 0, entities: 0, groups: 0, layers: 0, faces: 0 };
+  const stats: MapStats = { brushes: 0, patches: 0, entities: 0, groups: 0, layers: 0, faces: 0 };
   const visit = (node: Node) => {
     if (node.kind === "brush") {
       stats.brushes++;
       stats.faces += node.brush.poly.faces.filter(Boolean).length;
       return;
     }
+    // a patch has no faces to count: it is one surface, and the number that matters about it is its spans
+    if (node.kind === "patch") return void stats.patches++;
     if (node.kind === "entity") stats.entities++;
     else if (node.kind === "group") stats.groups++;
     else stats.layers++;
-    for (const kid of node.children) visit(kid);
+    for (const kid of childrenOf(node)) visit(kid);
   };
   for (const layer of world.layers) visit(layer);
   return stats;

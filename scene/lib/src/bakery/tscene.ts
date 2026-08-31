@@ -70,9 +70,20 @@ export function uninstallNodeLoaders(): void {
   uninstall?.();
 }
 
-/** The bytes behind a texture url: off disk, off the network when a sheet points at a CDN, or out of
- * the object url GLTFLoader wraps a .glb's embedded image in. */
+/** The bytes behind a texture url: off disk, off the network when a sheet points at a CDN, inline in a
+ * `data:` url, or out of the object url GLTFLoader wraps a .glb's embedded image in. */
 async function bytes(url: string): Promise<Buffer> {
+  // a sheet whose textures travelled with it rather than sitting next to it — an editor posting the
+  // document it has open, a generated pattern, a glTF unpacked by hand. `fileURLToPath` would throw.
+  if (url.startsWith("data:")) {
+    const comma = url.indexOf(",");
+    if (comma < 0) throw new Error(`malformed data url: ${url.slice(0, 32)}…`);
+    const head = url.slice(5, comma);
+    const body = url.slice(comma + 1);
+    return head.endsWith(";base64")
+      ? Buffer.from(body, "base64")
+      : Buffer.from(decodeURIComponent(body), "binary");
+  }
   if (/^https?:/.test(url)) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);

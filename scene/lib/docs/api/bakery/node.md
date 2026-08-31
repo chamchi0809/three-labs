@@ -1202,3 +1202,9 @@ Re-exports [probeWeights](../bakery.md#probeweights)
 ### SceneBakery
 
 Re-exports [SceneBakery](../index.md#scenebakery)
+
+***
+
+### validateBakery
+
+Re-exports [validateBakery](../bakery.md#validatebakery)

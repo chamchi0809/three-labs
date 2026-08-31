@@ -16,17 +16,22 @@
  * otherwise call every class in the map undefined. A checker that cries wolf is one people turn off, and
  * a checker that is off finds nothing.
  */
+import type { Vec2 } from "tscene";
 import { brushBounds, brushProblems, brushVolume, isOnGrid, snapBrush } from "../brush/brush.ts";
 import { resetUv, withFace } from "../brush/uv.ts";
+import {
+  patchBounds, patchProblems, snapPatch, isOnGrid as patchOnGrid,
+} from "../patch/patch.ts";
+import { resetPatchUv, withPatchMaterial } from "../patch/uv.ts";
 import { changeFaces } from "../tools/attributes.ts";
 import { defFor, type Catalogue } from "./catalogue.ts";
 import {
-  brushesUnder, childrenOf, layerOf, moveNodes, nodeById, removeNodes, replaceNode,
+  childrenOf, layerOf, moveNodes, nodeById, removeNodes, replaceNode, solidsUnder,
   updateNode, walk, type Node, type NodeId, type World,
 } from "./document.ts";
 import { membersOf, propagate, separateGroup } from "./groups.ts";
 import { freshLayerName, renameLayer } from "./layers.ts";
-import { removeProp, setVec3 } from "./props.ts";
+import { refsIn, removeProp, setVec3 } from "./props.ts";
 
 export type Severity = "error" | "warning";
 
@@ -77,14 +82,22 @@ const at = (node: Node, validator: string, severity: Severity, message: string, 
 
 // ---------------------------------------------------------------- solids
 
+/**
+ * A solid that will not build.
+ *
+ * A patch fails differently from a brush — a grid with an even number of columns, or a row shorter than
+ * the rest — but it fails the same way for the designer: nothing is drawn, and the reason is not visible
+ * in the viewport. So the two share a validator rather than getting one each, and `patchProblems` says
+ * which of them it is in the message.
+ */
 const invalidSolid: Validator = {
   id: "invalid-solid",
   title: "solids that are not solid",
   severity: "error",
-  find: (c) => nodes(c.world).flatMap((n) =>
-    n.kind === "brush" && brushProblems(n.brush).length
-      ? [at(n, "invalid-solid", "error", brushProblems(n.brush)[0]!, { fix: "delete it" })]
-      : []),
+  find: (c) => nodes(c.world).flatMap((n) => {
+    const wrong = n.kind === "brush" ? brushProblems(n.brush) : n.kind === "patch" ? patchProblems(n.patch) : [];
+    return wrong.length ? [at(n, "invalid-solid", "error", wrong[0]!, { fix: "delete it" })] : [];
+  }),
   fix: (c, i) => removeNodes(c.world, [i.node]),
 };
 
@@ -111,8 +124,11 @@ const outOfBounds: Validator = {
   title: "geometry outside the world",
   severity: "error",
   find: (c) => nodes(c.world).flatMap((n) => {
-    if (n.kind !== "brush") return [];
-    const box = brushBounds(n.brush);
+    // a patch is measured by its control hull, which is the box its handles are in — the surface itself
+    // stays inside it everywhere but a dome, and a dome nine per cent past 4096 m is not the problem
+    const box = n.kind === "brush" ? brushBounds(n.brush)
+      : n.kind === "patch" ? patchBounds(n.patch.grid)
+      : undefined;
     const far = box && [...box.min, ...box.max].some((v) => Math.abs(v) > EXTENT);
     return far
       ? [at(n, "out-of-bounds", "error", `a solid more than ${EXTENT} m from the origin`, { fix: "delete it" })]
@@ -125,24 +141,50 @@ const offGrid: Validator = {
   id: "off-grid",
   title: "corners off the grid",
   severity: "warning",
-  find: (c) => nodes(c.world).flatMap((n) =>
-    n.kind === "brush" && !brushProblems(n.brush).length && !isOnGrid(n.brush, c.grid)
-      ? [at(n, "off-grid", "warning", "a corner is not on the grid", { fix: "snap to the grid" })]
-      : []),
+  find: (c) => nodes(c.world).flatMap((n) => {
+    if (n.kind === "brush") {
+      return !brushProblems(n.brush).length && !isOnGrid(n.brush, c.grid)
+        ? [at(n, "off-grid", "warning", "a corner is not on the grid", { fix: "snap to the grid" })]
+        : [];
+    }
+    // a patch's control points are what a designer takes hold of, so they are what "on the grid" is about
+    // — not the tessellated surface, which passes between them and lands wherever the curve puts it
+    return n.kind === "patch" && !patchProblems(n.patch).length && !patchOnGrid(n.patch, c.grid)
+      ? [at(n, "off-grid", "warning", "a control point is not on the grid", { fix: "snap to the grid" })]
+      : [];
+  }),
   fix: (c, i) => {
-    const node = brushOf(c.world, i.node);
-    const snapped = node && snapBrush(node.brush, c.grid);
-    return snapped?.brush ? replaceNode(c.world, i.node, { ...node!, brush: snapped.brush }) : c.world;
+    const node = nodeById(c.world, i.node);
+    if (node?.kind === "patch") return replaceNode(c.world, i.node, { ...node, patch: snapPatch(node.patch, c.grid) });
+    const brush = brushOf(c.world, i.node);
+    const snapped = brush && snapBrush(brush.brush, c.grid);
+    return snapped?.brush ? replaceNode(c.world, i.node, { ...brush!, brush: snapped.brush }) : c.world;
   },
 };
 
-// ---------------------------------------------------------------- faces
+// ---------------------------------------------------------------- surfaces
 
-/** every face of every solid, as the pair the face validators are written against */
-function* faces(world: World): Generator<{ node: Node; face: number }> {
+/**
+ * Every surface in the map: a brush's faces, and a patch's one.
+ *
+ * Written over both because all four of the validators below ask questions a patch can answer as well as a
+ * face can — what it is made of, and whether the numbers laying the material out are sane. What differs is
+ * only where the answer is stored, so that is the only thing this generator flattens away. The word in the
+ * messages stays "face", because that is what a designer calls the thing they clicked.
+ */
+type Surface = { node: Node; face: number; material?: string; offset: Vec2; scale: Vec2 };
+
+function* faces(world: World): Generator<Surface> {
   for (const n of nodes(world)) {
+    if (n.kind === "patch") {
+      const { material, uv } = n.patch;
+      yield { node: n, face: 0, material, offset: uv.offset, scale: uv.scale };
+      continue;
+    }
     if (n.kind !== "brush") continue;
-    for (let face = 0; face < n.brush.faces.length; face++) yield { node: n, face };
+    for (const [face, a] of n.brush.faces.entries()) {
+      yield { node: n, face, material: a.material, offset: a.offset, scale: a.scale };
+    }
   }
 }
 
@@ -150,39 +192,34 @@ const uvScaleZero: Validator = {
   id: "uv-scale-zero",
   title: "faces with no material size",
   severity: "error",
-  find: (c) => [...faces(c.world)].flatMap(({ node, face }) => {
-    const a = node.kind === "brush" ? node.brush.faces[face]! : undefined;
-    return a && (a.scale[0] === 0 || a.scale[1] === 0)
-      ? [at(node, "uv-scale-zero", "error", "a face whose material is scaled to nothing", { face, fix: "reset it" })]
-      : [];
-  }),
-  fix: (c, i) => changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }], resetUv),
+  find: (c) => [...faces(c.world)].flatMap((s) =>
+    s.scale[0] === 0 || s.scale[1] === 0
+      ? [at(s.node, "uv-scale-zero", "error", "a face whose material is scaled to nothing",
+          { face: s.face, fix: "reset it" })]
+      : []),
+  fix: (c, i) => changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }], resetUv, resetPatchUv),
 };
 
 const uvOutOfRange: Validator = {
   id: "uv-out-of-range",
   title: "faces with runaway material numbers",
   severity: "warning",
-  find: (c) => [...faces(c.world)].flatMap(({ node, face }) => {
-    const a = node.kind === "brush" ? node.brush.faces[face]! : undefined;
-    const wild = a && [...a.offset, ...a.scale].some((v) => !Number.isFinite(v) || Math.abs(v) > 1e5);
-    return wild
-      ? [at(node, "uv-out-of-range", "warning", "a face whose material numbers are absurd", { face, fix: "reset it" })]
-      : [];
-  }),
-  fix: (c, i) => changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }], resetUv),
+  find: (c) => [...faces(c.world)].flatMap((s) =>
+    [...s.offset, ...s.scale].some((v) => !Number.isFinite(v) || Math.abs(v) > 1e5)
+      ? [at(s.node, "uv-out-of-range", "warning", "a face whose material numbers are absurd",
+          { face: s.face, fix: "reset it" })]
+      : []),
+  fix: (c, i) => changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }], resetUv, resetPatchUv),
 };
 
 const noMaterial: Validator = {
   id: "no-material",
   title: "faces made of nothing",
   severity: "warning",
-  find: (c) => [...faces(c.world)].flatMap(({ node, face }) => {
-    const a = node.kind === "brush" ? node.brush.faces[face]! : undefined;
-    return a && a.material === undefined
-      ? [at(node, "no-material", "warning", "a face with no material", { face, fix: "give it a material" })]
-      : [];
-  }),
+  find: (c) => [...faces(c.world)].flatMap((s) =>
+    s.material === undefined
+      ? [at(s.node, "no-material", "warning", "a face with no material", { face: s.face, fix: "give it a material" })]
+      : []),
   fix: (c, i) => assign(c, i),
 };
 
@@ -194,12 +231,11 @@ const unknownMaterial: Validator = {
     // with nothing declared, every name is unknown and the answer is useless
     if (!c.catalogue.materials.length) return [];
     const known = new Set(c.catalogue.materials.map((m) => m.name));
-    return [...faces(c.world)].flatMap(({ node, face }) => {
-      const a = node.kind === "brush" ? node.brush.faces[face]! : undefined;
-      return a?.material !== undefined && !known.has(a.material)
-        ? [at(node, "unknown-material", "error", `no material called --${a.material}`, { face, fix: "give it a material" })]
-        : [];
-    });
+    return [...faces(c.world)].flatMap((s) =>
+      s.material !== undefined && !known.has(s.material)
+        ? [at(s.node, "unknown-material", "error", `no material called --${s.material}`,
+            { face: s.face, fix: "give it a material" })]
+        : []);
   },
   fix: (c, i) => assign(c, i),
 };
@@ -208,7 +244,8 @@ const unknownMaterial: Validator = {
 function assign(c: Context, i: Issue): World {
   const material = c.material ?? c.catalogue.materials[0]?.name;
   if (!material) return c.world;
-  return changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }], (b, f) => withFace(b, f, { material }));
+  return changeFaces(c.world, [{ node: i.node, face: i.face ?? 0 }],
+    (b, f) => withFace(b, f, { material }), (p) => withPatchMaterial(p, material));
 }
 
 // ---------------------------------------------------------------- entities
@@ -233,7 +270,7 @@ const pointWithSolids: Validator = {
   severity: "warning",
   find: (c) => nodes(c.world).flatMap((n) => {
     const def = defFor(c.catalogue, n);
-    const holds = def?.kind === "point" && [...brushesUnder(n)].length > 0;
+    const holds = def?.kind === "point" && [...solidsUnder(n)].length > 0;
     return holds
       ? [at(n, "point-with-solids", "warning", `.${def!.name} is placed as a point but holds solids`,
           { fix: "move the solids out" })]
@@ -253,7 +290,9 @@ const emptyBrushEntity: Validator = {
   severity: "error",
   find: (c) => nodes(c.world).flatMap((n) => {
     const def = defFor(c.catalogue, n);
-    const empty = def?.kind === "brush" && ![...brushesUnder(n)].length;
+    // a patch counts: a brush entity wrapped around a curved surface is written around geometry, and
+    // deleting it because the geometry was not a brush would delete a working part of the level
+    const empty = def?.kind === "brush" && ![...solidsUnder(n)].length;
     return empty
       ? [at(n, "empty-brush-entity", "error", `.${def!.name} is written around solids and has none`,
           { fix: "delete it" })]
@@ -284,11 +323,18 @@ const brokenRef: Validator = {
   find: (c) => {
     const known = new Set(nodes(c.world).map((n) => n.sheetId).filter((id): id is string => !!id));
     return nodes(c.world).flatMap((n) =>
-      n.props.flatMap((m) =>
-        m.kind === "prop" && m.value.kind === "ref" && !known.has(m.value.name)
-          ? [at(n, "broken-ref", "error", `${m.name} points at #${m.value.name}, which nothing is called`,
-              { prop: m.name, fix: "remove the property" })]
-          : []));
+      n.props.flatMap((m) => {
+        if (m.kind !== "prop") return [];
+        const broken = [...refsIn(m.value)].filter((name) => !known.has(name));
+        if (!broken.length) return [];
+        const said = `${m.name} points at ${broken.map((name) => `#${name}`).join(", ")}, which nothing is called`;
+        // the fix is only offered for a reference that *is* the property. One nested inside a record or a
+        // call — `userData: { target: ref(#lamp) }`, the way an entity link is written — is still an error
+        // worth naming, but removing the whole property to be rid of it would take the rest with it
+        return m.value.kind === "ref"
+          ? [at(n, "broken-ref", "error", said, { prop: m.name, fix: "remove the property" })]
+          : [at(n, "broken-ref", "error", said, {})];
+      }));
   },
   fix: (c, i) => updateNode(c.world, i.node, (n) => ({ ...n, props: removeProp(n.props, i.prop ?? "") })),
 };

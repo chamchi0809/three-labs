@@ -20,14 +20,30 @@ export const BUILTINS: Record<string, { signature: string; summary: string; topL
   play: { signature: 'play("clip") { … }', summary: "plays an animation clip of the model it sits in; the body configures the AnimationAction", topLevel: false },
   brush: { signature: "brush { face(…) … }", summary: "a convex solid built from the half-spaces of its faces; becomes one Mesh with a material per face", topLevel: true },
   face: { signature: "face(p1, p2, p3) { … }", summary: "one plane of a brush, through three points wound counter-clockwise seen from outside", topLevel: false },
+  patch: { signature: "patch { row(…) … }", summary: "a quadratic Bezier surface from an odd-by-odd grid of control points; becomes one smooth, indexed Mesh", topLevel: true },
+  row: { signature: "row(p1, p2, p3, …)", summary: "one row of a patch's control points, an odd number of them and at least three", topLevel: false },
 };
 
 /**
- * What the runtime needs to turn a `brush` into a node. A sheet that writes one never names these, so
- * the vite plugin imports them on the brush's behalf — the same deal every other three name in a sheet
+ * What the runtime needs to turn a `brush` or a `patch` into a node. A sheet that writes one never names
+ * these, so the vite plugin imports them on its behalf — the same deal every other three name in a sheet
  * gets, and what keeps a brushless scene from paying for them.
  */
 export const BRUSH_CLASSES = ["BufferAttribute", "BufferGeometry", "Mesh", "MeshStandardMaterial"];
+
+/** what a `patch` body may set for the surface itself — the rest of it is the `Mesh`'s own */
+export const PATCH_PROPS: Record<string, { type: "material" | "number" | "uv"; summary: string }> = {
+  material: { type: "material", summary: "the one material the whole surface renders with; share one with `var(--stone)`" },
+  subdivisions: { type: "number", summary: "segments per span; left out, the curvature picks a count" },
+  uv: { type: "uv", summary: "{ scale: vec2(…); offset: vec2(…); rotation: 0deg } — the material's layout along the surface" },
+};
+
+/** what a patch's `uv: { … }` record may set — a face spells these plainly, a patch cannot */
+export const PATCH_UV: Record<string, { type: "vec2" | "angle"; summary: string }> = {
+  scale: { type: "vec2", summary: "metres of world along the surface per full texture tile — not a multiplier" },
+  offset: { type: "vec2", summary: "metres along the surface's own u and v" },
+  rotation: { type: "angle", summary: "degrees, about the surface normal" },
+};
 
 /** what a `face()` body may set — the rest of the face is its three points */
 export const FACE_PROPS: Record<string, { type: "material" | "uv" | "vec2" | "angle"; summary: string }> = {

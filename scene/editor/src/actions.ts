@@ -14,7 +14,10 @@
 import { IDENTITY, translation, type Mat4 } from "./brush/vec.ts";
 import { snap } from "./grid/snap.ts";
 import { gridSize, type Editor } from "./doc/editor.ts";
-import { nodeById, nodeBounds, type NodeId } from "./doc/document.ts";
+import { nodeById, nodeBounds, replaceNode, type NodeId } from "./doc/document.ts";
+import {
+  addColumn, addRow, dropColumn, dropRow, flip as flipGrid, snapPatch, spansOf, type Patch,
+} from "./patch/patch.ts";
 import {
   closeGroup, duplicateSelected, groupSelected, isLinked, linkedCopy, linkGroups,
   openGroup, propagateFrom, separateGroup, ungroupSelected,
@@ -24,6 +27,9 @@ import {
   showAll, toggleHidden, toggleLocked, unlockAll,
 } from "./doc/layers.ts";
 import { applyFixes, type Context, type Issue } from "./doc/issues.ts";
+import {
+  hollowSelection, intersectSelection, mergeSelection, subtractSelection, type Attempt,
+} from "./doc/csg.ts";
 import { hasTag, selectByTag, tagNodes, untagNodes, type Tag } from "./doc/tags.ts";
 import { isolateTag as isolate, hideTag as hide } from "./doc/tags.ts";
 import { NOTHING, selectedNodes, type SelectMode } from "./doc/selection.ts";
@@ -151,6 +157,32 @@ export const toggleTag = (tag: Tag): void =>
     return { ...e, world: all ? untagNodes(e.world, ids, tag) : tagNodes(e.world, ids, tag) };
   });
 
+// ---------------------------------------------------------------- constructive solid geometry
+
+/**
+ * A CSG operation, or the reason it did not happen said out loud.
+ *
+ * These are the commands most likely to decline — a subtraction whose cutter overlaps nothing, an
+ * intersection of two solids that miss each other — and a button that looks like it worked and did not is
+ * the worst thing an editor can do to a designer's confidence. So the reason is carried out of the
+ * document layer as a string and put in the status line here, *outside* the edit, where it cannot leave an
+ * undo entry behind for a change that was never made.
+ */
+const csg = (name: string, attempt: (e: Editor) => Attempt): void => {
+  let refused: string | undefined;
+  edit(name, (e) => {
+    const result = attempt(e);
+    refused = typeof result === "string" ? result : undefined;
+    return typeof result === "string" ? e : result;
+  });
+  if (refused) session.set((e) => ({ ...e, note: refused }));
+};
+
+export const subtractBrushes = (): void => csg("subtract", subtractSelection);
+export const intersectBrushes = (): void => csg("intersect", intersectSelection);
+export const mergeBrushes = (): void => csg("merge", mergeSelection);
+export const hollowBrushes = (): void => csg("hollow", hollowSelection);
+
 // ---------------------------------------------------------------- issues
 
 /** one quick fix, and a list of them as one entry — "fix all" is a thing a designer undoes in one press */
@@ -173,6 +205,48 @@ export const fixIssues = (context: Context, issues: Issue[]): void => {
     session.set((e) => ({ ...e, note: "nothing changed — that fix does not apply here" }));
   }
 };
+
+// ---------------------------------------------------------------- patches
+
+/**
+ * Every selected patch changed the same way, as one undo entry.
+ *
+ * The same operations the patch tool keeps on its keys, reachable with any tool in hand. A designer who
+ * drew a dome an hour ago and now wants another row in it should not have to remember which tool put it
+ * there — the patch is selected, and that is the whole of what these need to know.
+ */
+const onPatches = (name: string, change: (patch: Patch, e: Editor) => Patch): void =>
+  edit(name, (e) => {
+    let world = e.world;
+    for (const id of e.selection.nodes) {
+      const node = nodeById(world, id);
+      if (node?.kind === "patch") world = replaceNode(world, id, { ...node, patch: change(node.patch, e) });
+    }
+    // the handles are named by where they sit in the grid, and every one of these moves them about in it
+    return world === e.world ? e : { ...e, world, selection: { ...e.selection, vertices: [] } };
+  });
+
+/** the last span, which is the end a row or column is added at and taken off */
+const lastRow = (p: Patch): number => spansOf(p.grid).down - 1;
+const lastColumn = (p: Patch): number => spansOf(p.grid).across - 1;
+
+export const addPatchRow = (): void => onPatches("add a row", (p) => addRow(p, lastRow(p)));
+export const dropPatchRow = (): void => onPatches("drop a row", (p) => dropRow(p, lastRow(p)));
+export const addPatchColumn = (): void => onPatches("add a column", (p) => addColumn(p, lastColumn(p)));
+export const dropPatchColumn = (): void => onPatches("drop a column", (p) => dropColumn(p, lastColumn(p)));
+export const flipPatches = (): void => onPatches("flip the patch", flipGrid);
+export const snapPatches = (): void =>
+  onPatches("snap to the grid", (p, e) => snapPatch(p, gridSize(e)));
+
+/** how finely the surface is tessellated, or undefined to let the curvature decide */
+export const setPatchDetail = (subdivisions: number | undefined): void =>
+  onPatches("patch detail", (p) => {
+    if (subdivisions === undefined) {
+      const { subdivisions: _auto, ...rest } = p;
+      return rest;
+    }
+    return { ...p, subdivisions: Math.max(1, Math.round(subdivisions)) };
+  });
 
 /** clicking an issue shows the thing it is about */
 export const showIssue = (issue: Issue): void =>

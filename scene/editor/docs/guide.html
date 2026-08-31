@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>three-broom 사용법</title>
+<style>
+  :root {
+    --bg:#141414; --panel:#1c1c1c; --line:#2e2e2e; --ink:#d6d2cc; --dim:#8a857e;
+    --hot:#d8663f; --ok:#7fa86a; --warn:#c8a04a; --link:#8fb4d8;
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.75 var(--mono);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { display:flex; align-items:flex-start; max-width:1500px; margin:0 auto; gap:40px; padding:0 28px; }
+
+  /* ---------------------------------------------------------------- table of contents */
+  nav {
+    position:sticky; top:0; flex:0 0 208px; max-height:100vh; overflow-y:auto;
+    padding:34px 0 60px; font-size:12.5px;
+  }
+  nav .brand { color:var(--hot); font-weight:700; letter-spacing:.04em; margin-bottom:18px; }
+  nav a { display:block; color:var(--dim); text-decoration:none; padding:2.5px 0; }
+  nav a:hover { color:var(--ink); }
+  nav .n { color:#5c5852; margin-right:7px; }
+
+  main { flex:1 1 auto; min-width:0; padding:34px 0 120px; }
+
+  /* ---------------------------------------------------------------- type */
+  h1 { font-size:26px; letter-spacing:.02em; margin:0 0 6px; color:#fff; }
+  h1 .sub { display:block; font-size:13px; font-weight:400; color:var(--dim); margin-top:8px; letter-spacing:0; }
+  h2 {
+    font-size:17px; margin:56px 0 14px; padding-top:18px; border-top:1px solid var(--line); color:#fff;
+    scroll-margin-top:12px;
+  }
+  h2 .n { color:var(--hot); margin-right:10px; }
+  h3 { font-size:14px; margin:26px 0 8px; color:var(--warn); font-weight:600; }
+  p { margin:10px 0; }
+  ul, ol { margin:10px 0; padding-left:20px; }
+  li { margin:4px 0; }
+  a { color:var(--link); }
+  code, kbd { font-family:var(--mono); }
+  code { background:#242424; border:1px solid var(--line); border-radius:3px; padding:1px 5px; font-size:12.5px; }
+  kbd {
+    background:#2b2b2b; border:1px solid #3d3d3d; border-bottom-width:2px; border-radius:4px;
+    padding:1px 6px; font-size:12px; color:#eee; white-space:nowrap;
+  }
+  .dim { color:var(--dim); }
+
+  /* ---------------------------------------------------------------- blocks */
+  .note, .warn, .tip {
+    border-left:3px solid var(--line); background:var(--panel); padding:12px 16px; margin:16px 0; border-radius:0 4px 4px 0;
+  }
+  .warn { border-left-color:var(--hot); }
+  .tip  { border-left-color:var(--ok); }
+  .note b, .warn b, .tip b { color:#fff; }
+  .warn b { color:var(--hot); }
+  .tip b { color:var(--ok); }
+  .note p:first-child, .warn p:first-child, .tip p:first-child { margin-top:0; }
+  .note p:last-child, .warn p:last-child, .tip p:last-child { margin-bottom:0; }
+
+  pre {
+    background:#101010; border:1px solid var(--line); border-radius:4px; padding:12px 14px;
+    overflow-x:auto; font-size:12.5px; line-height:1.6; margin:14px 0;
+  }
+
+  /* ---------------------------------------------------------------- tables */
+  table { width:100%; border-collapse:collapse; margin:14px 0; font-size:12.5px; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.06em; font-size:11px; }
+  td:first-child { white-space:nowrap; }
+  tbody tr:hover { background:#1a1a1a; }
+
+  /* ---------------------------------------------------------------- figures */
+  figure { margin:20px 0; }
+  figure img {
+    display:block; width:100%; height:auto; border:1px solid var(--line); border-radius:4px; background:#000;
+  }
+  figcaption { color:var(--dim); font-size:12px; margin-top:7px; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .pair figure { margin:0; }
+
+  @media (max-width: 1080px) {
+    .wrap { flex-direction:column; gap:0; }
+    nav { position:static; max-height:none; flex:none; padding-bottom:20px; }
+    nav a { display:inline-block; margin-right:14px; }
+    .pair { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand">three-broom</div>
+  <a href="#start"><span class="n">01</span>시작하기</a>
+  <a href="#layout"><span class="n">02</span>화면 구성</a>
+  <a href="#nav"><span class="n">03</span>뷰포트 조작</a>
+  <a href="#grid"><span class="n">04</span>그리드</a>
+  <a href="#select"><span class="n">05</span>선택</a>
+  <a href="#tools"><span class="n">06</span>툴 15종</a>
+  <a href="#draw"><span class="n">07</span>솔리드 그리기</a>
+  <a href="#csg"><span class="n">08</span>CSG</a>
+  <a href="#clip"><span class="n">09</span>클립 툴</a>
+  <a href="#structure"><span class="n">10</span>그룹 · 레이어 · 태그</a>
+  <a href="#inspector"><span class="n">11</span>인스펙터</a>
+  <a href="#material"><span class="n">12</span>머티리얼과 UV</a>
+  <a href="#issues"><span class="n">13</span>이슈 브라우저</a>
+  <a href="#look"><span class="n">14</span>룩과 라이트맵</a>
+  <a href="#panels"><span class="n">15</span>패널들</a>
+  <a href="#file"><span class="n">16</span>파일과 자동저장</a>
+  <a href="#keys"><span class="n">17</span>키맵 전체</a>
+  <a href="#trouble"><span class="n">18</span>자주 막히는 곳</a>
+</nav>
+
+<main>
+
+<h1>three-broom 사용법
+  <span class="sub">
+    <code>scene/editor</code> — TrenchBroom 계열 브러시 레벨 에디터. Svelte 5 + WebGPU.<br>
+    이 문서의 스크린샷은 전부 실제 에디터를 띄워서 찍은 것이다.
+  </span>
+</h1>
+
+
+<!-- ============================================================ 01 -->
+<h2 id="start"><span class="n">01</span>시작하기</h2>
+
+<p>레포 루트에서:</p>
+<pre>pnpm dev:editor      # http://localhost:8126</pre>
+
+<p>
+  three-broom은 <b>브러시(brush)</b>로 레벨을 짜는 에디터다. 브러시는 폴리곤 메시가 아니라
+  <b>볼록 다면체(convex polyhedron)</b> — "평면 여러 장이 둘러싼 속이 찬 덩어리"다.
+  이게 전제라서 이 에디터의 거의 모든 규칙이 여기서 따라 나온다.
+</p>
+<ul>
+  <li>모든 솔리드는 반드시 볼록하다. 오목한 모양은 <b>여러 덩어리로 쪼개서</b> 만든다.</li>
+  <li>그래서 CSG(빼기/교집합/합치기)가 1급 시민이고, 결과가 여러 조각으로 나오는 게 정상이다.</li>
+  <li>면(face)은 평면 + 머티리얼 + UV로 정의된다. 정점을 옮기면 평면이 따라 움직인다.</li>
+</ul>
+
+<figure>
+  <img src="images/01-overview.png" alt="에디터 첫 화면">
+  <figcaption>부팅 직후. 3D 팬 + top/front 직교 팬 + 우측 인스펙터.</figcaption>
+</figure>
+
+
+<!-- ============================================================ 02 -->
+<h2 id="layout"><span class="n">02</span>화면 구성</h2>
+
+<table>
+  <thead><tr><th>영역</th><th>내용</th></tr></thead>
+  <tbody>
+    <tr><td><b>헤더 왼쪽</b></td><td><code>three-broom</code> 로고 · <code>file</code> 메뉴 · 현재 파일명(<code>untitled.tscene</code>, 수정되면 <code>*</code>)</td></tr>
+    <tr><td><b>헤더 가운데</b></td><td>툴 15개. 클릭해도 되고 단축키 한 글자로도 바뀐다.</td></tr>
+    <tr><td><b>헤더 오른쪽</b></td><td><code>classic</code>/<code>modern</code> 룩 · <code>&gt;_</code> 콘솔 · <code>bake</code> · <code>keys</code> · <code>prefs</code> · <code>1 2 3 4</code> 팬 레이아웃</td></tr>
+    <tr><td><b>뷰포트</b></td><td>팬 1~4개. 3D 팬 하나 + 직교 팬(top·front·side). 각 팬 좌상단에 이름과 축이 적혀 있다.</td></tr>
+    <tr><td><b>인스펙터</b></td><td>우측. <code>map</code> / <code>entity</code> / <code>face</code> / <code>issues</code> 4개 탭. 선택을 따라 자동으로 탭이 바뀐다.</td></tr>
+    <tr><td><b>푸터 왼쪽</b></td><td><code>grid 250 mm</code> · <code>selected N</code> · <b>현재 툴의 힌트 또는 방금 일어난 일</b></td></tr>
+    <tr><td><b>푸터 오른쪽</b></td><td>자주 쓰는 단축키 치트시트</td></tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <p><b>푸터 왼쪽을 항상 봐라.</b> 이 에디터는 모달 다이얼로그를 거의 안 띄운다.
+  "왜 아무 일도 안 일어나지?" 싶을 때의 답은 대부분 푸터에 문장으로 적혀 있다 —
+  <code>selected 0</code>, <code>the selection overlaps nothing to cut</code>, <code>carved 2</code> 같은 식으로.</p>
+</div>
+
+<div class="note">
+  <p><b>⌘ 표기.</b> 키맵 패널과 푸터는 모든 플랫폼에서 <kbd>⌘</kbd>로 찍는다.
+  <b>Windows/Linux에서는 <kbd>Ctrl</kbd>로 읽으면 된다.</b> 이 문서는 <kbd>Ctrl</kbd>로 적는다.</p>
+</div>
+
+
+<!-- ============================================================ 03 -->
+<h2 id="nav"><span class="n">03</span>뷰포트 조작</h2>
+
+<table>
+  <thead><tr><th>키 / 조작</th><th>하는 일</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>4</kbd></td><td>팬 1개 / 2개 / 3개 / 4개 레이아웃</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>마우스가 올라가 있는 팬을 <b>최대화</b> / 원복</td></tr>
+    <tr><td><kbd>F</kbd></td><td>선택한 것을 그 팬에 꽉 차게 <b>프레이밍</b></td></tr>
+    <tr><td><kbd>Shift</kbd>+<kbd>F</kbd></td><td>모든 팬에서 프레이밍</td></tr>
+    <tr><td><b>3D 팬</b> — 우클릭 드래그</td><td>둘러보기</td></tr>
+    <tr><td><b>3D 팬</b> — <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>Q</kbd><kbd>E</kbd></td><td>비행 이동 / 아래·위</td></tr>
+    <tr><td><b>3D 팬</b> — 휠</td><td>앞뒤</td></tr>
+    <tr><td><b>직교 팬</b> — 휠</td><td>줌</td></tr>
+    <tr><td><b>직교 팬</b> — 가운데 버튼 드래그</td><td>패닝</td></tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <p><b>정밀한 작업은 직교 팬에서.</b> 3D 팬은 확인용이라고 생각하는 게 편하다.
+  직교 팬은 화면 방향이 곧 축이라 그리기·자르기·클립 평면 잡기가 훨씬 정확하다.
+  실제로 이 문서의 CSG/클립 예제도 전부 front 팬에서 만들었다.</p>
+</div>
+
+
+<!-- ============================================================ 04 -->
+<h2 id="grid"><span class="n">04</span>그리드</h2>
+
+<p>
+  푸터 맨 왼쪽의 <code>grid 250 mm</code>가 현재 그리드다. <kbd>[</kbd> 로 촘촘하게, <kbd>]</kbd> 로 성기게.
+  그리드는 단순한 눈금이 아니라 <b>거의 모든 조작의 스냅 단위</b>이고, 심지어 몇몇 명령의 <b>수치 인자</b>다:
+</p>
+<ul>
+  <li>솔리드를 그릴 때 · 옮길 때 · 정점을 끌 때 → 전부 그리드에 스냅된다.</li>
+  <li><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> 넛지 = 한 칸.</li>
+  <li><b>hollow의 벽 두께 = 현재 그리드 크기.</b> 25 cm 그리드에서 hollow하면 벽 25 cm짜리 방이 나온다.</li>
+  <li>클립 점도 그리드에 스냅된다.</li>
+</ul>
+
+
+<!-- ============================================================ 05 -->
+<h2 id="select"><span class="n">05</span>선택</h2>
+
+<p>선택 툴은 <kbd>V</kbd>. 이 에디터에서 <b>가장 자주 눌러야 하는 키</b>다.</p>
+
+<table>
+  <thead><tr><th>조작</th><th>하는 일</th></tr></thead>
+  <tbody>
+    <tr><td>클릭</td><td>솔리드 선택 (기존 선택 대체)</td></tr>
+    <tr><td><kbd>Shift</kbd>+클릭</td><td>선택 토글 (추가/제거)</td></tr>
+    <tr><td><kbd>Alt</kbd>+클릭</td><td><b>면(face)</b> 하나만 선택 — 머티리얼 작업의 출발점</td></tr>
+    <tr><td>드래그</td><td>밴드(사각 영역) 선택 — 걸치기만 해도 잡힌다</td></tr>
+    <tr><td><kbd>Alt</kbd>+드래그</td><td>밴드 안에 <b>완전히 들어온 것만</b> 선택</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>그룹에서 나가기</td></tr>
+  </tbody>
+</table>
+
+<figure>
+  <img src="images/02-selected.png" alt="솔리드가 선택된 상태">
+  <figcaption>선택하면 팬에 치수(빨강·초록·파랑)가 뜨고, 푸터가 <code>selected 1</code>, 인스펙터가 entity 탭으로 넘어간다.</figcaption>
+</figure>
+
+<div class="warn">
+  <p><b>다른 툴을 들고 있으면 클릭이 선택이 아니다.</b>
+  클립 툴을 들고 클릭하면 점이 찍히고, shape 툴을 들고 드래그하면 새 상자가 그려진다.
+  <b>선택은 반드시 먼저</b> 하고, 그 다음에 툴 키를 눌러라. 순서가 반대면 아무 일도 안 일어난다.</p>
+</div>
+
+
+<!-- ============================================================ 06 -->
+<h2 id="tools"><span class="n">06</span>툴 15종</h2>
+
+<p>툴 키는 전부 <b>수식키 없는 한 글자</b>다. 각 툴을 들면 푸터에 그 툴의 사용법이 그대로 뜬다 — 아래 표의 마지막 열이 바로 그 문장이다.</p>
+
+<table>
+  <thead><tr><th>키</th><th>툴</th><th>푸터에 뜨는 힌트</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>V</kbd></td><td>select</td><td>클릭 선택 · shift 토글 · alt 면 선택 · 드래그 밴드 · alt-드래그는 완전히 포함된 것만</td></tr>
+    <tr><td><kbd>G</kbd></td><td>move</td><td>드래그로 이동 · alt 들어올리기 · shift 한 축 고정 · 방향키 한 칸씩</td></tr>
+    <tr><td><kbd>R</kbd></td><td>rotate</td><td>선택 주위를 드래그 · 15° 단위 · alt 누르면 1°</td></tr>
+    <tr><td><kbd>T</kbd></td><td>scale</td><td>반대 코너 기준으로 스케일 · shift 균등 · alt 중심 기준</td></tr>
+    <tr><td><kbd>H</kbd></td><td>shear</td><td>위/아래를 옆으로 드래그 · 반대쪽은 고정</td></tr>
+    <tr><td><kbd>B</kbd></td><td>shape</td><td>드래그로 솔리드 그리기 · tab 모양 변경 · <kbd>,</kbd><kbd>.</kbd> 분할 수 · <kbd>-</kbd><kbd>+</kbd> 깊이</td></tr>
+    <tr><td><kbd>P</kbd></td><td>patch</td><td>드래그로 그리기 · 제어점 드래그로 휘기 · tab 모양 · <kbd>r</kbd><kbd>c</kbd> 스팬 추가, shift로 제거 · <kbd>f</kbd> 뒤집기 · <kbd>s</kbd> 그리드 스냅</td></tr>
+    <tr><td><kbd>N</kbd></td><td>entity</td><td>클릭해서 배치 · tab 타입 변경</td></tr>
+    <tr><td><kbd>X</kbd></td><td>extrude</td><td>면을 법선 방향으로 드래그 · 클릭으로 면 선택 · shift 추가</td></tr>
+    <tr><td><kbd>K</kbd></td><td>sweep</td><td>면을 드래그해 뒤로 새 솔리드를 남김 · <kbd>,</kbd><kbd>.</kbd> 개수</td></tr>
+    <tr><td><kbd>C</kbd></td><td>clip</td><td>클릭해서 점 찍기 · tab 남길 쪽 전환 · enter 자르기 · backspace 한 점 취소</td></tr>
+    <tr><td><kbd>Y</kbd></td><td>vertex</td><td>정점 드래그 · 클릭 선택 · shift 추가 · alt 수직 평면에서 이동</td></tr>
+    <tr><td><kbd>U</kbd></td><td>edge</td><td>모서리 드래그 · 클릭 선택 · shift 추가 · alt 수직 평면에서 이동</td></tr>
+    <tr><td><kbd>I</kbd></td><td>face</td><td>면 중심을 드래그 · 클릭 선택 · shift 추가 · <kbd>x</kbd> 누르면 익스트루드</td></tr>
+    <tr><td><kbd>M</kbd></td><td>material</td><td>드래그로 면 밀기 · 클릭 선택 · alt+클릭 복사 · 방향키 미세이동 · <kbd>,</kbd><kbd>.</kbd> 회전 · <kbd>-</kbd><kbd>=</kbd> 크기 · <kbd>0</kbd> 리셋 · <kbd>9</kbd> 맞춤 · <kbd>j</kbd><kbd>l</kbd> 뒤집기</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <p><b>왜 CSG 단축키에 전부 Ctrl이 붙어 있나?</b> 수식키 없는 알파벳은 <b>전부 툴 차지</b>이기 때문이다.
+  그래서 문서를 바꾸는 명령은 예외 없이 <kbd>Ctrl</kbd> 조합을 쓴다.</p>
+</div>
+
+
+<!-- ============================================================ 07 -->
+<h2 id="draw"><span class="n">07</span>솔리드 그리기</h2>
+
+<p><kbd>B</kbd>(shape) 를 들고 팬에서 드래그하면 상자가 생긴다. <kbd>Tab</kbd>으로 6가지 모양을 순환한다:</p>
+<p><code>cuboid</code> → <code>wedge</code> → <code>cylinder</code> → <code>cone</code> → <code>sphere</code> → <code>icosphere</code></p>
+<ul>
+  <li><kbd>,</kbd> <kbd>.</kbd> — 옆면 개수(실린더/콘/스피어의 각지기 정도)</li>
+  <li><kbd>-</kbd> <kbd>+</kbd> — 화면 안쪽 방향의 두께</li>
+</ul>
+
+<figure>
+  <img src="images/05-shape.png" alt="shape 툴로 상자를 그린 직후">
+  <figcaption>front 팬에서 드래그해 상자를 그린 직후. 푸터에 <code>cuboid 2.5 m × 3.5 m × 1 m</code>처럼 실제 치수가 뜬다.</figcaption>
+</figure>
+
+<div class="tip">
+  <p>직교 팬은 2차원밖에 못 주므로 <b>세 번째 축의 두께는 툴이 정한다.</b>
+  그린 다음 <kbd>-</kbd>/<kbd>+</kbd>로 조정하거나, 다른 팬에서 <kbd>X</kbd>(extrude)로 밀어내면 된다.</p>
+</div>
+
+
+<!-- ============================================================ 08 -->
+<h2 id="csg"><span class="n">08</span>CSG — subtract · intersect · merge · hollow</h2>
+
+<p>
+  네 개 다 <b>선택한 솔리드에 대해 즉시 실행되는 명령</b>이다. 툴이 아니다 —
+  <b>어떤 툴을 들고 있든 상관없다.</b> 인스펙터 <code>entity</code> 탭의 <b>SOLIDS</b> 버튼 줄에도 같은 게 있다.
+</p>
+
+<table>
+  <thead><tr><th>단축키</th><th>명령</th><th>선택이 의미하는 것</th><th>필요 개수</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>-</kbd></td><td><b>subtract</b></td><td><b>선택 = 칼.</b> 선택한 솔리드가 겹치는 <b>다른 모든 솔리드</b>에서 깎여 나가고, 칼 자신은 삭제된다.</td><td>1개 이상</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd></td><td><b>intersect</b></td><td>선택한 것들이 <b>모두 공유하는 부피</b>만 남긴다.</td><td>2개 이상</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>J</kbd></td><td><b>merge</b></td><td>선택한 것들의 <b>볼록 껍질</b>로 합친다.</td><td>2개 이상</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>J</kbd></td><td><b>hollow</b></td><td>선택한 솔리드를 <b>그리드 한 칸 두께의 껍데기</b>로 만든다.</td><td>1개 이상</td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <p><b>subtract는 Blender의 불리언과 다르다.</b> "A와 B 두 개 선택 → 빼기"가 아니다.</p>
+  <p><b>빼낼 모양(칼)만 선택</b>하고 <kbd>Ctrl</kbd>+<kbd>-</kbd>를 누른다. 벽은 선택하지 <b>않는다</b>.
+  벽까지 같이 선택하면 벽도 "칼 목록"에 들어가 <b>깎이는 대상에서 제외</b>되고,
+  달리 겹치는 게 없으면 <code>the selection overlaps nothing to cut</code>이라며 아무 일도 안 일어난다.</p>
+  <p>문틀을 그린 상자로 벽에 구멍을 뚫는 워크플로 그대로다: 상자를 벽에 걸치게 그리고 → 상자만 선택 → <kbd>Ctrl</kbd>+<kbd>-</kbd>.</p>
+</div>
+
+<h3>실제 동작</h3>
+<div class="pair">
+  <figure>
+    <img src="images/06-csg-before.png" alt="CSG 전">
+    <figcaption><b>전</b> — 큰 상자(8.5 × 4.5 × 1 m)에 작은 상자(2.5 × 3.5 × 1 m)를 위쪽에 걸쳐 그렸다. 지금 선택된 건 <b>작은 상자(칼)뿐</b>이다.</figcaption>
+  </figure>
+  <figure>
+    <img src="images/07-csg-after.png" alt="CSG 후">
+    <figcaption><b>후</b> — <kbd>Ctrl</kbd>+<kbd>-</kbd>. 푸터에 <code>selected 8 · carved 2</code>, 인스펙터에 <code>8 × brush</code>. 칼은 사라지고 홈이 파였다.</figcaption>
+  </figure>
+</div>
+
+<div class="note">
+  <p><b>왜 8개가 됐나?</b> 브러시는 반드시 볼록해야 하는데 홈이 파인 모양은 오목하다.
+  그래서 결과가 <b>볼록 조각 여러 개</b>로 쪼개진다. 이건 버그가 아니라 이 에디터의 기본 동작이다.
+  겉보기는 하나의 벽이고, 파일에도 그대로 저장된다.</p>
+</div>
+
+<h3>hollow</h3>
+<figure>
+  <img src="images/10-hollow.png" alt="hollow 결과">
+  <figcaption><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>J</kbd>. 속이 빈 방이 된다. 벽 두께는 <b>그 순간의 그리드 크기</b>이므로, hollow 전에 <kbd>[</kbd>/<kbd>]</kbd>로 원하는 두께를 맞춰두는 게 요령이다.</figcaption>
+</figure>
+
+<h3>거부 메시지</h3>
+<p>CSG는 조건이 안 맞으면 <b>조용히 아무것도 안 하지 않고, 이유를 푸터에 적는다.</b> 그리고 실행 취소 기록도 남기지 않는다.</p>
+<table>
+  <thead><tr><th>푸터 메시지</th><th>뜻</th></tr></thead>
+  <tbody>
+    <tr><td><code>select the solids to cut with</code></td><td>칼로 쓸 솔리드를 아무것도 선택하지 않았다</td></tr>
+    <tr><td><code>the selection overlaps nothing to cut</code></td><td>칼이 겹치는 다른 솔리드가 없다 (벽까지 같이 선택한 경우가 대부분)</td></tr>
+    <tr><td><code>select two solids or more to intersect / merge</code></td><td>2개 미만 선택</td></tr>
+    <tr><td><code>those solids share no volume</code></td><td>교집합이 비었다</td></tr>
+    <tr><td><code>merged N — the hull filled in space between them</code></td><td>합쳐졌지만 볼록 껍질이 <b>아무도 안 그린 공간을 채웠다</b>. 의도한 게 맞는지 확인해라</td></tr>
+    <tr><td><code>nothing selected is thick enough to hollow at this grid size</code></td><td>그리드가 너무 커서 껍데기를 만들 수 없다 → <kbd>[</kbd>로 촘촘하게</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <p><b>잠긴 것과 숨긴 것은 깎이지 않는다.</b> 안 보이는 브러시는 건드릴 의도가 없었던 브러시라고 본다.</p>
+  <p><b>정체성 규칙:</b> 깎인 솔리드는 <b>원래 노드를 그대로 유지</b>한다(id, <code>#id</code>, 파일 안의 위치).
+  늘어난 조각들만 새 노드가 되고, 원본의 레이어·그룹·<code>.classes</code>·프로퍼티를 물려받는다.
+  덕분에 저장했다 다시 열어도 파일이 통째로 뒤집히지 않는다.</p>
+</div>
+
+
+<!-- ============================================================ 09 -->
+<h2 id="clip"><span class="n">09</span>클립 툴 <kbd>C</kbd></h2>
+
+<div class="warn">
+  <p><b>클립은 구멍을 뚫는 도구가 아니다.</b> 점 세 개는 "이 모양으로 뚫어라"가 아니라
+  <b>무한히 뻗어나가는 평면 한 장</b>을 정의한다. 그 평면이 선택된 솔리드를 <b>두 동강</b> 내고,
+  <b>한쪽만 남긴다.</b> 모양대로 파내는 건 <a href="#csg">subtract</a>다.</p>
+</div>
+
+<h3>순서</h3>
+<ol>
+  <li><kbd>V</kbd>로 <b>자를 솔리드를 먼저 선택한다.</b> (푸터에 <code>selected 1</code> 이상이 떠야 한다)</li>
+  <li><kbd>C</kbd>로 클립 툴을 든다.</li>
+  <li>점을 찍는다 — <b>직교 팬에서는 2점</b>(세 번째 방향은 팬이 준다), <b>3D 팬에서는 3점.</b></li>
+  <li>점이 충분히 찍히면 <b>어디가 잘려나갈지 팬에 미리 그려진다.</b></li>
+  <li><kbd>Tab</kbd>으로 남길 쪽을 바꾼다: <code>front</code> → <code>back</code> → <code>both</code>(양쪽 다 남겨 두 덩어리로 쪼갬).</li>
+  <li><kbd>Enter</kbd>로 확정. <kbd>Backspace</kbd>는 점 하나 취소.</li>
+</ol>
+
+<div class="pair">
+  <figure>
+    <img src="images/08-clip-aim.png" alt="클립 평면 조준">
+    <figcaption>점을 찍은 상태. 푸터에 <code>2 points · keep front · enter clips</code>처럼 현재 상태가 뜬다.</figcaption>
+  </figure>
+  <figure>
+    <img src="images/09-clip-done.png" alt="클립 완료">
+    <figcaption><kbd>Enter</kbd> 후. 평면 한쪽이 통째로 잘려나갔다.</figcaption>
+  </figure>
+</div>
+
+<h3>안 되는 이유 3가지</h3>
+<table>
+  <thead><tr><th>증상</th><th>원인과 해결</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>nothing selected to clip</code></td>
+      <td>선택이 비어 있다. 클립 툴을 든 채로는 클릭이 <b>점 찍기</b>라서 선택이 안 된다.
+          <kbd>V</kbd>로 돌아가 선택하고 → <kbd>C</kbd>.</td>
+    </tr>
+    <tr>
+      <td><code>a clip plane needs three points, or two in an orthographic pane</code></td>
+      <td>점이 모자라거나, 3D 팬에서 2점만 찍었다. 팬을 바꾸면 점이 초기화된다는 것도 주의.</td>
+    </tr>
+    <tr>
+      <td><b>메시가 통째로 사라짐</b></td>
+      <td><b>한 면 위에 점 세 개를 찍었다.</b> 그러면 평면이 그 면과 겹쳐서 "남길 쪽"이 아예 비게 되고,
+          솔리드 전체가 삭제된다. 점은 <b>서로 다른 면/방향에 걸쳐서</b> 찍어라.
+          <kbd>Ctrl</kbd>+<kbd>Z</kbd>로 되돌리면 된다.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <p><b>미리보기가 안 그려지면 <kbd>Enter</kbd>도 아무 일 안 한다.</b>
+  미리보기는 앞/뒤 양쪽이 모두 존재할 때만 그려진다. 이게 가장 빠른 자가진단이다.</p>
+</div>
+
+
+<!-- ============================================================ 10 -->
+<h2 id="structure"><span class="n">10</span>그룹 · 레이어 · 태그</h2>
+
+<table>
+  <thead><tr><th>단축키</th><th>하는 일</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>그룹 만들기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd></td><td>그룹 해제</td></tr>
+    <tr><td>더블클릭</td><td>그룹 안으로 들어가기</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>그룹에서 나오기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>복제</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>선택 숨기기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd></td><td>선택만 남기고 숨기기 (isolate)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>H</kbd></td><td>전부 다시 보이기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>선택 잠그기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></td><td>전부 잠금 해제</td></tr>
+  </tbody>
+</table>
+
+<h3>링크드 카피</h3>
+<p>
+  인스펙터 <code>entity</code> 탭의 <b>STRUCTURE</b> 줄에 <code>linked copy</code> / <code>link</code> / <code>unlink</code> / <code>match</code>가 있다.
+  링크된 그룹은 <b>한쪽을 고치면 나머지가 자동으로 따라온다.</b> 복도 모듈, 반복되는 방 같은 걸 만들 때 쓴다.
+</p>
+<ul>
+  <li><code>linked copy</code> — 원본 옆(자기 폭만큼 +x, 그리드에 스냅)에 링크된 사본을 놓는다. 겹쳐 놓으면 구분이 안 되니까 일부러 옆에 둔다.</li>
+  <li><code>link</code> — 이미 있는 그룹 2개 이상을 한 세트로 묶는다.</li>
+  <li><code>match</code> — 수동으로 다시 맞추기. (보통은 편집할 때마다 자동으로 된다)</li>
+</ul>
+
+<h3>레이어와 태그</h3>
+<p>
+  레이어는 <code>map</code> 탭에서 관리한다. 새 솔리드는 <b>현재 레이어</b>에 들어간다.
+  태그는 이름표라서 <b>태그로 선택 / 태그만 남기기 / 태그 숨기기</b>가 된다.
+  선택 전체가 이미 그 태그를 갖고 있으면 클릭이 해제로 동작한다(왕복 토글).
+</p>
+
+
+<!-- ============================================================ 11 -->
+<h2 id="inspector"><span class="n">11</span>인스펙터 4개 탭</h2>
+
+<table>
+  <thead><tr><th>탭</th><th>내용</th></tr></thead>
+  <tbody>
+    <tr><td><code>map</code></td><td>맵 전체 설정 — 레이어 목록, 태그, 월드 프로퍼티</td></tr>
+    <tr><td><code>entity</code></td><td>선택한 것의 <code>id</code> / <code>classes</code> / <code>kind</code>, 프로퍼티 편집, <b>STRUCTURE</b> 버튼 줄, <b>SOLIDS</b>(CSG 4개) 버튼 줄, <b>DEFINITIONS</b>(배치 가능한 엔티티 목록)</td></tr>
+    <tr><td><code>face</code></td><td>선택한 면의 머티리얼과 UV — 오프셋, 회전, 스케일</td></tr>
+    <tr><td><code>issues</code></td><td>맵 검사 결과와 원클릭 수정</td></tr>
+  </tbody>
+</table>
+<p>탭은 <b>선택을 따라 자동으로 바뀐다.</b> 솔리드를 고르면 entity, <kbd>Alt</kbd>+클릭으로 면을 고르면 face로 간다.</p>
+
+<figure>
+  <img src="images/04-face.png" alt="face 인스펙터">
+  <figcaption><kbd>Alt</kbd>+클릭으로 면 하나를 고른 상태. face 탭에 그 면의 머티리얼과 UV가 뜬다.</figcaption>
+</figure>
+
+<div class="note">
+  <p><b>여러 개를 선택하면</b> 헤더가 <code>8 × brush</code>처럼 개수로 바뀌고,
+  값이 서로 다른 칸은 <code>one at a time</code> / 빈칸으로 표시된다. 그 상태에서 값을 고치면 전부에 한 번에 적용된다.</p>
+</div>
+
+
+<!-- ============================================================ 12 -->
+<h2 id="material"><span class="n">12</span>머티리얼과 UV <kbd>M</kbd></h2>
+
+<ol>
+  <li><kbd>V</kbd> + <kbd>Alt</kbd>+클릭으로 면을 고른다. (여러 면은 <kbd>Shift</kbd> 추가)</li>
+  <li>인스펙터 <code>face</code> 탭에서 머티리얼을 고른다.</li>
+  <li><kbd>M</kbd>(material 툴)로 UV를 손본다.</li>
+</ol>
+
+<table>
+  <thead><tr><th>키 / 조작</th><th>하는 일</th></tr></thead>
+  <tbody>
+    <tr><td>드래그</td><td>텍스처를 면 위에서 밀기</td></tr>
+    <tr><td><kbd>Alt</kbd>+클릭</td><td>클릭한 면의 머티리얼을 <b>선택된 면들에 복사</b> (스포이드)</td></tr>
+    <tr><td>방향키</td><td>미세 이동</td></tr>
+    <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>회전</td></tr>
+    <tr><td><kbd>-</kbd> <kbd>=</kbd></td><td>스케일</td></tr>
+    <tr><td><kbd>9</kbd></td><td>면에 꽉 차게 맞춤</td></tr>
+    <tr><td><kbd>0</kbd></td><td>UV 리셋</td></tr>
+    <tr><td><kbd>J</kbd> <kbd>L</kbd></td><td>가로/세로 뒤집기</td></tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <p><b>CSG를 해도 머티리얼은 유지된다.</b> 면마다 출처 번호를 달고 다니기 때문에,
+  텍스처 입힌 상자로 벽을 파면 <b>구멍 안쪽은 상자의 머티리얼, 바깥은 벽의 머티리얼</b>로 나온다.
+  커널이 새로 만들어낸 면은 법선이 가장 비슷한 면에서 물려받는다.</p>
+</div>
+
+
+<!-- ============================================================ 13 -->
+<h2 id="issues"><span class="n">13</span>이슈 브라우저</h2>
+
+<figure>
+  <img src="images/11-issues.png" alt="이슈 탭">
+  <figcaption><code>issues</code> 탭. 맵이 조용히 망가지는 20가지 경우를 잡아내고, 대부분 원클릭 수정이 붙어 있다.</figcaption>
+</figure>
+
+<p>대표적으로 잡히는 것들:</p>
+<ul>
+  <li>그리드에서 벗어난 정점</li>
+  <li>아무것도 아닌 면 (면적 0)</li>
+  <li>존재하지 않는 대상을 가리키는 참조</li>
+  <li>서로 어긋나 버린 링크드 카피</li>
+  <li>빈 그룹, 중복된 <code>#id</code></li>
+</ul>
+<p>
+  이슈를 클릭하면 <b>그 대상이 선택되어 화면에 보인다.</b>
+  <code>fix all</code>은 <b>실행 취소 하나로 되돌아간다.</b>
+  고칠 수 없는 경우엔 <code>nothing changed — that fix does not apply here</code>라고 정직하게 말한다.
+</p>
+
+
+<!-- ============================================================ 14 -->
+<h2 id="look"><span class="n">14</span>룩과 라이트맵</h2>
+
+<p>헤더 오른쪽의 <code>classic</code> / <code>modern</code>이 렌더링 모드다.</p>
+<div class="pair">
+  <figure>
+    <img src="images/12-classic.png" alt="classic 룩">
+    <figcaption><b>classic</b> — 평평한 조명. 지오메트리 자체가 잘 보인다. 작업용.</figcaption>
+  </figure>
+  <figure>
+    <img src="images/01-overview.png" alt="modern 룩">
+    <figcaption><b>modern</b> — PBR + 맵 자체의 조명. 결과 확인용.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="images/14-bake.png" alt="bake 패널">
+  <figcaption>헤더의 <code>bake</code> — 라이트맵 굽기. 진행 상황이 패널에 뜬다.</figcaption>
+</figure>
+
+
+<!-- ============================================================ 15 -->
+<h2 id="panels"><span class="n">15</span>패널들</h2>
+
+<table>
+  <thead><tr><th>버튼</th><th>키</th><th>내용</th></tr></thead>
+  <tbody>
+    <tr><td><code>&gt;_</code></td><td><kbd>`</kbd></td><td><b>콘솔</b> — 로그와 경고. 옆의 숫자는 새 메시지 개수다.</td></tr>
+    <tr><td><code>&gt;_</code> 안의 performance 탭</td><td>—</td><td>프레임 타임, 드로우 콜</td></tr>
+    <tr><td><code>bake</code></td><td>—</td><td>라이트맵 굽기</td></tr>
+    <tr><td><code>keys</code></td><td>—</td><td>키맵 편집</td></tr>
+    <tr><td><code>prefs</code></td><td>—</td><td>환경설정 (자동저장 주기 등)</td></tr>
+  </tbody>
+</table>
+
+<figure>
+  <img src="images/13-console.png" alt="콘솔 패널">
+  <figcaption>콘솔. <kbd>`</kbd> 한 번으로 열고 닫는다.</figcaption>
+</figure>
+
+
+<!-- ============================================================ 16 -->
+<h2 id="file"><span class="n">16</span>파일과 자동저장</h2>
+
+<p>헤더 왼쪽 <code>file</code> 메뉴 = 6개 항목. 각 항목에 단축키가 같이 적혀 있다.</p>
+<table>
+  <thead><tr><th>단축키</th><th>명령</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>N</kbd></td><td>새 맵</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>열기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>저장</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>다른 이름으로 저장</td></tr>
+    <tr><td>—</td><td>되돌리기 (revert)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  파일 이름 옆의 <code>*</code>가 저장 안 된 변경이다.
+  자동저장은 <b>브라우저 로컬 스토리지</b>에 들어가고(<code>three-broom:autosave</code>),
+  주기는 <code>prefs</code>에서 바꾼다. <b>진짜로 저장하면 자동저장본은 버려진다.</b>
+</p>
+
+<div class="note">
+  <p><b>라운드트립 보장.</b> 저장 형식은 <code>.tscene</code>이고, 이 에디터는
+  "읽은 그대로 다시 쓴다"를 지키려고 애쓴다 — 노드는 원래 id와 파일 안의 위치를 유지하고,
+  CSG로 늘어난 조각만 새 노드로 추가된다. 그래서 손으로 쓴 <code>.tscene</code>을 열었다 저장해도 diff가 최소로 나온다.
+  자세한 규칙은 <code>docs/spec-roundtrip.md</code>와 <code>docs/spec-brush.md</code>에 있다.</p>
+</div>
+
+
+<!-- ============================================================ 17 -->
+<h2 id="keys"><span class="n">17</span>키맵 전체</h2>
+
+<p>헤더의 <code>keys</code>를 누르면 전체 목록이 뜬다. <b>키를 클릭하면 해제</b>되고, <code>+</code>를 누른 뒤 원하는 조합을 치면 등록된다.
+<code>defaults</code>로 언제든 원상복구. 변경분은 브라우저에 <code>three-broom:keys</code>로 저장된다.</p>
+
+<div class="pair">
+  <figure>
+    <img src="images/03-keys.png" alt="키맵 패널 위쪽">
+    <figcaption>file · edit · structure · csg · grid</figcaption>
+  </figure>
+  <figure>
+    <img src="images/03b-keys.png" alt="키맵 패널 아래쪽">
+    <figcaption>view · window · tools</figcaption>
+  </figure>
+</div>
+
+<table>
+  <thead><tr><th>단축키</th><th>명령</th></tr></thead>
+  <tbody>
+    <tr><td colspan="2" class="dim">— FILE —</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>N</kbd> / <kbd>O</kbd> / <kbd>S</kbd></td><td>새 맵 / 열기 / 저장</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>다른 이름으로 저장</td></tr>
+
+    <tr><td colspan="2" class="dim">— EDIT —</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>실행 취소</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>다시 실행</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td><b>마지막 동작 반복</b></td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>복제</td></tr>
+
+    <tr><td colspan="2" class="dim">— STRUCTURE —</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd></td><td>그룹 / 그룹 해제</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>그룹에서 나가기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>H</kbd> / <kbd>+Shift</kbd> / <kbd>+Alt</kbd></td><td>숨기기 / isolate / 전부 보이기</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></td><td>잠그기 / 전부 잠금 해제</td></tr>
+
+    <tr><td colspan="2" class="dim">— CSG —</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>-</kbd></td><td>subtract (선택이 칼)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd></td><td>intersect</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>J</kbd></td><td>convex merge</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>J</kbd></td><td>hollow</td></tr>
+
+    <tr><td colspan="2" class="dim">— GRID —</td></tr>
+    <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>촘촘하게 / 성기게</td></tr>
+
+    <tr><td colspan="2" class="dim">— VIEW —</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>4</kbd></td><td>팬 레이아웃</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>팬 최대화</td></tr>
+    <tr><td><kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd></td><td>프레이밍 / 모든 팬에서 프레이밍</td></tr>
+
+    <tr><td colspan="2" class="dim">— WINDOW —</td></tr>
+    <tr><td><kbd>`</kbd></td><td>콘솔</td></tr>
+    <tr><td class="dim">기본값 없음</td><td>performance, lightmaps <span class="dim">(직접 지정 가능)</span></td></tr>
+
+    <tr><td colspan="2" class="dim">— TOOLS —</td></tr>
+    <tr><td><kbd>V</kbd> <kbd>G</kbd> <kbd>R</kbd> <kbd>T</kbd> <kbd>H</kbd></td><td>select · move · rotate · scale · shear</td></tr>
+    <tr><td><kbd>B</kbd> <kbd>P</kbd> <kbd>N</kbd></td><td>shape · patch · entity</td></tr>
+    <tr><td><kbd>X</kbd> <kbd>K</kbd> <kbd>C</kbd></td><td>extrude · sweep · clip</td></tr>
+    <tr><td><kbd>Y</kbd> <kbd>U</kbd> <kbd>I</kbd> <kbd>M</kbd></td><td>vertex · edge · face · material</td></tr>
+  </tbody>
+</table>
+
+
+<!-- ============================================================ 18 -->
+<h2 id="trouble"><span class="n">18</span>자주 막히는 곳</h2>
+
+<table>
+  <thead><tr><th>증상</th><th>원인</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>클릭해도 선택이 안 된다</td>
+      <td>다른 툴을 들고 있다. <kbd>V</kbd>를 먼저 눌러라. 또는 그 솔리드가 <b>잠겨 있거나 숨겨져</b> 있다.</td>
+    </tr>
+    <tr>
+      <td><kbd>Ctrl</kbd>+<kbd>-</kbd>를 눌렀는데 아무 일도 없다</td>
+      <td>푸터를 봐라. <code>overlaps nothing to cut</code>이면 <b>깎일 벽까지 같이 선택한 것</b>이다.
+          칼로 쓸 상자만 선택해라.</td>
+    </tr>
+    <tr>
+      <td>클립 <kbd>Enter</kbd>가 먹통</td>
+      <td><code>selected 0</code>이다. 클립 툴을 든 채로는 선택이 안 되니 <kbd>V</kbd>로 먼저 선택.</td>
+    </tr>
+    <tr>
+      <td>클립했더니 메시가 통째로 사라짐</td>
+      <td>점 세 개를 <b>한 면 위에</b> 찍었다. 평면이 면과 겹쳐 남길 쪽이 비었다. <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</td>
+    </tr>
+    <tr>
+      <td>CSG 후에 브러시 개수가 확 늘었다</td>
+      <td>정상이다. 볼록 조각으로 쪼개진 것이다.</td>
+    </tr>
+    <tr>
+      <td>hollow가 거부당한다</td>
+      <td>그리드가 솔리드보다 두껍다. <kbd>[</kbd>로 촘촘하게.</td>
+    </tr>
+    <tr>
+      <td>키가 안 먹는다</td>
+      <td>텍스트 입력칸에 포커스가 있다. 인스펙터 밖을 한 번 클릭해라 —
+          입력 중일 때는 단축키가 통째로 꺼진다.</td>
+    </tr>
+    <tr>
+      <td>3D 팬에서 조준이 잘 안 된다</td>
+      <td>직교 팬에서 해라. 화면 방향이 곧 축이라 훨씬 정확하다.</td>
+    </tr>
+    <tr>
+      <td>모양이 이상하게 뭉개져 있다</td>
+      <td><code>issues</code> 탭을 열어봐라. 그리드 밖 정점이나 면적 0인 면이 잡힐 것이다.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="dim" style="margin-top:48px; padding-top:18px; border-top:1px solid var(--line); font-size:12px;">
+  스펙 문서: <code>scene/editor/docs/spec-brush.md</code> · <code>scene/editor/docs/spec-roundtrip.md</code> ·
+  개발 로드맵: <code>scene/editor/ROADMAP.md</code>
+</p>
+
+</main>
+</div>
+</body>
+</html>

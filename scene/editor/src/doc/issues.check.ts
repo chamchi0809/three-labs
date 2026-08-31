@@ -16,8 +16,9 @@ import { cuboid } from "../brush/builder.ts";
 import { report, test } from "../check.ts";
 import { catalogueOfSheets, EMPTY } from "./catalogue.ts";
 import {
-  brushNode, entityNode, groupNode, layerNode, nodeById, type Node, type World,
+  brushNode, entityNode, groupNode, layerNode, nodeById, patchNode, type Node, type World,
 } from "./document.ts";
+import { patchOf, patchShape } from "../patch/patch.ts";
 import { linkedCopy } from "./groups.ts";
 import {
   applyFix, applyFixes, describeIssues, EXTENT, issueCounts, issuesOf, VALIDATORS, validatorById,
@@ -36,6 +37,10 @@ const catalogue = catalogueOfSheets([sheet]);
 
 const box = (min: Vec3 = [0, 0, 0], max: Vec3 = [1, 1, 1], material = "wall") =>
   brushNode(solidOf(cuboid({ min, max }), { material }));
+
+/** a flat patch, which is the one shape whose control points land on the grid a designer drew it on */
+const curve = (min: Vec3 = [0, 0, 0], max: Vec3 = [2, 0, 2], material?: string) =>
+  patchNode(patchShape("plane", min, max, material ? { material } : {}));
 
 const world = (...children: Node[]): World =>
   ({ layers: [layerNode("Ground", children)], broom: { grid: -2, scale: 1 } });
@@ -105,6 +110,65 @@ test("a face made of something undeclared is found, and is silent when nothing i
   const blind = context(world(solid), { catalogue: EMPTY, material: undefined });
   assert.deepEqual(issuesOf(blind).filter((i) => i.validator === "unknown-material"), [],
     "a project that declares no materials cannot say a name is wrong");
+});
+
+// ---------------------------------------------------------------- patches
+
+test("a grid that is not a grid is found and deleted", () => {
+  const ragged = patchNode(patchOf([[[0, 0, 0], [1, 0, 0], [2, 0, 0]], [[0, 0, 1], [1, 0, 1]]]));
+  findsAndFixes(context(world(ragged)), "invalid-solid");
+});
+
+test("a control point off the grid is found and snapped onto it", () => {
+  const c = context(world(curve([0.13, 0, 0], [1, 0, 1])), { grid: 0.25 });
+  findsAndFixes(c, "off-grid");
+
+  const square = context(world(curve([0, 0, 0], [2, 0, 2])), { grid: 1 });
+  assert.deepEqual(issuesOf(square).filter((i) => i.validator === "off-grid"), []);
+});
+
+test("a surface with no thickness is not a sliver, because it was never meant to have any", () => {
+  const c = context(world(curve([0, 0, 0], [2, 0, 2])), { grid: 1 });
+  assert.deepEqual(issuesOf(c).filter((i) => i.validator === "tiny-solid"), [],
+    "a patch has no volume to be too small");
+});
+
+test("a patch beyond the world is found and deleted", () => {
+  findsAndFixes(context(world(curve([EXTENT + 10, 0, 0], [EXTENT + 11, 0, 1]))), "out-of-bounds");
+});
+
+test("a patch made of nothing is given the material in hand, on the one surface it has", () => {
+  const found = findsAndFixes(context(world(curve())), "no-material", 1);
+  assert.equal(found[0]!.face, 0, "a patch's surface is face 0, and the issue says so");
+});
+
+test("a patch made of something undeclared is found once, not six times", () => {
+  findsAndFixes(context(world(curve([0, 0, 0], [2, 0, 2], "granite"))), "unknown-material", 1);
+});
+
+test("a patch scaled to nothing is found and reset", () => {
+  const flat = patchNode(patchShape("plane", [0, 0, 0], [2, 0, 2], {
+    material: "wall", uv: { offset: [0, 0], scale: [0, 1], rotation: 0 },
+  }));
+  findsAndFixes(context(world(flat)), "uv-scale-zero");
+});
+
+test("a brush entity wrapped around a patch is written around geometry, and is left alone", () => {
+  const door = entityNode("mesh", { classes: ["door"], children: [curve([0, 0, 0], [2, 0, 2], "wall")] });
+  const c = context(world(door));
+  assert.deepEqual(issuesOf(c).filter((i) => i.validator === "empty-brush-entity"), [],
+    "deleting this would delete a working part of the level");
+});
+
+test("a point entity holding a patch is found, and the patch is moved out to the layer", () => {
+  const inner = curve([0, 0, 0], [2, 0, 2], "wall");
+  const torch = entityNode("mesh", {
+    classes: ["torch"], props: setVec3([], "position", [0, 0, 0]), children: [inner],
+  });
+  const c = context(world(torch));
+  findsAndFixes(c, "point-with-solids");
+  const fixed = applyFixes(c, issuesOf(c).filter((i) => i.validator === "point-with-solids"));
+  assert.ok(nodeById(fixed, inner.id), "the patch survived being moved out");
 });
 
 // ---------------------------------------------------------------- entities

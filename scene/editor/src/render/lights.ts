@@ -23,7 +23,7 @@ import type { Catalogue } from "../doc/catalogue.ts";
 import { defFor } from "../doc/catalogue.ts";
 import type { Node, World } from "../doc/document.ts";
 import { childrenOf } from "../doc/document.ts";
-import { SYNTHETIC, numberOf, valueOf, vec3Of } from "../doc/props.ts";
+import { SYNTHETIC, asColour, numberOf, valueOf, vec3Of } from "../doc/props.ts";
 
 /**
  * The editor's own lighting, which is not the map's.
@@ -145,10 +145,11 @@ function aim(target: Object3D, body: Member[]): void {
   if (at) target.position.set(at[0], at[1], at[2]);
 }
 
-/** a colour a sheet wrote as a literal — `#ffddaa`, a bare number, or a name three's `Color` knows */
+/** a colour a sheet wrote as a literal — `color(#ffddaa)`, a bare hex, or a name three's `Color` knows */
 function colourOf(body: Member[], name: string): number | undefined {
   const v = valueOf(body, name);
-  if (v?.kind === "hex" || v?.kind === "number") return v.value;
+  const literal = asColour(v);
+  if (literal !== undefined) return literal;
   if (v?.kind === "string" || v?.kind === "ident") {
     const text = v.kind === "string" ? v.value : v.name;
     try {

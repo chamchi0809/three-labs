@@ -10,10 +10,10 @@
  * complains about — so links here come out of the values themselves rather than out of a naming
  * convention. Anything that refers to a node is a link, whatever the property is called.
  */
-import type { Value } from "tscene";
 import {
   childrenOf, walk, type Node, type NodeId, type World,
 } from "../doc/document.ts";
+import { refsIn } from "../doc/props.ts";
 
 export type Link = {
   from: NodeId;
@@ -46,54 +46,6 @@ export function linksOf(world: World): Link[] {
     }
   }
   return links;
-}
-
-/** every `ref(#name)` inside a value, however deeply it is nested in arrays, records and calls */
-export function* refsIn(value: Value): Generator<string> {
-  switch (value.kind) {
-    case "ref":
-      yield value.name;
-      return;
-    case "array":
-      for (const item of value.items) yield* refsIn(item);
-      return;
-    case "record":
-      for (const entry of value.entries) yield* refsIn(entry.value);
-      return;
-    case "object":
-      for (const arg of value.args) yield* refsIn(arg);
-      for (const member of value.body) {
-        if (member.kind === "prop" || member.kind === "var") yield* refsIn(member.value);
-      }
-      return;
-    case "calc":
-      yield* refsIn(value.left);
-      yield* refsIn(value.right);
-      return;
-    case "fn":
-      for (const arg of value.args) yield* refsIn(arg);
-      return;
-    case "each":
-      yield* refsIn(value.over);
-      yield* refsIn(value.body);
-      return;
-    case "read":
-      yield* refsIn(value.target);
-      return;
-    case "call":
-      yield* refsIn(value.target);
-      for (const arg of value.args) yield* refsIn(arg);
-      return;
-    case "index":
-      yield* refsIn(value.target);
-      yield* refsIn(value.at);
-      return;
-    case "var":
-      if (value.fallback) yield* refsIn(value.fallback);
-      return;
-    default:
-      return;
-  }
 }
 
 // ---------------------------------------------------------------- where a link starts and ends

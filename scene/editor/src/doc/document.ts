@@ -17,6 +17,7 @@
 import type { Member, NodeBroom, Value, Vec3 } from "tscene";
 import type { Bounds } from "../brush/builder.ts";
 import { brushBounds, type Brush } from "../brush/brush.ts";
+import { patchBounds, type Patch } from "../patch/patch.ts";
 import type { Origin } from "../io/origin.ts";
 import { vec3Of } from "./props.ts";
 
@@ -51,6 +52,13 @@ type Base = {
 export type BrushNode = Base & { kind: "brush"; brush: Brush; props: Member[] };
 
 /**
+ * A curved surface. A sibling of the solid rather than a kind of it: a patch bounds nothing, so it is not
+ * a thing CSG, clipping or vertex editing have anything to say about, and the tools that act on solids
+ * check for `"brush"` on purpose.
+ */
+export type PatchNode = Base & { kind: "patch"; patch: Patch; props: Member[] };
+
+/**
  * Any node the editor does not model specially: a mesh, a light, an instance of a `@template`. Its body
  * is carried verbatim apart from the child nodes, which are lifted into `children`.
  */
@@ -69,19 +77,25 @@ export type GroupNode = Base & { kind: "group"; name: string; children: Node[]; 
 /** the top level of the tree, and the unit a designer hides a whole floor of a building with */
 export type LayerNode = Base & { kind: "layer"; name: string; children: Node[]; props: Member[] };
 
-export type Node = BrushNode | EntityNode | GroupNode | LayerNode;
+export type Node = BrushNode | PatchNode | EntityNode | GroupNode | LayerNode;
 export type Parent = GroupNode | LayerNode | EntityNode;
+/** the two kinds the editor draws itself, rather than handing to the runtime to make what it will of */
+export type SolidNode = BrushNode | PatchNode;
 export type World = { layers: LayerNode[]; broom: { grid: number; scale: number } };
 
 export const DEFAULT_LAYER = "Default";
 
-export const hasChildren = (node: Node): node is Parent => node.kind !== "brush";
+export const hasChildren = (node: Node): node is Parent => node.kind !== "brush" && node.kind !== "patch";
 export const childrenOf = (node: Node): Node[] => (hasChildren(node) ? node.children : []);
 
 // ---------------------------------------------------------------- building
 
 export const brushNode = (brush: Brush, over: Partial<BrushNode> = {}): BrushNode => ({
   kind: "brush", id: freshId(), broom: {}, classes: [], props: [], brush, ...over,
+});
+
+export const patchNode = (patch: Patch, over: Partial<PatchNode> = {}): PatchNode => ({
+  kind: "patch", id: freshId(), broom: {}, classes: [], props: [], patch, ...over,
 });
 
 export const entityNode = (type: string, over: Partial<EntityNode> = {}): EntityNode => ({
@@ -166,8 +180,24 @@ export const isHidden = (world: World, id: NodeId): boolean => pathTo(world, id)
 /** every solid at or under a node — what a material assignment or a CSG operation actually acts on */
 export function* brushesUnder(node: Node): Generator<BrushNode> {
   if (node.kind === "brush") yield node;
-  else for (const kid of node.children) yield* brushesUnder(kid);
+  else for (const kid of childrenOf(node)) yield* brushesUnder(kid);
 }
+
+/** every surface at or under a node — what a material assignment acts on, which patches take too */
+export function* solidsUnder(node: Node): Generator<SolidNode> {
+  if (node.kind === "brush" || node.kind === "patch") yield node;
+  else for (const kid of childrenOf(node)) yield* solidsUnder(kid);
+}
+
+/**
+ * The word a node is written with in a sheet, which is also what a selector matches it by.
+ *
+ * `@template .torch pointLight`, `@override .clip brush`, a tag that says `patch` — all three ask the same
+ * question, so all three ask it here. A layer answers `group`, because that is what it is written as when
+ * it is written at all.
+ */
+export const nodeTypeName = (node: Node): string =>
+  node.kind === "entity" ? node.type : node.kind === "layer" ? "group" : node.kind;
 
 // ---------------------------------------------------------------- changing
 
@@ -306,6 +336,10 @@ export function entityBounds(node: EntityNode): Bounds | undefined {
 /** everything a node encloses, or nothing when it encloses nothing at all */
 export function nodeBounds(node: Node): Bounds | undefined {
   if (node.kind === "brush") return brushBounds(node.brush);
+  // the control hull, not the tessellated surface. It is bigger — a handle sits off the curve by design —
+  // and the alternative is a box that changes size when the subdivision count does, which would make a
+  // frame-selection jump the first time the camera got close enough to raise it
+  if (node.kind === "patch") return patchBounds(node.patch.grid);
   const own = node.kind === "entity" ? entityBounds(node) : undefined;
   return childrenOf(node).reduce<Bounds | undefined>((acc, kid) => union(acc, nodeBounds(kid)), own);
 }

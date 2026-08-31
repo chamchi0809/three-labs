@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { parse, type Compound, type Member, type Override } from "tscene";
 import { report, test } from "../check.ts";
-import { type Node, type World } from "../doc/document.ts";
+import { childrenOf, type Node, type World } from "../doc/document.ts";
 import {
   chainsOf, derivedChildren, derivedIds, effective, layersOf, nameOf, resolveInheritance, routesFor,
   selects, type Inheritance,
@@ -23,7 +23,7 @@ const opened = (text: string): { world: World; inh: Inheritance; sheets: Sheets 
 const find = (world: World, sheetId: string): Node => {
   const search = (node: Node): Node | undefined => {
     if (node.sheetId === sheetId) return node;
-    for (const kid of node.kind === "brush" ? [] : node.children) {
+    for (const kid of childrenOf(node)) {
       const hit = search(kid);
       if (hit) return hit;
     }

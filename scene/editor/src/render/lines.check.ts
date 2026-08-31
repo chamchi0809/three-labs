@@ -75,6 +75,33 @@ test("a hole is collapsed to a point, so a dropped key stops being drawn", () =>
   assert.deepEqual(flushLines(lines).ranges, [{ start: 0, count: 24 }]);
 });
 
+test("a key that outgrew its span leaves nothing behind in the space it gave up", () => {
+  const lines = newLines();
+  setLines(lines, "a", boxSegments([0, 0, 0], [1, 1, 1]));
+  setLines(lines, "b", boxSegments([4, 4, 4], [5, 5, 5]));
+  flushLines(lines); // past the growth, so what follows is a partial upload rather than a whole one
+
+  // the same solid, whose edges came out to a different count — which is what dragging a wall does the
+  // moment two of its faces stop agreeing about a corner to the last bit
+  setLines(lines, "a", new Float32Array([...boxSegments([0, 0, 0], [2, 2, 2]), 0, 0, 0, 9, 9, 9]));
+
+  assert.equal(lines.entries.get("a")!.start, 48, "past b, because a's own hole was too small");
+  assert.ok(lines.position.slice(0, 24 * 3).every((v) => v === 0), "and the hole draws nothing");
+  assert.deepEqual(flushLines(lines).ranges, [{ start: 0, count: 24 }, { start: 48, count: 26 }]);
+  assert.deepEqual(overlaps(lines.arena), []);
+});
+
+test("a key that shrank keeps what it just wrote and blanks the rest", () => {
+  const lines = newLines();
+  setLines(lines, "a", boxSegments([0, 0, 0], [1, 1, 1]));
+  setLines(lines, "b", boxSegments([4, 4, 4], [5, 5, 5]));
+  setLines(lines, "a", spikeSegments([0, 0, 0], [1, 1, 1], 100));
+
+  assert.deepEqual(lines.entries.get("a"), { start: 0, count: 6 }, "back into the front of its own span");
+  assert.notDeepEqual([...lines.position.slice(0, 18)], new Array(18).fill(0), "the new lines survived");
+  assert.ok(lines.position.slice(6 * 3, 24 * 3).every((v) => v === 0), "the tail of the old span did not");
+});
+
 test("the three arrays grow together", () => {
   const lines = newLines();
   for (let i = 0; i < 20; i++) setLines(lines, `n${i}`, boxSegments([0, 0, 0], [1, 1, 1]));

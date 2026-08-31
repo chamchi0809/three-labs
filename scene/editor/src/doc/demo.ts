@@ -20,7 +20,7 @@ import { cuboid } from "../brush/builder.ts";
 import type { Vec3 } from "tscene";
 import type { Member, Value } from "tscene";
 import { catalogueOfSheets, type Catalogue } from "./catalogue.ts";
-import { SYNTHETIC, hex, num, setProp, setVec3, vec3 } from "./props.ts";
+import { colour, num, record, ref, setProp, setVec3, vec3 } from "./props.ts";
 import {
   brushNode, entityNode, groupNode, layerNode, type BrushNode, type Node, type World,
 } from "./document.ts";
@@ -55,13 +55,13 @@ export function demoMap(): World {
   // so it is written a long way out along the axis it comes down.
   const sky = entityNode("hemisphereLight", {
     sheetId: "sky",
-    props: body([["color", hex(0x9fb4cc)], ["groundColor", hex(0x3a352e)], ["intensity", num(0.9)]]),
+    props: body([["color", colour(0x9fb4cc)], ["groundColor", colour(0x3a352e)], ["intensity", num(0.9)]]),
   });
   const sun = entityNode("directionalLight", {
     sheetId: "sun",
     props: body([
       ["position", vec3([-24, 40, 18])],
-      ["color", hex(0xfff2dd)],
+      ["color", colour(0xfff2dd)],
       ["intensity", num(1.4)],
     ]),
   });
@@ -73,12 +73,18 @@ export function demoMap(): World {
     broom: { size: [-0.2, -0.2, -0.2, 0.2, 0.2, 0.2] },
   });
   const switchPlate = box([7.9, 1.1, 2], [8, 1.5, 2.4], "trim");
+  // `.button` is what gives it its geometry and material — an entity is a template applied to a node, and
+  // one that names no template is a `mesh` with nothing in it. What it points at is the instance's own
+  // business, though, the way `target` is a per-entity key in TrenchBroom and not part of the definition.
+  //
+  // Under `userData` because a `Mesh` has no `target`, and tscene means that literally: it would assign one
+  // anyway, warn, and hand the game an object three does not describe. `userData` is where three itself
+  // keeps what the engine on top of it cares about, and `refsIn` follows a `ref()` into a record, so the
+  // link is still drawn between the switch and the lamp.
   const button = entityNode("mesh", {
     sheetId: "switch",
-    props: [
-      ...setVec3([], "position", [7.95, 1.3, 2.2]),
-      { ...SYNTHETIC, kind: "prop", name: "lamp", value: { ...SYNTHETIC, kind: "ref", name: "lamp", namePos: SYNTHETIC } },
-    ],
+    classes: ["button"],
+    props: setProp(setVec3([], "position", [7.95, 1.3, 2.2]), "userData", record([["target", ref("lamp")]])),
     broom: { size: [-0.1, -0.2, -0.2, 0.1, 0.2, 0.2] },
   });
 
@@ -117,13 +123,13 @@ export const DEMO_SHEET = `
   roughness: 0.85;
   depth: 0.035;
 }
---plaster: meshStandardMaterial { color: #cfcabc; roughness: 1; }
---stone: meshStandardMaterial { color: #8d8f94; roughness: 0.9; metalness: 0; }
---trim: meshStandardMaterial { color: #3f4a5a; roughness: 0.45; metalness: 0.6; }
+--plaster: meshStandardMaterial { color: color(#cfcabc); roughness: 1; }
+--stone: meshStandardMaterial { color: color(#8d8f94); roughness: 0.9; metalness: 0; }
+--trim: meshStandardMaterial { color: color(#3f4a5a); roughness: 0.45; metalness: 0.6; }
 
 @template pointLight.lamp {
   @broom { icon: "light"; color: #ffcc66; size: [-0.2, -0.2, -0.2, 0.2, 0.2, 0.2]; }
-  color: #ffddaa;
+  color: color(#ffddaa);
   intensity: 12;
   distance: 9;
   castShadow: true;
@@ -131,16 +137,15 @@ export const DEMO_SHEET = `
 
 @template mesh.crate {
   @broom { icon: "crate"; color: #a9773f; size: [-0.4, 0, -0.4, 0.4, 0.8, 0.4]; }
-  geometry: box(0.8, 0.8, 0.8);
+  geometry: boxGeometry(0.8, 0.8, 0.8);
   material: var(--wall);
   castShadow: true;
 }
 
 @template mesh.button {
   @broom { icon: "switch"; color: #6fd08c; size: [-0.1, -0.2, -0.2, 0.1, 0.2, 0.2]; }
-  geometry: box(0.05, 0.2, 0.2);
+  geometry: boxGeometry(0.05, 0.2, 0.2);
   material: var(--trim);
-  target: ref(#lamp);
 }
 
 @template perspectiveCamera.viewpoint {
@@ -151,7 +156,7 @@ export const DEMO_SHEET = `
 }
 
 @template group.trigger {
-  @broom { kind: "brush"; icon: "trigger"; color: #d08770; }
+  @broom { kind: brush; icon: "trigger"; color: #d08770; }
   name: "trigger";
   visible: false;
 }

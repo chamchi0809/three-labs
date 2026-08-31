@@ -18,8 +18,9 @@ import {
 } from "three/webgpu";
 import { brushToMesh } from "../brush/brush.ts";
 import type { Bounds } from "../brush/builder.ts";
+import { hullSegments, patchToBrushMesh } from "../patch/patch.ts";
 import type { Catalogue } from "../doc/catalogue.ts";
-import type { BrushNode, Node, NodeId, World } from "../doc/document.ts";
+import type { BrushNode, Node, NodeId, PatchNode, World } from "../doc/document.ts";
 import { boundsCentre, childrenOf, nodeById, nodeBounds } from "../doc/document.ts";
 import type { Editor } from "../doc/editor.ts";
 import { isFaceSelected, isSelected, type Selection } from "../doc/selection.ts";
@@ -29,7 +30,7 @@ import {
   FACE_SELECTED, HOVERED, LOCKED, OUTSIDE, SELECTED, type BrushBatch, type Flags,
 } from "./batch.ts";
 import {
-  brushHandles, newHandles, setHandleFlags, setHandles, type Handle, type HandleSet,
+  brushHandles, newHandles, patchHandles, setHandleFlags, setHandles, type Handle, type HandleSet,
 } from "./handles.ts";
 import { editorLights, mapLights } from "./lights.ts";
 import { linkSegments, linksOf } from "./links.ts";
@@ -46,8 +47,13 @@ import { hideLabels, newLabels, setLabel, type Labels } from "./text.ts";
 /** what the mouse is currently over, which is the one piece of state the renderer owns itself */
 export type Hover = { node: NodeId; face?: number } | undefined;
 
-/** what a brush was last drawn as, so an unchanged one is skipped without asking the GPU anything */
-type Seen = { brush: BrushNode["brush"]; flags: number[] };
+/**
+ * What a surface was last drawn as, so an unchanged one is skipped without asking the GPU anything.
+ *
+ * `shape` is the solid's `brush` or the patch's `patch` — whichever of the two this node keeps its geometry
+ * in. Both are immutable, so one pointer comparison answers "has this changed" for either kind.
+ */
+type Seen = { shape: BrushNode["brush"] | PatchNode["patch"]; flags: number[] };
 
 export type RenderScene = {
   scene: Scene;
@@ -98,7 +104,8 @@ export type RenderScene = {
    * mouse moved, and the mouse moving is most of what makes the renderer run.
    */
   looked: { look: Look; catalogue: Catalogue } | undefined;
-  lit: { look: Look; world: World; catalogue: Catalogue } | undefined;
+  /** what the rig in {@link RenderScene.lights} currently is, as {@link lightSignature} writes it */
+  lit: string | undefined;
 };
 
 export function newRenderScene(gridSize = 1): RenderScene {
@@ -211,20 +218,55 @@ function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "classic")
   }
 }
 
-/** the map's own lights when it has any, and the editor's rig when it has not */
+/**
+ * The map's own lights when it has any, and the editor's rig when it has not.
+ *
+ * The lights are built every call and then thrown away unless they differ from the ones already up. That
+ * sounds backwards — building them is the work — but it is not: walking the map for its light entities is
+ * a few hundred property reads, while *installing* them is what costs. Swapping the contents of the light
+ * group changes the lighting graph three derives its shaders from, so every material in the map recompiles.
+ *
+ * The distinction matters because an edit replaces the world rather than mutating it, so a comparison by
+ * identity says "different" on every frame of every drag. Dragging a shape out recompiled the whole palette
+ * sixty times a second, which is the bulk of why the tools felt like treacle.
+ */
 function syncLights(rs: RenderScene, world: World, catalogue: Catalogue, look: Look): void {
-  if (rs.lit?.look === look && rs.lit.world === world && rs.lit.catalogue === catalogue) return;
-  rs.lit = { look, world, catalogue };
+  const own = look === "pbr" ? mapLights(world, catalogue) : [];
+  const lights = own.length ? own : editorLights();
+
+  const signature = look + "|" + lights.map(lightSignature).join(";");
+  if (rs.lit === signature) return;
+  rs.lit = signature;
 
   rs.lights.clear();
-  const own = look === "pbr" ? mapLights(world, catalogue) : [];
-  for (const light of own.length ? own : editorLights()) {
+  for (const light of lights) {
     rs.lights.add(light);
     // a directional or spot light aims at an Object3D, and an Object3D outside the scene graph never gets
     // a world matrix — so the target has to be in the tree even though it draws nothing
     const target = (light as { target?: Object3D }).target;
     if (target && !target.parent) rs.lights.add(target);
   }
+}
+
+/**
+ * Everything about a light that would change the picture, in one line.
+ *
+ * Type, colour, intensity, place, aim, and the two falloff numbers a point or spot light carries. Nothing
+ * else on a light is read by a renderer, so two lights with the same line are interchangeable and the one
+ * already in the scene is the one worth keeping.
+ */
+function lightSignature(light: Object3D): string {
+  const l = light as Object3D & {
+    color?: { getHex(): number }; groundColor?: { getHex(): number }; intensity?: number;
+    distance?: number; decay?: number; angle?: number; penumbra?: number; target?: Object3D;
+  };
+  const at = l.position;
+  const aim = l.target?.position;
+  return [
+    l.type, l.color?.getHex(), l.groundColor?.getHex(), l.intensity,
+    at.x, at.y, at.z, aim?.x, aim?.y, aim?.z,
+    l.distance, l.decay, l.angle, l.penumbra,
+  ].join(",");
 }
 
 // ---------------------------------------------------------------- the diff
@@ -241,9 +283,13 @@ export function syncScene(rs: RenderScene, editor: Editor, dragging = false): vo
 
   const alive = new Set<NodeId>();
   walkForDrawing(editor, (node, context) => {
-    if (node.kind !== "brush") return;
-    alive.add(node.id);
-    syncBrush(rs, node, editor.selection, context);
+    if (node.kind === "brush") {
+      alive.add(node.id);
+      syncBrush(rs, node, editor.selection, context);
+    } else if (node.kind === "patch") {
+      alive.add(node.id);
+      syncPatch(rs, node, editor.selection, context);
+    }
   });
 
   for (const id of [...rs.seen.keys()]) {
@@ -290,7 +336,7 @@ function syncBrush(rs: RenderScene, node: BrushNode, selection: Selection, conte
   const flags = faceFlags(rs, node, selection, context);
   const was = rs.seen.get(node.id);
 
-  if (was && was.brush === node.brush) {
+  if (was && was.shape === node.brush) {
     if (same(was.flags, flags)) return;
     setFlags(rs.brushes, node.id, (face) => flags[face] ?? 0);
     // an edge takes the flags of the solid, not of a face: an edge belongs to two faces and would
@@ -325,7 +371,55 @@ function syncBrush(rs: RenderScene, node: BrushNode, selection: Selection, conte
     object: ordinal,
     part: (segment) => faces[segment] ?? 0,
   });
-  rs.seen.set(node.id, { brush: node.brush, flags });
+  rs.seen.set(node.id, { shape: node.brush, flags });
+}
+
+/**
+ * A patch into the same two batches the solids go into.
+ *
+ * The surface joins the face batch as one group, which is what gives it selection, hover, the pick buffer
+ * and a material slot for free. What goes into the *line* batch is the control net rather than the
+ * tessellated wireframe: the net is the thing a designer edits, and drawing sixteen-by-sixteen quads of
+ * hairline over a curved wall is a grey smear that hides the very handles it is drawn to explain.
+ */
+function syncPatch(rs: RenderScene, node: PatchNode, selection: Selection, context: Context): void {
+  const flags = [patchFlags(rs, node, selection, context)];
+  const was = rs.seen.get(node.id);
+
+  if (was && was.shape === node.patch) {
+    if (same(was.flags, flags)) return;
+    setFlags(rs.brushes, node.id, () => flags[0]!);
+    setLineFlags(rs.edges, node.id, solidFlags(flags));
+    was.flags = flags;
+    return;
+  }
+
+  const { mesh } = patchToBrushMesh(node.patch);
+  if (!mesh) {
+    // a grid that is not a grid draws nothing rather than drawing wrongly; the inspector reports it
+    rs.seen.delete(node.id);
+    dropBrush(rs.brushes, node.id);
+    dropLines(rs.edges, node.id);
+    return;
+  }
+
+  setBrush(rs.brushes, node.id, mesh, () => flags[0]!, () => slotOf(rs.palette, node.patch.material));
+  setLines(rs.edges, node.id, hullSegments(node.patch.grid), solidFlags(flags), {
+    object: entryOf(rs.brushes, node.id)!.ordinal,
+    part: () => 0,
+  });
+  rs.seen.set(node.id, { shape: node.patch, flags });
+}
+
+/** the same word a solid's face gets, for the one surface a patch has */
+function patchFlags(rs: RenderScene, node: PatchNode, selection: Selection, context: Context): number {
+  let flags =
+    (context.locked ? LOCKED : 0) |
+    (context.outside ? OUTSIDE : 0) |
+    (isSelected(selection, node.id) ? SELECTED : 0);
+  if (isFaceSelected(selection, { node: node.id, face: 0 })) flags |= FACE_SELECTED;
+  if (rs.hover?.node === node.id) flags |= HOVERED;
+  return flags;
 }
 
 /** one flag word per face of a solid — the only place the editor's several kinds of state meet */
@@ -459,6 +553,14 @@ export function syncHandles(
   if (kinds) {
     for (const id of editor.selection.nodes) {
       const node = nodeById(editor.world, id);
+      // a patch has one kind of handle and shows it whenever any of the three are asked for: its control
+      // points are neither corners nor midpoints nor centres, and refusing to show them because the tool
+      // happened to be in edge mode would mean a patch you cannot edit with the tool that edits patches
+      if (node?.kind === "patch") {
+        const picked = new Set(editor.selection.vertices.filter((v) => v.node === id).map((v) => v.vertex));
+        out.push(...patchHandles(id, node.patch.grid, picked));
+        continue;
+      }
       if (node?.kind !== "brush") continue;
       const { mesh } = brushToMesh(node.brush);
       if (!mesh) continue;

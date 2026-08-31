@@ -51,8 +51,15 @@ export function setLines(
   pick?: { object: number; part: (segment: number) => number },
 ): void {
   const vertices = Math.floor(segments.length / 3);
+  // where it was before the arena is asked, because a key whose size changed is handed a *different* span
+  // and the one it gave up is left holding the lines it was drawn with last frame
+  const before = lines.entries.get(key);
   const span = reserve(lines.arena, key, vertices);
   fit(lines);
+  // ...which is the same ghost `dropLines` collapses, arriving by the other door: a moved wall whose edge
+  // count came out different re-let its space and went on being drawn out of the hole it left. Blanked
+  // before the new vertices go in, so a key that shrank in place keeps what it is about to write.
+  if (before && (before.start !== span.start || before.count !== span.count)) blank(lines, before);
 
   lines.position.set(segments as ArrayLike<number> & Iterable<number>, span.start * 3);
   lines.flag.fill(flags, span.start, span.start + vertices);
@@ -67,13 +74,24 @@ export function dropLines(lines: LineBatch, key: string): void {
   const at = lines.entries.get(key);
   if (!at) return;
   lines.entries.delete(key);
-  // the same hole the faces have: a segment left in the middle of the draw range goes on being drawn, and
-  // one collapsed to a point has no length to draw. The tail needs nothing — the draw range stops short.
-  if (at.start + at.count !== lines.arena.used) {
-    lines.position.fill(0, at.start * 3, (at.start + at.count) * 3);
-    markDirty(lines.arena, at);
-  }
+  // released first, because that is what pulls the high-water mark back over a span at the tail — and a
+  // span above the mark is one `blank` then knows it has no work to do
   release(lines.arena, key);
+  blank(lines, at);
+}
+
+/**
+ * Vertices a key has stopped using, collapsed to a point.
+ *
+ * The same hole the faces have: a segment left in the middle of the draw range goes on being drawn, and one
+ * collapsed to a point has no length to draw. Only the part still below the high-water mark is worth
+ * touching — above it the draw range stops short and the numbers are nobody's.
+ */
+function blank(lines: LineBatch, at: { start: number; count: number }): void {
+  const end = Math.min(at.start + at.count, lines.arena.used);
+  if (end <= at.start) return;
+  lines.position.fill(0, at.start * 3, end * 3);
+  markDirty(lines.arena, { start: at.start, count: end - at.start });
 }
 
 /** a key's appearance changed and nothing else — the same free highlight the faces get */

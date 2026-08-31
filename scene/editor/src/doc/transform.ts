@@ -9,6 +9,9 @@
  * rather than turning the solid inside out, and so that UV lock gets its chance to keep the material still
  * on the wall while the wall moves.
  *
+ * A **patch** is its control points, and a quadratic Bezier is affine-invariant, so moving the handles moves
+ * the curve exactly. Nothing can destroy one — a fold is still a grid — so it never contributes a problem.
+ *
  * An **entity** has no geometry to transform — it has a `position`, and that is what moves. Its children,
  * if it has any, move with it.
  *
@@ -22,6 +25,7 @@ import type { Vec3 } from "tscene";
 import { transformBrush, type Brush } from "../brush/brush.ts";
 import { transformLocked } from "../brush/uv.ts";
 import { IDENTITY, multiply, transformPoint, translation, type Mat4 } from "../brush/vec.ts";
+import { transformPatch } from "../patch/patch.ts";
 import {
   childrenOf, hasChildren, replaceNode, type Node, type NodeId, type World,
 } from "./document.ts";
@@ -48,6 +52,9 @@ export function transformNode(node: Node, m: Mat4, lockUv: boolean): { node?: No
     const edit = transformBrushLocked(node.brush, m, lockUv);
     return edit.brush ? { node: { ...node, brush: edit.brush }, problems: [] } : { problems: edit.problems };
   }
+  // no problems to report and no uv lock to do: a patch lays its material out along its own surface, so
+  // moving the surface moves the material with it — the thing uv lock exists to stop a brush from not doing
+  if (node.kind === "patch") return { node: { ...node, patch: transformPatch(node.patch, m) }, problems: [] };
 
   const problems: string[] = [];
   const children: Node[] = [];

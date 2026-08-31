@@ -13,7 +13,7 @@
   // against four numbers. That also makes splitter dragging fall out — a splitter is just the strip where
   // no pane is.
   import * as THREE from "three/webgpu";
-  import { idOf } from "../render/batch.ts";
+  import { idOf, meetSolid } from "../render/batch.ts";
   import { newCompass, updateCompass } from "../render/compass.ts";
   import { look } from "../render/look.svelte.ts";
   import { COLOURS } from "../render/materials.ts";
@@ -22,17 +22,23 @@
     clearDecor, newRenderScene, sceneBounds, setDecor, setHover, setHoverHandle, syncHandles, syncLook,
     syncScene,
   } from "../render/scene.ts";
+  import { bakery } from "../bake/bake.svelte.ts";
+  import { keys } from "../keys/keys.svelte.ts";
   import { library } from "../library.svelte.ts";
+  import { prefs } from "../ui/prefs.svelte.ts";
+  import { perf } from "./perf.ts";
   import { layoutLabels } from "../render/text.ts";
   import type { Bounds } from "../brush/builder.ts";
   import { nodeById, nodeBounds, union } from "../doc/document.ts";
+  import { selectionBounds } from "../doc/selection.ts";
   import { session } from "../session.svelte.ts";
   import { meetPlane } from "../tools/drag.ts";
   import { newInput, type Hit, type InputState } from "../tools/input.ts";
-  import type { Outcome } from "../tools/tool.ts";
+  import type { Outcome, ToolId } from "../tools/tool.ts";
   import { tools } from "../tools/tools.svelte.ts";
   import { applyCamera, gridReach, newCamera, placeGridPlane, type ViewCamera } from "./camera.ts";
   import { LAYOUTS, cellAt, rectOf, type Cell } from "./layout.ts";
+  import { boundsGuides, type Guide } from "./measure.ts";
   import { panes, views } from "./views.svelte.ts";
   import {
     VIEW_KINDS, VIEW_TITLES, flyView, frameView, lookView, orbitView, panView, rayThrough, zoomView,
@@ -45,6 +51,10 @@
   let backend = $state("");
   let cursor = $state("default");
   let readout = $state<Record<string, string>>({});
+  /** the dimension overlay, per pane — see `measure.ts` for what one of these is */
+  let guides = $state<Partial<Record<ViewKind, Guide[]>>>({});
+  /** what a gesture in progress is doing, pinned to the cursor that is doing it */
+  let gauge = $state<{ view: ViewKind; x: number; y: number; text: string } | undefined>();
 
   // Everything below is deliberately outside `$state`: it changes every frame and nothing in the DOM
   // depends on it, so making it reactive would only add an invalidation between a mouse move and a pixel.
@@ -57,6 +67,22 @@
   let area = { width: 1, height: 1 };
   /** the camera or the map moved, so what was under a motionless cursor may not be any more */
   let moved = true;
+
+  /**
+   * The field of view is written into the views themselves rather than onto the cameras.
+   *
+   * A camera whose fov the preference set directly would look right and pick wrong: `rayThrough` and
+   * `pixelSize` work the angle out from the view, and the two would disagree by however much the
+   * preference had moved. One number, in one place, and the camera follows it like everything else does.
+   */
+  $effect(() => {
+    const fov = prefs.fov;
+    for (const kind of VIEW_KINDS) {
+      const view = views[kind];
+      if (view.kind === "3d" && view.fov !== fov) views[kind] = { ...view, fov };
+    }
+    moved = true;
+  });
 
   type Mode = "pan" | "orbit" | "look";
   let drag: { view: ViewKind; mode: Mode; x: number; y: number } | undefined;
@@ -101,12 +127,31 @@
         backend = forceWebGL ? "WebGL" : "WebGPU";
         status = "";
 
+        // the same development-only handle `main.ts` opens on the document, opened on the picture. "Is that
+        // wall black because it is unlit or because its material came out wrong" is not a question a
+        // screenshot answers, and it is one a console with the renderer in it answers in a line. It earned
+        // its keep the first time it was used: `renderer.debug.getShaderAsync` through this handle is what
+        // found the conditional scope that `height.ts` now goes out of its way to avoid.
+        if (import.meta.env.DEV) Object.assign(globalThis, { broomView: { rs, renderer, cameras, views } });
+
         renderer.setAnimationLoop((now) => {
           const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
           last = now;
+          perf.frame(now);
           fly(dt);
-          draw(renderer);
+          perf.time("draw", () => draw(renderer));
+          // after the draw, because `draw` is what settles each pane's size and camera for this frame — the
+          // overlay has to be measured against the same ones the picture was drawn with or it lags by one
+          perf.time("overlay", remeasure);
           void hover(renderer);
+          // three's counters are per-frame and it resets them itself, so they are read after the drawing
+          // and before anything else has a chance to add to them
+          perf.counted({
+            drawCalls: renderer.info.render.drawCalls,
+            triangles: renderer.info.render.triangles,
+            geometries: renderer.info.memory.geometries,
+            textures: renderer.info.memory.textures,
+          });
         });
       } catch (e) {
         status = `renderer failed: ${(e as Error).message}`;
@@ -118,13 +163,17 @@
       observer.disconnect();
       renderer.setAnimationLoop(null);
       renderer.dispose();
+      perf.reset();
     };
   });
 
-  // The scene follows the document; the diff inside `syncScene` is what keeps that cheap.
+  // The scene follows the document; the diff inside `syncScene` is what keeps that cheap. Timed, because
+  // "cheap" is a claim and this is the one place in the editor that can check it.
   $effect(() => {
-    syncScene(rs, session.editor, tools.box.dragging);
-    syncHandles(rs, session.editor, tools.current.handles);
+    perf.time("sync", () => {
+      syncScene(rs, session.editor, tools.box.dragging);
+      syncHandles(rs, session.editor, tools.current.handles);
+    });
     moved = true;
   });
 
@@ -141,6 +190,28 @@
   $effect(() => {
     void panes.cells;
     moved = true;
+  });
+
+  /**
+   * The baked preview, standing in for the map.
+   *
+   * `visible = false` rather than removing the world group: the batch, the palette and every buffer in
+   * them stay exactly as they are, so coming back out of the preview is one flag rather than a rebuild of
+   * the level. The lights go with it — the preview carries the sheet's own, zeroed by the atlas that
+   * already contains them, and the editor's rig shining through would light the room twice.
+   */
+  $effect(() => {
+    const preview = bakery.preview;
+    rs.world.visible = !preview;
+    rs.overlays.visible = !preview;
+    rs.lights.visible = !preview;
+    moved = true;
+    if (!preview) return;
+    rs.scene.add(preview.group);
+    return () => {
+      rs.scene.remove(preview.group);
+      moved = true;
+    };
   });
 
   function resize(renderer: THREE.WebGPURenderer): void {
@@ -181,39 +252,101 @@
 
       applyCamera(camera, view, size);
       rs.grid.reach.value = gridReach(view);
-      placeGridPlane(rs.gridPlane, view, size);
+      if (prefs.gridPlane) placeGridPlane(rs.gridPlane, view, size);
+      else rs.gridPlane.visible = false;
       layoutLabels(rs.labels, camera, rect.height);
 
-      // the canvas counts up from the bottom, the layout counts down from the top
-      const bottom = area.height - rect.top - rect.height;
+      // `Renderer` measures a viewport from the *top* left, unlike the old `WebGLRenderer` — both of its
+      // backends flip for themselves on the way to the API underneath (`WebGLBackend.updateViewport` calls
+      // `gl.viewport(x, height - h - y, …)`, the WebGPU one passes y straight through to a top-down pass).
+      // So a rectangle measured from the top is handed over as it stands; flipping it here as well drew
+      // every pane into the one mirrored across the middle of the canvas.
       renderer.autoClear = true;
-      renderer.setViewport(rect.left, bottom, rect.width, rect.height);
-      renderer.setScissor(rect.left, bottom, rect.width, rect.height);
+      renderer.setViewport(rect.left, rect.top, rect.width, rect.height);
+      renderer.setScissor(rect.left, rect.top, rect.width, rect.height);
       renderer.render(rs.scene, camera);
 
       const dial = Math.min(84, Math.floor(Math.min(rect.width, rect.height) * 0.4));
-      if (dial >= 44) {
+      if (prefs.compass && dial >= 44) {
         updateCompass(compass, camera, dial);
+        const corner = { x: rect.left + rect.width - dial - 6, y: rect.top + rect.height - dial - 6 };
         renderer.autoClear = false;
-        renderer.setViewport(rect.left + rect.width - dial - 6, bottom + 6, dial, dial);
-        renderer.setScissor(rect.left + rect.width - dial - 6, bottom + 6, dial, dial);
+        renderer.setViewport(corner.x, corner.y, dial, dial);
+        renderer.setScissor(corner.x, corner.y, dial, dial);
         renderer.clearDepth();
         renderer.render(compass.scene, compass.camera);
       }
     }
   }
 
+  // ---------------------------------------------------------------- measuring
+
+  /** what the overlay last showed, so a frame that measures the same thing does not touch the DOM */
+  let measured = "";
+
+  /**
+   * The dimension overlay, remade after every frame.
+   *
+   * Every frame, because the thing it measures moves: a drag rewrites the world sixty times a second and
+   * the whole point of the overlay is that the numbers move with it. What it must not do is push sixty DOM
+   * updates a second through Svelte when *nothing* moved, so the result is compared against the last one and
+   * the reactive assignment only happens when it differs. Serialising a handful of guides to compare them is
+   * a few microseconds; a spurious re-render of four `<svg>` subtrees is not.
+   *
+   * The selection is what gets measured, which is also what makes a drag measured for free — every tool that
+   * creates or moves something leaves it selected, so dragging a shape out shows the shape's size growing
+   * rather than needing the shape tool to report anything.
+   */
+  function remeasure(): void {
+    const box = prefs.measure ? selectionBounds(session.editor.world, session.editor.selection) : undefined;
+    const next: Partial<Record<ViewKind, Guide[]>> = {};
+    if (box) {
+      for (const cell of panes.cells) {
+        const found = boundsGuides(box, views[cell.view], sizes[cell.view]);
+        if (found.length) next[cell.view] = found;
+      }
+    }
+
+    const key = JSON.stringify(next);
+    if (key === measured) return;
+    measured = key;
+    guides = next;
+  }
+
   // ---------------------------------------------------------------- picking
+
+  /**
+   * What one pane says is under the pointer.
+   *
+   * Written through here rather than assigned, because only one pane can have the pointer and the readouts
+   * of the others have to go with it. A label left behind in the pane the mouse came from claims that pane
+   * is hovering something, and two panes hovering at once is a thing that cannot happen.
+   */
+  function says(view: ViewKind, what: string): void {
+    if (readout[view] === what && Object.keys(readout).every((k) => k === view || !readout[k])) return;
+    readout = what ? { [view]: what } : {};
+  }
 
   /** what is under the pointer, at most once a frame and only when the pointer or the view has moved */
   async function hover(renderer: THREE.WebGPURenderer): Promise<void> {
-    if (picking || drag || splitting) return;
+    // A gesture in progress is not hovering anything. `toolPane` belongs in this list as much as `drag`
+    // does: a tool drag moves the pointer every frame, so every frame paid for a pick pass — a second
+    // render of the whole map, a GPU readback to wait on, and a `syncScene` whenever the answer changed —
+    // all to highlight something the gesture is not going to act on, because tools read the hit they took
+    // at press time. Dragging a shape out was several times slower than it had any reason to be.
+    if (picking || drag || splitting || toolPane) return;
+    // the preview is a picture, not the map: the batch it would pick against is not being drawn, so every
+    // pass would come back empty and spend a GPU round trip finding that out
+    if (bakery.preview) return;
     if (!pointer) return;
     const at = pointer;
     if (picked && picked.view === at.view && picked.x === at.x && picked.y === at.y && !moved) return;
     picked = at;
     moved = false;
     picking = true;
+    // timed around the await rather than through `perf.time`, because what a pick costs is mostly the wait
+    // for the GPU to answer, and a span that stopped at the first `await` would report it as free
+    const began = performance.now();
     try {
       // handles are only asked about when the active tool draws some, so the select tool never pays for a
       // second pass and a stray corner can never take a click away from the solid it belongs to
@@ -224,8 +357,7 @@
       if (found.handle) {
         if (setHover(rs, undefined)) syncScene(rs, session.editor, tools.box.dragging);
         setHoverHandle(rs, rs.handles.handles.indexOf(found.handle));
-        const says = `${found.handle.kind} of ${found.handle.of}`;
-        if (readout[at.view] !== says) readout = { ...readout, [at.view]: says };
+        says(at.view, `${found.handle.kind} of ${found.handle.of}`);
         return;
       }
 
@@ -233,10 +365,10 @@
       const id = found.ordinal === undefined ? undefined : idOf(rs.brushes, found.ordinal);
       const hovering = id ? { node: id, face: found.face } : undefined;
       if (setHover(rs, hovering)) syncScene(rs, session.editor, tools.box.dragging);
-      const says = id ? `${id} · face ${found.face}` : "";
-      if (readout[at.view] !== says) readout = { ...readout, [at.view]: says };
+      says(at.view, id ? `${id} · face ${found.face}` : "");
     } finally {
       picking = false;
+      perf.span("pick", performance.now() - began);
     }
   }
 
@@ -266,6 +398,12 @@
     if (!found) return undefined;
     const node = nodeById(session.editor.world, found.node);
     const face = found.face;
+    // a patch is a curved surface with no plane to meet, so the point comes from the triangles it was drawn
+    // as — which is the same geometry the pick just read, so the two cannot disagree about where it is
+    if (node?.kind === "patch") {
+      const point = meetSolid(rs.brushes, node.id, rayThrough(views[kind], { x, y }, sizes[kind]));
+      return point ? { node: found.node, face, point } : { node: found.node, face };
+    }
     if (node?.kind !== "brush" || face === undefined) return { node: found.node, face };
     const plane = node.brush.poly.faces[face]?.plane;
     if (!plane) return { node: found.node, face };
@@ -451,6 +589,10 @@
     if (toolPane) {
       pointer = { view: toolPane.view, x: p.x - toolPane.left, y: p.y - toolPane.top };
       run(tools.box.move(inputAt(toolPane.view, pointer.x, pointer.y, event), session.editor));
+      // the status line already says this; saying it again at the cursor is what stops a designer looking
+      // away from the thing they are dragging in order to find out how big it is
+      const text = session.editor.note ?? "";
+      gauge = text ? { view: pointer.view, x: pointer.x, y: pointer.y, text } : undefined;
       return;
     }
 
@@ -481,13 +623,18 @@
     if (toolPane) {
       const pane = toolPane;
       toolPane = undefined;
+      gauge = undefined;
       const p = at(event);
       run(tools.box.up(inputAt(pane.view, p.x - pane.left, p.y - pane.top, event), session.editor));
+      // the pick that was skipped for the whole gesture: what is under the cursor now is very likely not
+      // what was under it when the button went down
+      moved = true;
     }
   }
 
   function leave(): void {
     pointer = undefined;
+    gauge = undefined;
     setHoverHandle(rs, undefined);
     if (setHover(rs, undefined)) syncScene(rs, session.editor, tools.box.dragging);
     if (Object.values(readout).some(Boolean)) readout = {};
@@ -520,7 +667,7 @@
     const kind = panes.active;
     const view = views[kind];
     if (view.kind !== "3d") return;
-    const step = Math.max(0.5, view.reach * 0.9) * dt;
+    const step = Math.max(0.5, view.reach * 0.9) * dt * prefs.flySpeed;
     const along = { right: 0, up: 0, forward: 0 };
     if (held.has("w")) along.forward += step;
     if (held.has("s")) along.forward -= step;
@@ -538,42 +685,58 @@
     return target?.isContentEditable === true || target instanceof HTMLInputElement;
   };
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (typing(event)) return;
-    const key = event.key.toLowerCase();
-
-    if ((event.ctrlKey || event.metaKey) && "1234".includes(key)) {
-      panes.setLayout(LAYOUTS[Number(key) - 1]!);
+  /** the half of the keymap a pane owns: the layouts, framing, and which tool is in hand */
+  function runView(id: string): boolean {
+    if (id.startsWith("tool.")) {
+      tools.use(id.slice("tool.".length) as ToolId);
+      return true;
+    }
+    const layout = LAYOUTS[Number(id.slice("view.layout".length)) - 1];
+    if (id.startsWith("view.layout") && layout) {
+      panes.setLayout(layout);
       measure();
-      event.preventDefault();
-      return;
+      return true;
     }
-    // a ctrl combo still reaches the tool — ctrl-a is the select tool's "everything" — but nothing else
-    if (event.ctrlKey || event.metaKey) {
-      if (run(tools.box.press(key, inputFor(event), session.editor))) event.preventDefault();
-      return;
-    }
-
-    if (key === " ") {
+    if (id === "view.maximise") {
       panes.toggleMaximised();
       measure();
       moved = true;
-      event.preventDefault();
-      return;
+      return true;
     }
-    if (key === "f") {
-      // shift frames every pane at once, which is how you get four views back onto the same thing
-      frame(event.shiftKey ? panes.shown : [panes.active]);
+    // shift frames every pane at once, which is how you get four views back onto the same thing
+    if (id === "view.frame") return frame([panes.active]), true;
+    if (id === "view.frameAll") return frame(panes.shown), true;
+    return false;
+  }
+
+  /**
+   * The viewport's keys.
+   *
+   * `App.svelte` binds window first and answers the document half; a press it took has already been
+   * `preventDefault`ed, and that is what this reads to stay out of the way. Escape is the interesting case:
+   * it means "leave the group" only once there is nothing selected, so while there is a selection the
+   * document declines it and it arrives here, where the tool drops the selection instead.
+   */
+  function onKeydown(event: KeyboardEvent): void {
+    if (typing(event) || event.defaultPrevented) return;
+    const key = event.key.toLowerCase();
+
+    const command = keys.commandFor(event);
+    if (command && runView(command)) {
       event.preventDefault();
       return;
     }
 
-    // a tool's own letter, then the tool's own keys. Neither set touches wasd/qe, so flying is never
-    // something a tool can quietly take away
-    if (tools.useKey(key)) {
-      event.preventDefault();
+    // a ctrl combo still reaches the tool — ctrl-a is the select tool's "everything" — but nothing else,
+    // and never a chord the keymap has already spoken for
+    if (event.ctrlKey || event.metaKey) {
+      if (!command && run(tools.box.press(key, inputFor(event), session.editor))) event.preventDefault();
       return;
     }
+
+    // the tool's own keys, which are not in the keymap: they are the tool's, they change with it, and
+    // several tools spell the same letter differently. None of them touch wasd/qe, so flying is never
+    // something a tool can quietly take away
     if (run(tools.box.press(key, inputFor(event), session.editor))) {
       event.preventDefault();
       return;
@@ -587,6 +750,21 @@
 
   const onKeyup = (event: KeyboardEvent) => held.delete(event.key.toLowerCase());
   const onBlur = () => held.clear();
+
+  // ---------------------------------------------------------------- drawing the overlay
+
+  /** each axis in the colour the compass already taught the eye to read it as */
+  const AXIS_INK = [COLOURS.axisX, COLOURS.axisY, COLOURS.axisZ].map(
+    (c) => `#${c.toString(16).padStart(6, "0")}`,
+  );
+
+  /** half a tick cap: perpendicular to the guide, so the two ends of a measurement are visibly its ends */
+  function capOf(guide: Guide): { x: number; y: number } {
+    const dx = guide.to.x - guide.from.x;
+    const dy = guide.to.y - guide.from.y;
+    const length = Math.hypot(dx, dy) || 1;
+    return { x: (-dy / length) * 4, y: (dx / length) * 4 };
+  }
 </script>
 
 <svelte:window onkeydown={onKeydown} onkeyup={onKeyup} onblur={onBlur} />
@@ -616,6 +794,36 @@
     >
       <span class="title">{VIEW_TITLES[cell.view]}</span>
       {#if readout[cell.view]}<span class="over">{readout[cell.view]}</span>{/if}
+
+      {#if guides[cell.view]}
+        <!--
+          The dimension overlay. SVG rather than lines in the scene, because a measurement is a screen-space
+          thing: the tick caps are the same length however far away the box is, the number is the same size,
+          and neither is occluded by the solid it is measuring. Putting it in the world would mean fighting
+          the depth buffer to say something the depth buffer has no opinion about.
+        -->
+        <svg class="guides" viewBox="0 0 {sizes[cell.view].width} {sizes[cell.view].height}">
+          {#each guides[cell.view]! as guide, i (i)}
+            {@const tick = capOf(guide)}
+            <g style:color={AXIS_INK[guide.axis]}>
+              <line x1={guide.from.x} y1={guide.from.y} x2={guide.to.x} y2={guide.to.y} />
+              <line
+                x1={guide.from.x - tick.x} y1={guide.from.y - tick.y}
+                x2={guide.from.x + tick.x} y2={guide.from.y + tick.y}
+              />
+              <line
+                x1={guide.to.x - tick.x} y1={guide.to.y - tick.y}
+                x2={guide.to.x + tick.x} y2={guide.to.y + tick.y}
+              />
+              <text x={guide.at.x} y={guide.at.y}>{guide.label}</text>
+            </g>
+          {/each}
+        </svg>
+      {/if}
+
+      {#if gauge?.view === cell.view}
+        <span class="gauge" style:left="{gauge.x + 16}px" style:top="{gauge.y + 16}px">{gauge.text}</span>
+      {/if}
       {#if tools.band?.view === cell.view}
         <!-- the rubber band is measured in pixels and has no depth, so it is a div and not geometry -->
         <div
@@ -638,19 +846,35 @@
   canvas { display: block; width: 100%; height: 100%; }
   .pane {
     position: absolute; pointer-events: none; box-sizing: border-box;
-    border: 1px solid #24272c;
-    font: 11px ui-monospace, monospace; color: #6d7480;
+    border: 1px solid var(--p2);
+    font: var(--mono); color: var(--dim);
   }
-  .pane.active { border-color: #3d4653; }
+  /* the active pane is outlined in the accent: which pane a key goes to is the one thing about this
+     layout a designer has to be able to see without looking for it */
+  .pane.active { border-color: var(--accent); }
   .title { position: absolute; left: 7px; top: 5px; }
-  .over { position: absolute; left: 7px; bottom: 5px; color: #9aa1ac; }
+  .over { position: absolute; left: 7px; bottom: 5px; color: var(--text); }
   .band {
     position: absolute; pointer-events: none;
-    border: 1px solid #8fb8ff; background: #8fb8ff1a;
+    border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .guides { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .guides line { stroke: currentColor; stroke-width: 1; opacity: 0.85; }
+  .guides text {
+    fill: currentColor; font: 11px ui-monospace, monospace;
+    text-anchor: middle; dominant-baseline: middle;
+    /* the numbers are read against a lit map, an unlit one and the grid; a dark halo works on all three */
+    paint-order: stroke; stroke: var(--p0); stroke-width: 3px; stroke-linejoin: round;
+  }
+  .gauge {
+    position: absolute; pointer-events: none; white-space: nowrap;
+    padding: 2px 6px; border-radius: 5px;
+    background: color-mix(in srgb, var(--p0) 85%, transparent);
+    color: var(--p9); border: 1px solid var(--border);
   }
   .status { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
   .backend {
     position: absolute; right: 8px; top: 5px; pointer-events: none;
-    font: 11px ui-monospace, monospace; color: #4d545e;
+    font: var(--mono); color: var(--dim);
   }
 </style>

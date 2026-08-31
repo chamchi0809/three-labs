@@ -28,7 +28,7 @@ These were settled before any code was written; every milestone below assumes th
 | 11 | Material palette | **Both** a directory scan and an `@template` scan |
 | 12 | Default layout | **3-pane** |
 | 13 | Quake importers (`.map`, FGD, WAD) | **No** |
-| 14 | Bezier patches | Excluded from the main line, deferred to M14 |
+| 14 | Bezier patches | Excluded from the main line, deferred to M14 — **built there**, as one surface numbered face 0 rather than a parallel kernel |
 
 ## Milestones
 
@@ -96,7 +96,7 @@ editors, material browser (directory **and** `@template`), and the UV editor wit
 Groups, linked groups with protected properties, layers, tags and filters, hide / isolate / lock, and the
 issue browser with all 20 validators and their quick fixes.
 
-### M12 — rendering, advanced
+### M12 — rendering, advanced ✅
 
 The classic/PBR toggle, and the **Height Material** with automatic LOD.
 
@@ -111,12 +111,40 @@ silhouette, collision, navigation and large shapes; the height material carries 
 panels, wood, damage and small silhouette.** Also in this milestone: integrating the existing lightmap
 bakery so a map can be baked without leaving the editor.
 
-### M13 — finish
+The bake runs in-process behind a dev-server route and comes back as an atlas the preview puts straight
+onto the map. Getting it to come back *lit* meant fixing what the editor was writing: a colour has to be
+`color(#rrggbb)`, because a bare `#rrggbb` is a number in tscene and assigning one leaves `material.color`
+as `13618364` rather than a `Color` — which the editor never noticed, since it draws from its own palette
+and never asks the runtime for a material. `src/io/valid.check.ts` now runs tscene's own checker over
+what a save produces, which is the only reader whose opinion counts.
+
+### M13 — finish ✅
 
 Keyboard shortcuts and a keymap editor, preferences, autosave, glTF/OBJ export, performance profiling,
 console.
 
-### M14 — Bezier patches (deferred)
+### M14 — Bezier patches ✅
 
-Quadratic Bezier patch primitives with their own editing tools and tessellation. Deliberately out of the
-main line: patches are a parallel geometry kernel, and the brush path has to be finished first.
+Quadratic Bezier patch primitives with their own editing tools and tessellation. Held out of the main line
+until the brush path was finished, and then built on top of it rather than beside it.
+
+The kernel is tscene's — `buildPatch`, `patchBounds`, `subdivisionsFor` — so the runtime and the editor
+agree about where a curve goes down to the last vertex. The editor adds what the runtime has no use for:
+the material by `--var` name, the handles a tool drags, and the operations that keep a grid a grid.
+
+`patch:` is a first-class node in the sheet, read and written by the surgical writer, so a patch survives a
+round trip with the rest of the map. `patchToBrushMesh` hands a patch to the solid batch in the shape a
+brush's mesh has, which is what buys it selection, hover, the pick buffer, material slots and frame-selection
+without a second code path — one group, numbered face 0.
+
+**A patch is one selectable surface, numbered 0**, and that is what makes it reach the rest of the editor:
+the face inspector, the material browser, the material tool, tags, the map checker and the counts panel all
+treat `{node, face: 0}` as that surface. Its uv is a strict subset of a face's — the same offset, scale and
+rotation in the same units, minus the paraxial/parallel axis choice, which names nothing about a curve.
+Four operations stay brush-only because they need a plane or an outline in tile coordinates and a patch has
+neither: **slide, fit, justify, and the axes choice**. The inspector says so rather than offering buttons
+that would quietly do nothing.
+
+The patch tool draws the five primitive shapes, bends control points with welding at the seams, and keeps
+add/drop row and column, flip and snap on its keys. The same operations are in the inspector as buttons, so
+they are reachable with any tool in hand.

@@ -44,6 +44,34 @@ export const call = (name: string, args: Value[]): ObjectValue => ({
 
 export const vec3 = (v: Vec3): Value => call("vec3", [num(v[0]), num(v[1]), num(v[2])]);
 
+/** `{ a: 1; b: 2 }` — the one place a sheet keeps names three has no property for, `userData` included */
+export const record = (entries: [string, Value][]): Value => ({
+  ...SYNTHETIC,
+  kind: "record",
+  entries: entries.map(([name, value]) => ({ name, namePos: SYNTHETIC, value })),
+});
+
+/**
+ * `color(#ff8000)` — a colour on a three object, which is the only spelling that survives leaving here.
+ *
+ * A bare `#ff8000` is a number, and tscene means that literally: the runtime assigns it, so
+ * `material.color` stops being a `Color` and becomes `16744448`. Nothing complains — the editor draws its
+ * own materials and never asks the runtime for one — but the lightmap baker reads `.r` off it, gets
+ * `undefined`, and traces a room lit by NaN. The atlas comes back black.
+ *
+ * So a colour the editor writes is always the call. `@broom { color: … }` is the exception and stays a
+ * bare hex: that block is settings for a tool, where a number is what is wanted and what is read back.
+ */
+export const colour = (value: number, digits: 6 | 8 = 6): Value => call("color", [hex(value, digits)]);
+
+/** a colour written as `color(#rrggbb)`, `#rrggbb` or a plain number — every spelling that means one */
+export function asColour(v: Value | undefined): number | undefined {
+  const inner = v?.kind === "object" && (v.name === "color" || v.name === "Color") && v.args.length === 1
+    ? v.args[0]
+    : v;
+  return inner?.kind === "hex" || inner?.kind === "number" ? inner.value : undefined;
+}
+
 // ---------------------------------------------------------------- reading
 
 export const propOf = (props: Member[], name: string): Extract<Member, { kind: "prop" }> | undefined =>
@@ -71,6 +99,54 @@ export function asVec3(v: Value | undefined): Vec3 | undefined {
 }
 
 export const vec3Of = (props: Member[], name: string): Vec3 | undefined => asVec3(valueOf(props, name));
+
+/** every `ref(#name)` inside a value, however deeply it is nested in arrays, records and calls */
+export function* refsIn(value: Value): Generator<string> {
+  switch (value.kind) {
+    case "ref":
+      yield value.name;
+      return;
+    case "array":
+      for (const item of value.items) yield* refsIn(item);
+      return;
+    case "record":
+      for (const entry of value.entries) yield* refsIn(entry.value);
+      return;
+    case "object":
+      for (const arg of value.args) yield* refsIn(arg);
+      for (const member of value.body) {
+        if (member.kind === "prop" || member.kind === "var") yield* refsIn(member.value);
+      }
+      return;
+    case "calc":
+      yield* refsIn(value.left);
+      yield* refsIn(value.right);
+      return;
+    case "fn":
+      for (const arg of value.args) yield* refsIn(arg);
+      return;
+    case "each":
+      yield* refsIn(value.over);
+      yield* refsIn(value.body);
+      return;
+    case "read":
+      yield* refsIn(value.target);
+      return;
+    case "call":
+      yield* refsIn(value.target);
+      for (const arg of value.args) yield* refsIn(arg);
+      return;
+    case "index":
+      yield* refsIn(value.target);
+      yield* refsIn(value.at);
+      return;
+    case "var":
+      if (value.fallback) yield* refsIn(value.fallback);
+      return;
+    default:
+      return;
+  }
+}
 
 // ---------------------------------------------------------------- writing
 

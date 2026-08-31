@@ -45,7 +45,7 @@ import { MeshStandardNodeMaterial, type Texture } from "three/webgpu";
 import {
   Break, If, Loop, cameraFar, cameraNear, cameraProjectionMatrix, clamp, dFdx, dFdy, dot, float, int,
   length, log2, max, min, mix, normalMap, normalize, oneMinus, parallaxDirection, positionView, saturate,
-  select, smoothstep, texture, textureLevel, textureSize, transformedNormalView, uniform, uv, vec2, vec3, vec4,
+  smoothstep, texture, textureLevel, textureSize, normalView, uniform, uv, vec2, vec3, vec4,
   viewZToOrthographicDepth, viewZToPerspectiveDepth,
 } from "three/tsl";
 
@@ -187,7 +187,9 @@ export function heightSurface(input: HeightInput): HeightSurface {
   const away = length(positionView).toVar();
   const detail = oneMinus(smoothstep(tuning.full, tuning.fade, away)).toVar();
 
-  const normal = normalize(transformedNormalView).toVar();
+  // `normalView`, not the `transformedNormalView` this used to say: the latter is a deprecation shim that
+  // returns exactly this and prints a warning from inside the shader build every time it is reached
+  const normal = normalize(normalView).toVar();
   const toEyeView = normalize(positionView.negate()).toVar();
   const facing = saturate(dot(normal, toEyeView)).toVar();
 
@@ -261,14 +263,29 @@ export function heightSurface(input: HeightInput): HeightSurface {
  *
  * Which one it is, is read out of the projection matrix by putting a direction through it: the row that
  * makes a projection perspective is the one that copies `-z` into `w`, so a straight-ahead direction
- * comes back with `w` of 1 through a perspective matrix and 0 through an orthographic one.
+ * comes back with `w` of 1 through a perspective matrix and 0 through an orthographic one. That number is
+ * used as a *weight*, not as a condition, and the distinction is the whole of this function.
+ *
+ * A `select` here compiles to an `if`/`else`, and TSL emits a variable's assignment wherever it is first
+ * generated — which, since the depth output is generated before the colour output, is inside whichever
+ * branch reached it first. Every `toVar` the march produces landed in the orthographic arm, and the
+ * perspective arm fell through with the uv, the tangent frame and the shaded normal all left at zero. The
+ * result was a relief surface that shaded correctly in the 2D panes and drew pure black in the 3D one.
+ * A `mix` has no arm to fall through: both sides are always evaluated, so the march is emitted once, at
+ * the top level, where everything after the depth write can still see it.
+ *
+ * The perspective form divides by the view z, so it is fed a z clamped to the near plane — under an
+ * orthographic camera the real one can be zero or positive, and an infinity that `mix` then multiplies by
+ * zero is a NaN rather than a discarded operand.
  */
 export function heightDepth(surface: HeightSurface): Node {
-  const orthographic = cameraProjectionMatrix.mul(vec4(0, 0, -1, 0)).w.abs().lessThan(float(0.5));
-  return select(
-    orthographic,
-    viewZToOrthographicDepth(surface.viewZ, cameraNear, cameraFar),
-    viewZToPerspectiveDepth(surface.viewZ, cameraNear, cameraFar),
+  const perspective = cameraProjectionMatrix.mul(vec4(0, 0, -1, 0)).w.abs().clamp(0, 1);
+  const viewZ = float(surface.viewZ).toVar();
+  const safe = min(viewZ, cameraNear.negate());
+  return mix(
+    viewZToOrthographicDepth(viewZ, cameraNear, cameraFar),
+    viewZToPerspectiveDepth(safe, cameraNear, cameraFar),
+    perspective,
   );
 }
 

@@ -546,6 +546,87 @@ brush #open {
 A face wound the wrong way is the mistake this catches most: its plane faces inward, and the four or six
 half-spaces then bound nothing.
 
+## Patches
+
+A `patch { … }` is the curved half of the same toolbox. Where a brush is flat by construction, a patch is
+a grid of control points that a *quadratic Bezier* surface is drawn through — an arch, a pipe, a dome, the
+inside of a tunnel. It becomes one indexed, smooth-shaded `Mesh` with one material.
+
+Each `row(…)` gives one row of control points. Both the number of rows and the number of points in a row
+must be **odd and at least three**, because three points is one span and spans share their end points: 3,
+5, 7, 9. Rows run along v, points within a row along u.
+
+```css
+--stone: meshStandardMaterial { color: color(#8a8a8a); roughness: 0.9; };
+
+patch #arch {
+  material: var(--stone);
+  castShadow: true;                                          /* Mesh properties sit beside the rows */
+  row([0, 0, 0], [0, 4, 0], [4, 4, 0]);                      /* a quarter turn, seen from -z */
+  row([0, 0, 1], [0, 4, 1], [4, 4, 1]);
+  row([0, 0, 2], [0, 4, 2], [4, 4, 2]);
+}
+```
+
+The surface passes through the **corners** of each span and through the midpoint between its two ends —
+but *not* through the middle control point. That point is a handle: at the middle of a span the surface
+reaches only half way to it. This is the one thing about patches that catches people out, and it is why
+an editor draws the control hull as well as the surface.
+
+### `row(p1, p2, p3, …)`
+
+A row takes points and has no body. There is nothing per-point to set: the material, the layout and the
+tessellation all belong to the surface as a whole.
+
+| Key on the patch | Meaning |
+| --- | --- |
+| `material` | the one material the whole surface renders with |
+| `subdivisions` | segments per span; leave it out and the curvature picks a count |
+| `uv` | `{ scale, offset, rotation }` — the material's layout along the surface |
+
+```css
+patch #pipe {
+  subdivisions: 6;
+  uv: { scale: [2, 2]; offset: [0, 0.5]; rotation: 30deg };
+  row([1, 0, 0], [1, 0, 1], [0, 0, 1]);
+  row([1, 2, 0], [1, 2, 1], [0, 2, 1]);
+  row([1, 4, 0], [1, 4, 1], [0, 4, 1]);
+}
+```
+
+`scale` and `offset` mean exactly what they mean on a face — metres of world per tile, and metres along
+the surface — but they live in a record of their own because a patch *is* a `Mesh`, and `scale`,
+`offset` and `rotation` at the top level of one are the object's transform. A face can spell them plainly
+because a face is not an object.
+
+The u and v a texture is laid out along are measured **along the surface**, not taken from the parameter.
+A span is not travelled at a constant speed, so a texture laid out by parameter visibly bunches up where
+the handle pulls; measuring the arc length keeps a tile a tile all the way round a bend.
+
+Left to itself, `subdivisions` comes from how far each span bows away from the straight line between its
+ends: a nearly flat patch costs two triangles, a tight one is cut up to sixteen ways per span.
+
+### What a patch is checked for
+
+The checker builds the grid at compile time whenever every coordinate is a literal, and an even or ragged
+grid is an error where it is written rather than a surface that never appears:
+
+```css error: odd number of control points
+patch #even {
+  row([0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]);
+  row([0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1]);
+  row([0, 0, 2], [1, 0, 2], [2, 0, 2], [3, 0, 2]);
+}
+```
+
+```css error: same length
+patch #ragged {
+  row([0, 0, 0], [1, 0, 0], [2, 0, 0]);
+  row([0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1], [4, 0, 1]);
+  row([0, 0, 2], [1, 0, 2], [2, 0, 2]);
+}
+```
+
 ## Builtins
 
 Names that are handled by the language itself rather than looked up in three.
