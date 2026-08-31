@@ -176,6 +176,31 @@ export function facesInScope(world: World, selection: Selection): FaceRef[] {
   return out;
 }
 
+/**
+ * Every surface made of a material, wherever it is in the map.
+ *
+ * What a rename has to follow and what a delete leaves behind. A face that names nothing is not counted:
+ * it is made of whatever the editor is currently holding, and that is not this material.
+ */
+export function facesUsing(world: World, material: string): FaceRef[] {
+  const out: FaceRef[] = [];
+  const visit = (node: Node) => {
+    if (node.kind === "patch") {
+      if (node.patch.material === material) out.push({ node: node.id, face: 0 });
+      return;
+    }
+    if (node.kind === "brush") {
+      node.brush.poly.faces.forEach((face, i) => {
+        if (face && node.brush.faces[i]?.material === material) out.push({ node: node.id, face: i });
+      });
+      return;
+    }
+    for (const kid of childrenOf(node)) visit(kid);
+  };
+  for (const layer of world.layers) visit(layer);
+  return out;
+}
+
 /** one field of the face inspector: what they agree on, or that they do not */
 export type Agreed<T> = { value: T; mixed: boolean };
 

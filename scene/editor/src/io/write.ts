@@ -24,6 +24,7 @@ import type { Member, ObjectValue, Sheet } from "tscene";
 import { childrenOf, type Node, type NodeId, type World } from "../doc/document.ts";
 import { broomMember, faceMembers, headOf, ownMembers, rowMembers, toObject, worldBroom } from "./emit.ts";
 import { printMember, printNode } from "./literal.ts";
+import { materialEdits, type MaterialDrafts } from "./materials.ts";
 import {
   applyEdits, dedent, deleteAt, indentAt, insertAt, lineRange, newlineOf, reindent, replaceAt, withComments,
   type TextEdit,
@@ -59,11 +60,15 @@ const inPlace = (ctx: Ctx, node: Node, file: string): node is Node & { origin: O
 
 // ---------------------------------------------------------------- the whole thing
 
-export function writeWorld(world: World, project: Project): WriteResult {
+export function writeWorld(world: World, project: Project, materials?: MaterialDrafts): WriteResult {
   const ctx: Ctx = { project, edits: new Map(), problems: [] };
 
   writeBroom(ctx, world);
   writeTopLevel(ctx, world);
+  // the declarations, which are nobody's node: see `materials.ts` for why they are written apart
+  if (materials?.size) {
+    for (const [file, list] of materialEdits(project.sheets, project.root, materials)) sink(ctx, file).push(...list);
+  }
 
   const files = new Map<string, string>();
   for (const [file, sheet] of project.sheets) {

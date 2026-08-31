@@ -9,6 +9,7 @@
  * It is a plain value with no methods. The command processor turns functions of it into an undo stack,
  * and the UI reads it; nothing mutates it in place.
  */
+import type { MaterialDrafts } from "../io/materials.ts";
 import type { NodeId, World } from "./document.ts";
 import { DEFAULT_LAYER, emptyWorld, nodeById } from "./document.ts";
 import { NOTHING, prune, type Selection } from "./selection.ts";
@@ -22,12 +23,21 @@ export type Editor = {
   layer: NodeId;
   /** the material a new face is given, as the name of a `--var` */
   material?: string;
+  /**
+   * Material declarations this session changed, by the name they have in the sheet.
+   *
+   * Here rather than beside the catalogue because ⌘Z has to reach them: a designer who drags a roughness
+   * slider and then presses undo means that slider, and a rename is one change to the declaration *and*
+   * to every face that names it, which only lands as one undo entry if both halves live in one value.
+   * What a save does with them is `io/materials.ts`.
+   */
+  materials: MaterialDrafts;
   /** the last thing that happened, for the status line */
   note?: string;
 };
 
 export function newEditor(world = emptyWorld()): Editor {
-  return { world, selection: NOTHING, layer: world.layers[0]?.id ?? DEFAULT_LAYER };
+  return { world, selection: NOTHING, layer: world.layers[0]?.id ?? DEFAULT_LAYER, materials: new Map() };
 }
 
 /** the grid size in metres — the sheet stores the exponent, because that is the thing that is stepped */

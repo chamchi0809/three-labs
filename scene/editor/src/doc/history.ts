@@ -124,7 +124,8 @@ const recorded = (list: Command[], command: Command): Command[] => {
 const untouched = (a: Editor, b: Editor): boolean =>
   a === b ||
   (a.world === b.world && a.selection === b.selection && a.open === b.open &&
-    a.layer === b.layer && a.material === b.material && a.note === b.note);
+    a.layer === b.layer && a.material === b.material && a.note === b.note &&
+    a.materials === b.materials);
 
 const trim = (entries: Entry[], limit: number): Entry[] =>
   entries.length > limit ? entries.slice(entries.length - limit) : entries;

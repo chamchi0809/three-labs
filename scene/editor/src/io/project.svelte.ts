@@ -34,6 +34,7 @@ import { readForExport, toGlb, toObj } from "./export.ts";
 import { readWorld, type Sheets } from "./read.ts";
 import { nameOf, rootOf } from "./root.ts";
 import { writeWorld, type Project } from "./write.ts";
+import type { MaterialDrafts } from "./materials.ts";
 
 /**
  * The file system access API, which the DOM types this workspace builds against do not carry.
@@ -96,6 +97,8 @@ class ProjectStore {
    * document that is dirty the moment it is opened is a marker nobody reads twice.
    */
   #saved = $state.raw<World | undefined>(undefined);
+  /** the declarations as the file has them: `library`'s drafts as they stood at the last save */
+  #savedDrafts = $state.raw<MaterialDrafts>(new Map());
   #problems = $state.raw<string[]>([]);
   #diagnostics = $state.raw<string[]>([]);
   /** how many times this session has written to disk; the first one makes any recovery offer stale */
@@ -122,7 +125,9 @@ class ProjectStore {
   }
 
   get dirty(): boolean {
-    return session.editor.world !== this.#saved;
+    // materials are not part of the world and so are not part of the world comparison; an edited
+    // declaration is unsaved work like any other and has to light the save button
+    return session.editor.world !== this.#saved || library.drafts !== this.#savedDrafts;
   }
 
   /** whether this browser can write back to the file it opened, or can only offer a download */
@@ -160,6 +165,7 @@ class ProjectStore {
     // the demo a document rather than a picture of one.
     this.#held.set(this.#root, { text: DEMO_SHEET });
     this.#saved = session.editor.world;
+    this.#savedDrafts = library.drafts;
     this.startAutosave();
     log.say(`three-broom · ${this.name}, which is not a file yet`);
   }
@@ -258,6 +264,7 @@ class ProjectStore {
     session.load(newEditor(world));
     this.#saved = world;
     library.load(catalogueOfSheets(sheets.values()));
+    this.#savedDrafts = library.drafts;
 
     log.say(`opened ${root}${held.size > 1 ? ` and ${held.size - 1} more` : ""}`);
     log.all("warn", this.#diagnostics);
@@ -368,13 +375,14 @@ class ProjectStore {
       this.#held.set(this.#root, { text: "" });
     }
     const project: Project = { root: this.#root, sheets };
-    const out = writeWorld(session.editor.world, project);
+    const out = writeWorld(session.editor.world, project, library.drafts);
     this.#problems = out.problems;
     return out;
   }
 
   private settle(): void {
     this.#saved = session.editor.world;
+    this.#savedDrafts = library.drafts;
     this.#saves++;
     localStorage.removeItem(AUTOSAVE_KEY);
     log.say(`saved ${this.name}`);

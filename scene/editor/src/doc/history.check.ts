@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
+import type { MaterialDef } from "./catalogue.ts";
 import { brushNode, insertNodes, layerNode, nodeById, removeNodes, type World } from "./document.ts";
 import { newEditor, type Editor } from "./editor.ts";
 import {
@@ -284,6 +285,17 @@ test("a drag that came back to where it started leaves nothing behind, not an en
   assert.equal(h.past.length, 0, "undo has nothing to do, so there is nothing on the stack");
   assert.equal(h.repeat.length, 0, "and nothing to repeat either — the gesture was cancelled");
   assert.equal(grid(h.editor), -2);
+});
+
+test("a material declaration changed is an edit like any other", () => {
+  let h = history(start());
+  const wall: MaterialDef = { name: "wall", type: "meshStandardMaterial", maps: {}, roughness: 0.2 };
+  h = change(h, "set roughness", (e) => ({ ...e, materials: new Map(e.materials).set("wall", wall) }));
+  assert.equal(h.past.length, 1, "a declaration nobody pushed is one ⌘Z steps over");
+  h = undo(h);
+  assert.equal(h.editor.materials.size, 0);
+  h = redo(h);
+  assert.equal(h.editor.materials.get("wall"), wall);
 });
 
 test("the editor is settled after every command, so nothing points at what is gone", () => {
