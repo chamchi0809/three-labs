@@ -138,7 +138,7 @@
   }
   .key {
     color: var(--dim);
-    font-size: 11px;
+    font-size: var(--ui-sm);
   }
   /* the keys that act rather than set: after the controls, on the same left edge as everything else */
   .keys {
@@ -157,6 +157,6 @@
     border-radius: 3px;
     color: var(--text);
     font: inherit;
-    font-size: 11px;
+    font-size: var(--ui-sm);
   }
 </style>

@@ -23,6 +23,18 @@ import { layoutLabels, newLabels, setLabel, type Labels } from "./text.ts";
 /** the compass is drawn in a box this many world units across; the camera below is sized to match */
 const REACH = 1;
 const HEAD = 0.18;
+/**
+ * How much of the dial's height one axis letter takes.
+ *
+ * A fraction rather than a pixel count, because the dial is between 44 and 96 pixels depending on how the
+ * viewports are split, and a letter fixed in pixels either vanishes in the big dial or fills the small one.
+ * The camera box below is then solved for it: the letter's centre sits at `REACH + HEAD * 1.6` and it needs
+ * half its own height above that, which under an orthographic camera is `LETTER * half` — so
+ * `half = centre / (1 - LETTER)`, and anything less clips the tops off the letters.
+ */
+const LETTER = 0.2;
+const LETTER_AT = REACH + HEAD * 1.6;
+const BOX = LETTER_AT / (1 - LETTER);
 
 export type Compass = {
   scene: Scene;
@@ -45,7 +57,7 @@ export function newCompass(): Compass {
   scene.add(dial);
 
   // a box exactly big enough for the longest arm plus its letter, so the compass fills its corner
-  const camera = new OrthographicCamera(-1.35, 1.35, 1.35, -1.35, -10, 10);
+  const camera = new OrthographicCamera(-BOX, BOX, BOX, -BOX, -10, 10);
   camera.position.set(0, 0, 5);
 
   const arms: Compass["arms"] = [];
@@ -75,8 +87,9 @@ export function newCompass(): Compass {
 
   const labels = newLabels(scene);
   for (const { letter, dir } of AXES) {
-    const at = dir.clone().multiplyScalar(REACH + HEAD * 1.6);
-    setLabel(labels, letter, letter, [at.x, at.y, at.z], { pixels: 11, background: "rgba(0,0,0,0)" });
+    const at = dir.clone().multiplyScalar(LETTER_AT);
+    // the size is set per frame in `updateCompass`, once the dial's own size is known
+    setLabel(labels, letter, letter, [at.x, at.y, at.z], { background: "rgba(0,0,0,0)" });
   }
 
   return { scene, camera, dial, labels, arms };
@@ -102,7 +115,9 @@ export function updateCompass(compass: Compass, camera: Camera, size = 96): void
   }
   for (const { letter, axis } of AXES.map((a) => ({ letter: a.letter, axis: a.axis }))) {
     const label = compass.labels.live.get(letter);
-    if (label) label.sprite.visible = Math.abs(forward.getComponent(axis)) < 0.97;
+    if (!label) continue;
+    label.sprite.visible = Math.abs(forward.getComponent(axis)) < 0.97;
+    label.pixels = size * LETTER;
   }
 
   // the letters sit in the compass's own scene, so they are laid out against the compass's own camera

@@ -23,6 +23,8 @@
     syncScene,
   } from "../render/scene.ts";
   import { bakery } from "../bake/bake.svelte.ts";
+  // `host` is the pane container in this component, so the page that mounted the editor is `page` here
+  import { host as page } from "../host.svelte.ts";
   import { keys } from "../keys/keys.svelte.ts";
   import { FLY_KEYS, keyOf } from "../keys/keymap.ts";
   import { library } from "../library.svelte.ts";
@@ -136,6 +138,13 @@
         if (import.meta.env.DEV) Object.assign(globalThis, { broomView: { rs, renderer, cameras, views } });
 
         renderer.setAnimationLoop((now) => {
+          // the game has the screen. Four panes of a level at sixty frames a second is a GPU the game
+          // wanted, and the loop is stopped rather than the element hidden — a `display: none` canvas
+          // keeps drawing. `last` moves on anyway, so coming back is one frame and not one long one.
+          if (page.paused) {
+            last = now;
+            return;
+          }
           const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
           last = now;
           perf.frame(now);
@@ -719,7 +728,8 @@
    * document declines it and it arrives here, where the tool drops the selection instead.
    */
   function onKeydown(event: KeyboardEvent): void {
-    if (typing(event) || event.defaultPrevented) return;
+    // W is the player walking, not the camera flying — see `host.paused`
+    if (page.paused || typing(event) || event.defaultPrevented) return;
     const key = keyOf(event);
 
     const command = keys.commandFor(event);
@@ -750,6 +760,13 @@
   }
 
   const onKeyup = (event: KeyboardEvent) => held.delete(keyOf(event));
+
+  // A key let go of while the game had the keyboard was never let go of here — the press that started the
+  // game (F5, or a click on Play) can itself be the last thing this saw. Clearing on pause is what keeps
+  // the camera from drifting off on a W nobody is holding any more.
+  $effect(() => {
+    if (page.paused) held.clear();
+  });
   const onBlur = () => held.clear();
 
   // ---------------------------------------------------------------- drawing the overlay
@@ -862,7 +879,7 @@
   .guides { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
   .guides line { stroke: currentColor; stroke-width: 1; opacity: 0.85; }
   .guides text {
-    fill: currentColor; font: 11px ui-monospace, monospace;
+    fill: currentColor; font: var(--mono);
     text-anchor: middle; dominant-baseline: middle;
     /* the numbers are read against a lit map, an unlit one and the grid; a dark halo works on all three */
     paint-order: stroke; stroke: var(--p0); stroke-width: 3px; stroke-linejoin: round;

@@ -46,6 +46,7 @@ Object3D.constructor
 | ------ | ------ | ------ | ------ | ------ | ------ |
 | <a id="entity-1"></a> `entity` | `public` | `F` | `undefined` | the level's own data: `@entity { … }` on the template, with the node's own written over it | - |
 | <a id="isentity"></a> `isEntity` | `readonly` | `true` | `true` | - | - |
+| <a id="kinds"></a> `kinds` | `public` | `string`[] | `[]` | The templates the node was written with, in order: `entity.monster.boss` arrives as `["monster", "boss"]`. A level's monsters, its pickups and its spawn points are all entities, and until this was here the only way a game could tell them apart was by guessing from their keys — "it has `hp`, so it must be a monster". The class is what the level actually said, so it is what the game reads. `@fields` and `@entity` are erased into plain data by the time a sheet is built, but the template *name* survives because it is the type. | - |
 | <a id="type"></a> `type` | `readonly` | `string` | `Object3D` | A Read-only _string_ to check `this` object type. **Remarks** This can be used to find a specific type of Object3D in a scene. Sub-classes will update this value. | `Object3D.type` |
 
 ***
@@ -1693,7 +1694,7 @@ the top half of a sphere filling the box: five rows from the equator to a single
 ### entities()
 
 ```ts
-function entities<F>(root): Entity<F>[];
+function entities<F>(root, kind?): Entity<F>[];
 ```
 
 Every entity in a tree, parents before children.
@@ -1706,6 +1707,9 @@ the level file lists first.
 Every [Entity](#entity) node, then, and also the ordinary node somebody hung an `@entity { … }` on — a
 door that is a mesh and carries the key it needs is still something a game has to find.
 
+With a `kind`, only the ones written with that template: `entities(root, "monster")` is every
+`entity.monster` in the level, which is how a game turns a sheet into a fight.
+
 #### Type Parameters
 
 | Type Parameter | Default type |
@@ -1717,6 +1721,7 @@ door that is a mesh and carries the key it needs is still something a game has t
 | Parameter | Type |
 | ------ | ------ |
 | `root` | [`Object3D`](https://threejs.org/docs/#api/en/core/Object3D) |
+| `kind?` | `string` |
 
 #### Returns
 

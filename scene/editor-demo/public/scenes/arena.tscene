@@ -1,0 +1,264 @@
+// The arena: one room, four pillars, a platform with a ramp up to it, and the six monsters that
+// live there. Seeded by tools/make-arena.mjs and owned by the editor from the first save — the numbers came
+// from a table, and everything after that comes from dragging.
+//
+// Nothing in here is about the game's rules. The architecture is brushes, the lights are three's own, and
+// every gameplay decision — where the player starts, what a brute has for hit points — is an `@entity`
+// block whose shape `library.tscene` declares. Which is the arrangement worth having: this file is a level,
+// and it is the same level whether it is being walked through or dragged around.
+@import "./library.tscene";
+
+group #Architecture {
+  brush #floor {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(20, -1, -20), vec3(20, 0, -20), vec3(20, 0, 20)) { material: var(--floor); }
+    face(vec3(-20, -1, -20), vec3(-20, 0, 20), vec3(-20, 0, -20)) { material: var(--floor); }
+    face(vec3(-20, 0, -20), vec3(-20, 0, 20), vec3(20, 0, 20)) { material: var(--floor); }
+    face(vec3(-20, -1, -20), vec3(20, -1, 20), vec3(-20, -1, 20)) { material: var(--floor); }
+    face(vec3(-20, -1, 20), vec3(20, -1, 20), vec3(20, 0, 20)) { material: var(--floor); }
+    face(vec3(-20, -1, -20), vec3(20, 0, -20), vec3(20, -1, -20)) { material: var(--floor); }
+  }
+  brush #wallNorth {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(21, 0, -21), vec3(21, 8, -21), vec3(21, 8, -20)) { material: var(--wall); }
+    face(vec3(-21, 0, -21), vec3(-21, 8, -20), vec3(-21, 8, -21)) { material: var(--wall); }
+    face(vec3(-21, 8, -21), vec3(-21, 8, -20), vec3(21, 8, -20)) { material: var(--wall); }
+    face(vec3(-21, 0, -21), vec3(21, 0, -20), vec3(-21, 0, -20)) { material: var(--wall); }
+    face(vec3(-21, 0, -20), vec3(21, 0, -20), vec3(21, 8, -20)) { material: var(--wall); }
+    face(vec3(-21, 0, -21), vec3(21, 8, -21), vec3(21, 0, -21)) { material: var(--wall); }
+  }
+  brush #wallSouth {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(21, 0, 20), vec3(21, 8, 20), vec3(21, 8, 21)) { material: var(--wall); }
+    face(vec3(-21, 0, 20), vec3(-21, 8, 21), vec3(-21, 8, 20)) { material: var(--wall); }
+    face(vec3(-21, 8, 20), vec3(-21, 8, 21), vec3(21, 8, 21)) { material: var(--wall); }
+    face(vec3(-21, 0, 20), vec3(21, 0, 21), vec3(-21, 0, 21)) { material: var(--wall); }
+    face(vec3(-21, 0, 21), vec3(21, 0, 21), vec3(21, 8, 21)) { material: var(--wall); }
+    face(vec3(-21, 0, 20), vec3(21, 8, 20), vec3(21, 0, 20)) { material: var(--wall); }
+  }
+  brush #wallWest {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-20, 0, -20), vec3(-20, 8, -20), vec3(-20, 8, 20)) { material: var(--wall); }
+    face(vec3(-21, 0, -20), vec3(-21, 8, 20), vec3(-21, 8, -20)) { material: var(--wall); }
+    face(vec3(-21, 8, -20), vec3(-21, 8, 20), vec3(-20, 8, 20)) { material: var(--wall); }
+    face(vec3(-21, 0, -20), vec3(-20, 0, 20), vec3(-21, 0, 20)) { material: var(--wall); }
+    face(vec3(-21, 0, 20), vec3(-20, 0, 20), vec3(-20, 8, 20)) { material: var(--wall); }
+    face(vec3(-21, 0, -20), vec3(-20, 8, -20), vec3(-20, 0, -20)) { material: var(--wall); }
+  }
+  brush #wallEast {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(21, 0, -20), vec3(21, 8, -20), vec3(21, 8, 20)) { material: var(--wall); }
+    face(vec3(20, 0, -20), vec3(20, 8, 20), vec3(20, 8, -20)) { material: var(--wall); }
+    face(vec3(20, 8, -20), vec3(20, 8, 20), vec3(21, 8, 20)) { material: var(--wall); }
+    face(vec3(20, 0, -20), vec3(21, 0, 20), vec3(20, 0, 20)) { material: var(--wall); }
+    face(vec3(20, 0, 20), vec3(21, 0, 20), vec3(21, 8, 20)) { material: var(--wall); }
+    face(vec3(20, 0, -20), vec3(21, 8, -20), vec3(21, 0, -20)) { material: var(--wall); }
+  }
+  brush #pillarNW {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-9, 0, -11), vec3(-9, 8, -11), vec3(-9, 8, -9)) { material: var(--metal); }
+    face(vec3(-11, 0, -11), vec3(-11, 8, -9), vec3(-11, 8, -11)) { material: var(--metal); }
+    face(vec3(-11, 8, -11), vec3(-11, 8, -9), vec3(-9, 8, -9)) { material: var(--metal); }
+    face(vec3(-11, 0, -11), vec3(-9, 0, -9), vec3(-11, 0, -9)) { material: var(--metal); }
+    face(vec3(-11, 0, -9), vec3(-9, 0, -9), vec3(-9, 8, -9)) { material: var(--metal); }
+    face(vec3(-11, 0, -11), vec3(-9, 8, -11), vec3(-9, 0, -11)) { material: var(--metal); }
+  }
+  brush #pillarNE {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(11, 0, -11), vec3(11, 8, -11), vec3(11, 8, -9)) { material: var(--metal); }
+    face(vec3(9, 0, -11), vec3(9, 8, -9), vec3(9, 8, -11)) { material: var(--metal); }
+    face(vec3(9, 8, -11), vec3(9, 8, -9), vec3(11, 8, -9)) { material: var(--metal); }
+    face(vec3(9, 0, -11), vec3(11, 0, -9), vec3(9, 0, -9)) { material: var(--metal); }
+    face(vec3(9, 0, -9), vec3(11, 0, -9), vec3(11, 8, -9)) { material: var(--metal); }
+    face(vec3(9, 0, -11), vec3(11, 8, -11), vec3(11, 0, -11)) { material: var(--metal); }
+  }
+  brush #pillarSW {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-9, 0, 9), vec3(-9, 8, 9), vec3(-9, 8, 11)) { material: var(--metal); }
+    face(vec3(-11, 0, 9), vec3(-11, 8, 11), vec3(-11, 8, 9)) { material: var(--metal); }
+    face(vec3(-11, 8, 9), vec3(-11, 8, 11), vec3(-9, 8, 11)) { material: var(--metal); }
+    face(vec3(-11, 0, 9), vec3(-9, 0, 11), vec3(-11, 0, 11)) { material: var(--metal); }
+    face(vec3(-11, 0, 11), vec3(-9, 0, 11), vec3(-9, 8, 11)) { material: var(--metal); }
+    face(vec3(-11, 0, 9), vec3(-9, 8, 9), vec3(-9, 0, 9)) { material: var(--metal); }
+  }
+  brush #pillarSE {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(11, 0, 9), vec3(11, 8, 9), vec3(11, 8, 11)) { material: var(--metal); }
+    face(vec3(9, 0, 9), vec3(9, 8, 11), vec3(9, 8, 9)) { material: var(--metal); }
+    face(vec3(9, 8, 9), vec3(9, 8, 11), vec3(11, 8, 11)) { material: var(--metal); }
+    face(vec3(9, 0, 9), vec3(11, 0, 11), vec3(9, 0, 11)) { material: var(--metal); }
+    face(vec3(9, 0, 11), vec3(11, 0, 11), vec3(11, 8, 11)) { material: var(--metal); }
+    face(vec3(9, 0, 9), vec3(11, 8, 9), vec3(11, 0, 9)) { material: var(--metal); }
+  }
+  brush #platform {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(18, 0, -18), vec3(18, 2.4, -18), vec3(18, 2.4, -5)) { material: var(--stone); }
+    face(vec3(5, 0, -18), vec3(5, 2.4, -5), vec3(5, 2.4, -18)) { material: var(--stone); }
+    face(vec3(5, 2.4, -18), vec3(5, 2.4, -5), vec3(18, 2.4, -5)) { material: var(--floor); }
+    face(vec3(5, 0, -18), vec3(18, 0, -5), vec3(5, 0, -5)) { material: var(--stone); }
+    face(vec3(5, 0, -5), vec3(18, 0, -5), vec3(18, 2.4, -5)) { material: var(--stone); }
+    face(vec3(5, 0, -18), vec3(18, 2.4, -18), vec3(18, 0, -18)) { material: var(--stone); }
+  }
+  brush #ramp {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(5, 0, -12), vec3(5, 2.4, -12), vec3(5, 2.4, -8)) { material: var(--stone); }
+    face(vec3(2, 0, -12), vec3(5, 0, -8), vec3(2, 0, -8)) { material: var(--stone); }
+    face(vec3(2, 0, -8), vec3(5, 0, -8), vec3(5, 2.4, -8)) { material: var(--stone); }
+    face(vec3(2, 0, -12), vec3(5, 2.4, -12), vec3(5, 0, -12)) { material: var(--stone); }
+    face(vec3(2, 0, -12), vec3(2, 0, -8), vec3(5, 2.4, -8)) { material: var(--stone); }
+  }
+  brush #parapet {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(18, 2.4, -6), vec3(18, 3.2, -6), vec3(18, 3.2, -5)) { material: var(--trim); }
+    face(vec3(5, 2.4, -6), vec3(5, 3.2, -5), vec3(5, 3.2, -6)) { material: var(--trim); }
+    face(vec3(5, 3.2, -6), vec3(5, 3.2, -5), vec3(18, 3.2, -5)) { material: var(--trim); }
+    face(vec3(5, 2.4, -6), vec3(18, 2.4, -5), vec3(5, 2.4, -5)) { material: var(--trim); }
+    face(vec3(5, 2.4, -5), vec3(18, 2.4, -5), vec3(18, 3.2, -5)) { material: var(--trim); }
+    face(vec3(5, 2.4, -6), vec3(18, 3.2, -6), vec3(18, 2.4, -6)) { material: var(--trim); }
+  }
+  brush #coverWest {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-4, 0, -2), vec3(-4, 1.4, -2), vec3(-4, 1.4, -1)) { material: var(--stone); }
+    face(vec3(-16, 0, -2), vec3(-16, 1.4, -1), vec3(-16, 1.4, -2)) { material: var(--stone); }
+    face(vec3(-16, 1.4, -2), vec3(-16, 1.4, -1), vec3(-4, 1.4, -1)) { material: var(--trim); }
+    face(vec3(-16, 0, -2), vec3(-4, 0, -1), vec3(-16, 0, -1)) { material: var(--stone); }
+    face(vec3(-16, 0, -1), vec3(-4, 0, -1), vec3(-4, 1.4, -1)) { material: var(--stone); }
+    face(vec3(-16, 0, -2), vec3(-4, 1.4, -2), vec3(-4, 0, -2)) { material: var(--stone); }
+  }
+  brush #coverEast {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(16, 0, 1), vec3(16, 1.4, 1), vec3(16, 1.4, 2)) { material: var(--stone); }
+    face(vec3(4, 0, 1), vec3(4, 1.4, 2), vec3(4, 1.4, 1)) { material: var(--stone); }
+    face(vec3(4, 1.4, 1), vec3(4, 1.4, 2), vec3(16, 1.4, 2)) { material: var(--trim); }
+    face(vec3(4, 0, 1), vec3(16, 0, 2), vec3(4, 0, 2)) { material: var(--stone); }
+    face(vec3(4, 0, 2), vec3(16, 0, 2), vec3(16, 1.4, 2)) { material: var(--stone); }
+    face(vec3(4, 0, 1), vec3(16, 1.4, 1), vec3(16, 0, 1)) { material: var(--stone); }
+  }
+  brush #crateA {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-7.5, 0, 7), vec3(-7.5, 1.5, 7), vec3(-7.5, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 0, 7), vec3(-9, 1.5, 8.5), vec3(-9, 1.5, 7)) { material: var(--crate); }
+    face(vec3(-9, 1.5, 7), vec3(-9, 1.5, 8.5), vec3(-7.5, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 0, 7), vec3(-7.5, 0, 8.5), vec3(-9, 0, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 0, 8.5), vec3(-7.5, 0, 8.5), vec3(-7.5, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 0, 7), vec3(-7.5, 1.5, 7), vec3(-7.5, 0, 7)) { material: var(--crate); }
+  }
+  brush #crateB {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-6, 0, 7), vec3(-6, 1.5, 7), vec3(-6, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-7.5, 0, 7), vec3(-7.5, 1.5, 8.5), vec3(-7.5, 1.5, 7)) { material: var(--crate); }
+    face(vec3(-7.5, 1.5, 7), vec3(-7.5, 1.5, 8.5), vec3(-6, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-7.5, 0, 7), vec3(-6, 0, 8.5), vec3(-7.5, 0, 8.5)) { material: var(--crate); }
+    face(vec3(-7.5, 0, 8.5), vec3(-6, 0, 8.5), vec3(-6, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-7.5, 0, 7), vec3(-6, 1.5, 7), vec3(-6, 0, 7)) { material: var(--crate); }
+  }
+  brush #crateC {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(-7.5, 1.5, 7), vec3(-7.5, 3, 7), vec3(-7.5, 3, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 1.5, 7), vec3(-9, 3, 8.5), vec3(-9, 3, 7)) { material: var(--crate); }
+    face(vec3(-9, 3, 7), vec3(-9, 3, 8.5), vec3(-7.5, 3, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 1.5, 7), vec3(-7.5, 1.5, 8.5), vec3(-9, 1.5, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 1.5, 8.5), vec3(-7.5, 1.5, 8.5), vec3(-7.5, 3, 8.5)) { material: var(--crate); }
+    face(vec3(-9, 1.5, 7), vec3(-7.5, 3, 7), vec3(-7.5, 1.5, 7)) { material: var(--crate); }
+  }
+  brush #crateD {
+    castShadow: true;
+    receiveShadow: true;
+    face(vec3(13.5, 0, 13), vec3(13.5, 1.5, 13), vec3(13.5, 1.5, 14.5)) { material: var(--crate); }
+    face(vec3(12, 0, 13), vec3(12, 1.5, 14.5), vec3(12, 1.5, 13)) { material: var(--crate); }
+    face(vec3(12, 1.5, 13), vec3(12, 1.5, 14.5), vec3(13.5, 1.5, 14.5)) { material: var(--crate); }
+    face(vec3(12, 0, 13), vec3(13.5, 0, 14.5), vec3(12, 0, 14.5)) { material: var(--crate); }
+    face(vec3(12, 0, 14.5), vec3(13.5, 0, 14.5), vec3(13.5, 1.5, 14.5)) { material: var(--crate); }
+    face(vec3(12, 0, 13), vec3(13.5, 1.5, 13), vec3(13.5, 0, 13)) { material: var(--crate); }
+  }
+}
+
+group #Lighting {
+  ambientLight(#3b4a63, 0.9)
+  // the sun, and the only shadow caster: a room with five shadow maps in it is a room that runs at 30fps
+  directionalLight #sun(#ffe6c4, 2.4) {
+    position: vec3(14, 22, 18);
+    castShadow: true;
+    shadow.mapSize: vec2(2048, 2048);
+    shadow.camera.left: -28;
+    shadow.camera.right: 28;
+    shadow.camera.top: 28;
+    shadow.camera.bottom: -28;
+    shadow.camera.far: 80;
+    shadow.bias: -0.0008;
+  }
+  pointLight.lamp #lamp1 { position: vec3(-10, 6.5, -10); }
+  pointLight.lamp #lamp2 { position: vec3(10, 6.5, -10); }
+  pointLight.lamp #lamp3 { position: vec3(-10, 6.5, 10); }
+  pointLight.lamp #lamp4 { position: vec3(10, 6.5, 10); }
+}
+
+group #Gameplay {
+  entity.spawn #start {
+    position: vec3(-16, 0, 16);
+    @entity { facing: -45; }
+  }
+  entity.monster #grunt1 {
+    position: vec3(0, 0, -6);
+    @entity { breed: "grunt"; }
+  }
+  entity.monster #grunt2 {
+    position: vec3(-13, 0, -13);
+    @entity { breed: "grunt"; }
+  }
+  entity.monster #grunt3 {
+    position: vec3(13, 0, 8);
+    @entity { breed: "grunt"; }
+  }
+  entity.monster #grunt4 {
+    position: vec3(6, 0, 16);
+    @entity { breed: "grunt"; }
+  }
+  // a brute walks at 2.2 and the player runs, so it gets to notice you from further off than a grunt does —
+  // and it still will not be the thing that reaches you first
+  entity.monster #brute1 {
+    position: vec3(11, 2.4, -12);
+    @entity { breed: "brute"; hp: 120; speed: 2.2; damage: 18; sight: 18; }
+  }
+  entity.monster #brute2 {
+    position: vec3(-17, 0, -4);
+    @entity { breed: "brute"; hp: 120; speed: 2.2; damage: 18; sight: 18; }
+  }
+  entity.pickup #shells1 {
+    position: vec3(-16, 0, 12);
+    @entity { kind: "shells"; amount: 16; }
+  }
+  entity.pickup #shells2 {
+    position: vec3(8, 2.4, -16);
+    @entity { kind: "shells"; amount: 16; }
+  }
+  entity.pickup #cells1 {
+    position: vec3(16, 0, -1);
+    @entity { kind: "cells"; amount: 40; }
+  }
+  entity.pickup #health1 {
+    position: vec3(-8, 0, 4);
+    @entity { kind: "health"; amount: 25; }
+  }
+  entity.pickup #health2 {
+    position: vec3(15, 0, 17);
+    @entity { kind: "health"; amount: 25; }
+  }
+}

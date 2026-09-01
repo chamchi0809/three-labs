@@ -113,7 +113,7 @@ type Ink = { tint: AnyNode; amount: AnyNode };
 /**
  * Every mark the editor makes on a surface, collapsed into one colour and one amount.
  *
- * A chain of `mix`es is the obvious way to write this and it is what the classic look used, but it needs
+ * A chain of `mix`es is the obvious way to write this and it is what the unshaded look used, but it needs
  * the base colour to chain *onto* — and the height material's base colour does not exist until after the
  * parallax march has run, inside a graph this file has no business rebuilding. So the layers are folded
  * from the top down instead: the amount is what is left after each layer has taken its bite, and the tint
@@ -145,7 +145,7 @@ export function editorInk(grid?: GridUniforms): Ink {
   return { tint: color(weighted.div(max(amount, float(1e-4)))), amount };
 }
 
-/** a base colour with the editor's marks over it — the classic look, and the graph everything else copies */
+/** a base colour with the editor's marks over it — the graph both looks copy */
 const tinted = (base: AnyNode, grid?: GridUniforms): AnyNode => {
   const { tint, amount } = editorInk(grid);
   return mix(base, tint, amount);
@@ -229,19 +229,23 @@ function gridInk(grid: GridUniforms, fade = true) {
 // ---------------------------------------------------------------- the materials
 
 /**
- * The brush faces.
+ * The unshaded brush faces: one unlit material for the whole map, with no textures or lighting.
  *
- * Standard rather than basic even in the "classic" look, because a map with no shading at all reads as one
- * flat blue-grey mass and a designer cannot tell a wall from a floor.
- *
- * This is what the classic look *is*: one material for the whole map, one draw call, and no textures to
- * load or wait for. The modern look in `palette.ts` builds a material per declaration instead and reuses
- * {@link editorInk} for the marks, so the two looks put selection and grid in exactly the same places.
+ * Selection and the on-face grid remain part of the colour graph, so switching looks changes the surface
+ * treatment without moving the editor's marks.
  */
-export function faceMaterial(grid: GridUniforms): MeshStandardNodeMaterial {
+export function unshadedMaterial(grid: GridUniforms): MeshBasicNodeMaterial {
+  const material = new MeshBasicNodeMaterial({ toneMapped: false });
+  material.colorNode = tinted(color(COLOURS.face), grid);
+  material.name = "broom:face/unshaded";
+  return material;
+}
+
+/** the physical grey fallback used by shaded faces whose material declaration is missing */
+export function shadedFallbackMaterial(grid: GridUniforms): MeshStandardNodeMaterial {
   const material = new MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   material.colorNode = tinted(color(COLOURS.face), grid);
-  material.name = "broom:face";
+  material.name = "broom:face/shaded-fallback";
   return material;
 }
 

@@ -229,7 +229,7 @@
   }
   .list ul { list-style: none; margin: 0 0 4px; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 2px; }
   .list li { display: flex; gap: 3px; }
-  .fields { color: var(--muted); font-size: 10px; }
+  .fields { color: var(--muted); font-size: var(--ui-xs); }
   .pick {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 7px;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
@@ -242,7 +242,7 @@
   .detail { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   .detail.empty { color: var(--muted); }
   .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
-  label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 120px; min-width: 0; font-size: 10px; color: var(--muted); }
+  label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 120px; min-width: 0; font-size: var(--ui-xs); color: var(--muted); }
   label.tight { flex: 0 0 72px; }
   label.grow { flex: 1 1 100%; }
   input, select {
@@ -251,15 +251,15 @@
     color: var(--text); font: var(--mono);
   }
   input[type="color"] { padding: 1px; height: 24px; }
-  h4 { margin: 4px 0 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  h4 { margin: 4px 0 0; font-size: var(--ui-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   table { width: 100%; border-collapse: collapse; font: var(--mono); }
-  th { text-align: left; font-weight: 400; font-size: 10px; color: var(--muted); padding: 0 4px 2px 0; }
+  th { text-align: left; font-weight: 400; font-size: var(--ui-xs); color: var(--muted); padding: 0 4px 2px 0; }
   td { padding: 1px 4px 1px 0; vertical-align: middle; }
   td:last-child, th:last-child { width: 22px; padding-right: 0; }
   .range { display: flex; gap: 4px; }
   .guess { color: var(--dim); cursor: help; margin-left: 3px; }
   .none { color: var(--dim); padding: 4px 0; }
-  .what { margin: 0; color: var(--muted); font-size: 10px; }
+  .what { margin: 0; color: var(--muted); font-size: var(--ui-xs); }
   .add {
     display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; padding: 4px 8px;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;

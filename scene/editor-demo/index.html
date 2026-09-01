@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>three-broom — arena</title>
+<style>
+  /* Two layers, one on top of the other, and only ever one of them alive.
+     The editor is not hidden while the game runs — it is `inert` and told to stand down, because a hidden
+     canvas keeps its animation loop and a window listening for W keeps hearing it. See mount.ts. */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; }
+  body { font: var(--ui, 13px/1.5 system-ui, sans-serif); color: #e6e6e6; }
+
+  #editor, #play { position: fixed; inset: 0; }
+  #editor[inert] { filter: saturate(0.4) brightness(0.7); }
+  #play { display: none; background: #05060a; }
+  #play.on { display: block; }
+
+  /* What stands in for the game while a level is loading, or when one refused to. Scoped to #play and
+     named for itself: the editor has floating panels of its own, and a bare `.panel` in here restyled
+     every one of them — a page that mounts someone else's UI shares a stylesheet with it. */
+  #play .notice {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 40px;
+    text-align: center;
+  }
+  #play .notice h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.04em; }
+  #play .notice p {
+    margin: 0;
+    max-width: 70ch;
+    color: #ff9b8f;
+    font-family: ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+    line-height: 1.7;
+  }
+  #play .notice button {
+    padding: 8px 18px;
+    border-radius: 8px;
+    border: 1px solid #39415a;
+    background: #1b2130;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  #play .notice button:hover { background: #263047; }
+</style>
+<div id="editor"></div>
+<div id="play" aria-hidden="true" inert></div>
+<script type="module" src="/src/main.ts"></script>

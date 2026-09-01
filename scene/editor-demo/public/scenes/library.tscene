@@ -1,0 +1,116 @@
+// What the arena is built out of: six materials and three kinds of entity.
+//
+// The split between this file and arena.tscene is the split between a definition file and a map. TrenchBroom
+// keeps the definitions in a `.fgd` the editor loads and the game never sees; here it is a sheet the editor
+// reads, the game reads, and the checker checks — one description of what a monster *is*, used by the tool
+// that places them and by the code that fights them.
+//
+// Which is why the game hard-codes no numbers about monsters. `hp`, `speed` and `damage` are `@fields` here,
+// defaults live in `@entity`, the arena writes over them per monster, and `game/level.ts` reads whatever
+// comes out. Rebalancing the brutes is dragging a number in the entity panel and pressing Play.
+
+// ---------------------------------------------------------------- materials
+
+--floor: meshStandardMaterial {
+  color: color(#3f4550);
+  roughness: 0.95;
+  metalness: 0.05;
+}
+
+--wall: meshStandardMaterial {
+  color: color(#6b6154);
+  roughness: 0.85;
+}
+
+--stone: meshStandardMaterial {
+  color: color(#565a63);
+  roughness: 0.8;
+}
+
+// the pillars, and the one thing in the room that catches a highlight
+--metal: meshStandardMaterial {
+  color: color(#8d939c);
+  roughness: 0.3;
+  metalness: 0.75;
+}
+
+--crate: meshStandardMaterial {
+  color: color(#9a6c39);
+  roughness: 0.75;
+}
+
+// edges: bright enough that a ledge reads as a ledge from across the room
+--trim: meshStandardMaterial {
+  color: color(#c2705f);
+  roughness: 0.55;
+  metalness: 0.15;
+}
+
+// ---------------------------------------------------------------- fittings
+
+/**
+ * A lamp: what the four pillar lights all are, so tuning the room is one number in one place.
+ *
+ * None of them casts a shadow. The sun does, and a room with five shadow maps in it is a room that renders
+ * five times.
+ */
+@template pointLight.lamp {
+  color: color(#ffbb77);
+  intensity: 14;
+  distance: 20;
+  decay: 2;
+}
+
+// ---------------------------------------------------------------- entities
+
+/* the two kinds of monster, as one list two fields can share */
+--breed: ["grunt", "brute"];
+
+/* and the three things worth walking over */
+--supply: ["health", "shells", "cells"];
+
+/**
+ * Where the player comes in. One per map — the game takes the first it finds.
+ *
+ * `facing` is degrees about Y with 0 looking down -Z, which is three's own idea of forward, so a spawn that
+ * says nothing looks the way an unrotated camera does.
+ */
+@template entity.spawn {
+  @broom { category: "gameplay"; color: #6fd08c; doc: "where the player comes in";
+           size: [-0.35, 0, -0.35, 0.35, 1.8, 0.35]; }
+  @fields {
+    facing: { type: float; min: -180; max: 180; doc: "degrees about Y, 0 looks down -Z" };
+  };
+  @entity { facing: 0; }
+}
+
+/**
+ * One enemy, placed. Its breed picks the shape and the colour; everything that decides a fight is a number
+ * on the instance, so the arena can hold a tough grunt without there being a template for one.
+ */
+@template entity.monster {
+  @broom { category: "gameplay"; color: #d0607a; doc: "one enemy, placed";
+           size: [-0.45, 0, -0.45, 0.45, 1.9, 0.45]; }
+  @fields {
+    breed: { type: enum; enum: "breed"; doc: "grunts rush, brutes soak" };
+    hp: { type: int; min: 1; max: 999 };
+    speed: { type: float; min: 0.5; max: 12; doc: "metres a second on the ground" };
+    damage: { type: int; min: 1; max: 100; doc: "per swing, at arm's length" };
+    sight: { type: float; min: 1; max: 60; doc: "wakes up inside this many metres" };
+  };
+  // 14 metres is a third of the room: what it buys is a fight that arrives in twos as you push forward,
+  // rather than every monster in the arena converging on the spawn while you are still reading the banner
+  @entity { breed: "grunt"; hp: 40; speed: 3.6; damage: 9; sight: 14; }
+}
+
+/** something to walk over. `amount` is hit points, shells or cells depending on `kind`. */
+@template entity.pickup {
+  @broom { category: "gameplay"; color: #7aa2f7; doc: "something to walk over";
+           size: [-0.3, 0, -0.3, 0.3, 0.7, 0.3]; }
+  @fields {
+    kind: { type: enum; enum: "supply" };
+    amount: { type: int; min: 1; max: 200 };
+    respawn: { type: float; min: 0; max: 120; doc: "seconds until it comes back; 0 never does" };
+  };
+  @entity { kind: "health"; amount: 25; respawn: 0; }
+}

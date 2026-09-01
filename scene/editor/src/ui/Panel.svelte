@@ -56,7 +56,7 @@
     border-bottom: 1px solid var(--border);
   }
   .title {
-    font-size: 10px;
+    font-size: var(--ui-xs);
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;

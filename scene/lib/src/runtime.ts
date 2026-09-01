@@ -188,11 +188,17 @@ export function updateScene(root: Object3D, delta: number): void {
  *
  * Every {@link Entity} node, then, and also the ordinary node somebody hung an `@entity { … }` on — a
  * door that is a mesh and carries the key it needs is still something a game has to find.
+ *
+ * With a `kind`, only the ones written with that template: `entities(root, "monster")` is every
+ * `entity.monster` in the level, which is how a game turns a sheet into a fight.
  */
-export function entities<F = Record<string, unknown>>(root: Object3D): Entity<F>[] {
+export function entities<F = Record<string, unknown>>(root: Object3D, kind?: string): Entity<F>[] {
   const out: Entity<F>[] = [];
   root.traverse((o) => {
-    if ((o as Partial<Entity<F>>).entity) out.push(o as Entity<F>);
+    const e = o as Partial<Entity<F>>;
+    if (!e.entity) return;
+    if (kind !== undefined && !e.kinds?.includes(kind)) return;
+    out.push(o as Entity<F>);
   });
   return out;
 }
@@ -548,6 +554,16 @@ async function build(o: ObjectValue, ctx: Ctx): Promise<any> {
   if (o.id) {
     target.name = o.id;
     ctx.ids.set(o.id, target);
+  }
+  // The templates it was written with, kept for the entity that has to be told from another entity —
+  // `entity.monster` and `entity.pickup` are the same class holding different data, and a game asking
+  // "what is this" should get the answer the level gave rather than infer it from which keys are set.
+  //
+  // Only where it means something: an `Entity`, or the ordinary node somebody hung an `@entity` on. Every
+  // other node's classes are already spent — a template is properties, and the properties are on the
+  // object — so writing them onto a `Mesh` would be tscene inventing a field three does not describe.
+  if (o.classes.length && (target?.isEntity || o.body.some((m) => m.kind === "at" && m.name === "entity"))) {
+    target.kinds = [...o.classes];
   }
   for (const m of o.body) await apply(target, m, ctx);
   return target;

@@ -70,9 +70,9 @@ export type Drop = {
   where: Where;
   /** the row the marker is drawn against */
   row: NodeId;
-  /** where the nodes end up */
-  parent: NodeId;
-  /** the index in `parent`'s children, counted before the moving nodes are taken out */
+  /** where the nodes end up; undefined is the world's root layer list */
+  parent: NodeId | undefined;
+  /** the index in the parent's children or root layers, counted before the moving nodes are taken out */
   index: number;
   /** how far in to draw the insertion line, so a gap between siblings reads as belonging to them */
   depth: number;
@@ -88,31 +88,47 @@ export type Drop = {
 export const zoneOf = (t: number, canHold: boolean): Where =>
   canHold ? (t < 0.25 ? "before" : t > 0.75 ? "after" : "inside") : t < 0.5 ? "before" : "after";
 
+/** the last visible row belonging to the subtree that starts at `i` */
+function subtreeEnd(rows: TreeRow[], i: number): number {
+  const depth = rows[i]?.depth;
+  if (depth === undefined) return i;
+  let end = i;
+  while (rows[end + 1]?.depth > depth) end++;
+  return end;
+}
+
 /**
- * The drop a pointer at `t` down row `i` means, or nothing when it means something impossible.
+ * The drop a pointer at `t` down row `i` and horizontal `depth` means, or nothing when it means something
+ * impossible. Pulling an after-drop into an ancestor's indentation band outdents it to that ancestor's
+ * sibling level, provided the visible boundary is really the end of that ancestor's subtree.
  *
- * Impossible is one of four things: a root has no siblings to sit between, a node cannot go inside itself
- * or inside anything it contains, a locked parent does not take deliveries, and a leaf is not a parent.
- * All four are decided here rather than in the panel, so what the marker promises and what the drop does
- * are the same answer.
+ * A group can cross depth zero because a top-level group is a layer. Brushes, patches and objects stop at
+ * depth one because the world root can only contain those layers. Cycles, locked parents and leaf targets
+ * are rejected here so what the marker promises and what the drop does are the same answer.
  */
 export function dropOn(
   world: World,
   rows: TreeRow[],
   i: number,
   t: number,
+  depth: number,
   moving: readonly NodeId[],
 ): Drop | undefined {
   const row = rows[i];
   if (!row) return undefined;
-  const inside = new Set(moving.flatMap((id) => {
-    const node = nodeById(world, id);
-    return node ? [...subtreeIds(node)] : [];
-  }));
+  const nodes = moving.map((id) => nodeById(world, id)).filter((node): node is Node => node !== undefined);
+  const inside = new Set(nodes.flatMap((node) => [...subtreeIds(node)]));
+  const canRoot =
+    nodes.length === moving.length && nodes.every((node) => node.kind === "group" || node.kind === "layer");
+  const dropDepth = Math.max(canRoot ? 0 : 1, depth);
 
   const canHold = hasChildren(row.node) && !inside.has(row.node.id);
-  // a root is the whole of its own level: there is nothing beside it to sit before or after
-  const where = row.parent === undefined ? (canHold ? "inside" : undefined) : zoneOf(t, canHold);
+  let where: Where | undefined;
+  if (row.parent === undefined) {
+    if (dropDepth === 0) where = t < 0.5 ? "before" : "after";
+    else if (canHold) where = "inside";
+  } else if (dropDepth <= row.depth) where = t < 0.5 ? "before" : "after";
+  else where = zoneOf(t, canHold);
   if (!where) return undefined;
 
   if (where === "inside") {
@@ -121,14 +137,32 @@ export function dropOn(
     return { where, row: row.node.id, parent: row.node.id, index: childrenOf(row.node).length, depth: row.depth + 1 };
   }
 
-  const parent = row.parent!;
-  if (inside.has(parent) || locked(world, parent)) return undefined;
+  let target = row;
+  if (where === "after") {
+    const rootDepth = canRoot ? 0 : 1;
+    const nextDepth = rows[subtreeEnd(rows, i) + 1]?.depth ?? rootDepth;
+    const targetDepth = Math.min(row.depth, Math.max(rootDepth, dropDepth, nextDepth));
+    while (target.depth > targetDepth) {
+      const parent = target.parent && rows.find((candidate) => candidate.node.id === target.parent);
+      if (!parent) break;
+      target = parent;
+    }
+  }
+
+  const parent = target.parent;
+  if (parent !== undefined && (inside.has(parent) || locked(world, parent))) return undefined;
+  let marker = row;
+  if (where === "after") {
+    const targetIndex = rows.findIndex((candidate) => candidate.node.id === target.node.id);
+    marker = rows[subtreeEnd(rows, targetIndex)]!;
+  }
+
   return {
     where,
-    row: row.node.id,
+    row: marker.node.id,
     parent,
-    index: row.index + (where === "after" ? 1 : 0),
-    depth: row.depth,
+    index: target.index + (where === "after" ? 1 : 0),
+    depth: target.depth,
   };
 }
 
@@ -144,9 +178,9 @@ const locked = (world: World, id: NodeId): boolean => {
  * the insert happens there are only two children left and the answer is 2. Without this, a node dragged
  * down inside its own parent lands one place short of where the line was drawn.
  */
-export function dropAt(world: World, parent: NodeId, moving: readonly NodeId[], index: number): number {
-  const node = nodeById(world, parent);
-  const kids = node ? childrenOf(node) : [];
+export function dropAt(world: World, parent: NodeId | undefined, moving: readonly NodeId[], index: number): number {
+  const node = parent === undefined ? undefined : nodeById(world, parent);
+  const kids: readonly Node[] = parent === undefined ? world.layers : node ? childrenOf(node) : [];
   const set = new Set(moving);
   return index - kids.slice(0, index).filter((k) => set.has(k.id)).length;
 }

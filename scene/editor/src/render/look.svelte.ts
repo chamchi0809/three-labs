@@ -13,14 +13,14 @@ import type { Look } from "./palette.ts";
 
 const KEY = "broom:look";
 
-const stored = (): Look => {
+function stored(): Look {
   try {
-    return localStorage.getItem(KEY) === "pbr" ? "pbr" : "classic";
+    return localStorage.getItem(KEY) === "unshaded" ? "unshaded" : "shaded";
   } catch {
     // a browser with storage denied is still a browser that can edit a level
-    return "classic";
+    return "shaded";
   }
-};
+}
 
 class LookState {
   #look = $state<Look>(stored());
@@ -39,12 +39,12 @@ class LookState {
     }
   }
 
-  get pbr(): boolean {
-    return this.#look === "pbr";
+  get shaded(): boolean {
+    return this.#look === "shaded";
   }
 
   toggle(): void {
-    this.current = this.#look === "classic" ? "pbr" : "classic";
+    this.current = this.#look === "unshaded" ? "shaded" : "unshaded";
   }
 }
 

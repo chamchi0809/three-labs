@@ -16,6 +16,7 @@ import {
 import { bakery } from "../bake/bake.svelte.ts";
 import { withGrid } from "../doc/editor.ts";
 import { isEmpty } from "../doc/selection.ts";
+import { host } from "../host.svelte.ts";
 import { clampExponent } from "../grid/snap.ts";
 import { project } from "../io/project.svelte.ts";
 import { session } from "../session.svelte.ts";
@@ -33,6 +34,8 @@ const RUN: Record<string, () => boolean | void> = {
   "file.save": () => void project.save(),
   "file.saveAs": () => void project.saveAs(),
   "file.revert": () => project.revert(),
+  // declines when the page has no game to play, so F5 stays the browser's reload in a plain editor
+  "file.play": () => host.play(),
 
   "edit.undo": () => session.undo(),
   "edit.redo": () => session.redo(),

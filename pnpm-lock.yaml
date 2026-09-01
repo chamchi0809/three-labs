@@ -76,6 +76,25 @@ importers:
         specifier: ^4.3.4
         version: 4.7.6(picomatch@4.0.5)(svelte@5.56.10)(typescript@6.0.3)
 
+  scene/editor-demo:
+    dependencies:
+      tscene:
+        specifier: workspace:*
+        version: link:../lib
+      tscene-editor:
+        specifier: workspace:*
+        version: link:../editor
+    devDependencies:
+      '@sveltejs/vite-plugin-svelte':
+        specifier: ^6.2.1
+        version: 6.2.4(svelte@5.56.10)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(yaml@2.9.0))
+      svelte:
+        specifier: ^5.55.2
+        version: 5.56.10
+      svelte-check:
+        specifier: ^4.3.4
+        version: 4.7.6(picomatch@4.0.5)(svelte@5.56.10)(typescript@6.0.3)
+
   scene/lib:
     dependencies:
       three:

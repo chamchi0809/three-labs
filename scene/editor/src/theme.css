@@ -1,0 +1,56 @@
+/* The palette, in one place. Every panel reads these rather than repeating hexes, so that the shell,
+   the inspectors and the viewport chrome are one surface rather than three that nearly match.
+
+   The ramp is pixi-vania's — Lospec "PurpleMorning8" (#cdd4a5 #cfa98a #c7786f #9a6278 #60556e #3b405e
+   #2e2a4f #211d38), extended with two shades below #211d38 and one tint of #9a6278, because the source
+   palette bottoms out too early for UI chrome. The two editors are the same tool in two dimensions and
+   there is no reason for them to look like different programs.
+
+   A stylesheet rather than a `<style>` in index.html, because the editor is mounted into somebody else's
+   page as often as it is the page: `mount.ts` imports this, so a host that never heard of the palette
+   still gets one. The rules are `:root`-scoped custom properties and nothing else — a host's own layout
+   is its business, and the only thing an embedded editor is entitled to is a box to fill. */
+:root {
+  color-scheme: dark;
+  accent-color: #c7786f;
+
+  --p0: #0d0b18;
+  --p1: #171426;
+  --p2: #211d38;
+  --p3: #2e2a4f;
+  --p4: #3b405e;
+  --p5: #60556e;
+  --p6: #9a6278;
+  --p6-lt: #af7e7f;
+  --p7: #c7786f;
+  --p8: #cfa98a;
+  --p9: #cdd4a5;
+
+  /* pixi-vania's own names, so a component copied across needs no translating */
+  --bg: var(--p1);
+  --panel: var(--p2);
+  --panel-2: var(--p3);
+  --border: var(--p4);
+  --muted: var(--p6-lt);
+  --accent: var(--p7);
+  --accent-dim: #5b3d4b;
+
+  /* `dim` is a third tier of text below `muted`, which pixi-vania has no need of and this editor does:
+     a viewport has far more secondary readouts — units, counts, keys — to keep quiet */
+  --text: var(--p6-lt);
+  --dim: #8a6b74;
+  --warn: var(--p8);
+  --bad: #ff7676;
+
+  /* Type. Two shorthands for the two families and two bare sizes under them, and no component is allowed a
+     number of its own: an editor is read for hours, and "one point too small" is a complaint about thirty
+     files unless it is a complaint about this one.
+
+     `--ui-sm` and `--ui-xs` are sizes rather than shorthands on purpose. They are used to shrink a caption
+     inside a rule that has already chosen a family and a weight, and `font:` there would quietly reset
+     both — a section heading would lose its 700 to a line that only meant to make it smaller. */
+  --ui: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+  --mono: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui-sm: 12px;
+  --ui-xs: 11px;
+}

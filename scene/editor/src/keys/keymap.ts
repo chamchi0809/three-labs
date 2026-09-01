@@ -190,6 +190,9 @@ export const COMMANDS: readonly Command[] = [
   { id: "file.save", title: "save", group: "file" },
   { id: "file.saveAs", title: "save as…", group: "file" },
   { id: "file.revert", title: "revert", group: "file" },
+  // only does anything when the page the editor is mounted into has a game to hand the map to; the
+  // command declines otherwise, which is why it can have a key at all times
+  { id: "file.play", title: "play the map", group: "file" },
 
   { id: "edit.undo", title: "undo", group: "edit" },
   { id: "edit.redo", title: "redo", group: "edit" },
@@ -233,6 +236,10 @@ export const DEFAULTS: readonly Binding[] = [
   bind(chord("o", { ctrl: true }), "file.open"),
   bind(chord("s", { ctrl: true }), "file.save"),
   bind(chord("s", { ctrl: true, shift: true }), "file.saveAs"),
+  // F5, which is what every editor with a game attached to it has meant by "play" for thirty years. A
+  // browser reads it as reload, so the command takes the press — and when there is no game it declines,
+  // the press is not swallowed, and the page reloads the way the designer expected
+  bind(chord("f5"), "file.play"),
 
   bind(chord("z", { ctrl: true }), "edit.undo"),
   bind(chord("z", { ctrl: true, shift: true }), "edit.redo"),

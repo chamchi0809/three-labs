@@ -3,7 +3,9 @@
 // says they mean. Nothing here draws — the point is exactly that the diff is decidable without a GPU.
 // Run with: node --experimental-strip-types src/render/scene.check.ts
 import assert from "node:assert/strict";
-import type { BufferAttribute, InstancedBufferGeometry } from "three/webgpu";
+import {
+  MeshBasicNodeMaterial, MeshStandardNodeMaterial, type BufferAttribute, type InstancedBufferGeometry,
+} from "three/webgpu";
 import { report, test } from "../check.ts";
 import { brushOf } from "../brush/brush.ts";
 import { cuboid } from "../brush/builder.ts";
@@ -52,6 +54,12 @@ function worldOf(...nodes: BrushNode[]): { world: World; layer: LayerNode } {
 const editorOf = (world: World): Editor => ({ ...newEditor(world), layer: world.layers[0]!.id });
 
 // ---------------------------------------------------------------- a world becomes buffers
+
+test("unshaded is unlit while the shaded fallback remains physical", () => {
+  const rs = newRenderScene();
+  assert.ok(rs.unshaded instanceof MeshBasicNodeMaterial);
+  assert.ok(rs.palette.materials[0] instanceof MeshStandardNodeMaterial);
+});
 
 test("every solid in the world is in the batch, with its own span", () => {
   const [a, b] = [solid([0, 0, 0], [1, 1, 1]), solid([4, 0, 0], [5, 1, 1])];

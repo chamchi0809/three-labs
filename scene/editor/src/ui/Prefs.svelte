@@ -30,7 +30,7 @@
 </button>
 
 {#if open}
-  <Dialog title="preferences" say="settings for this editor, not for the level" width={380} onclose={() => (open = false)}>
+  <Dialog title="preferences" say="settings for this editor, not for the level" width={420} onclose={() => (open = false)}>
     {#snippet actions()}
       <button class="plain" disabled={!prefs.changed} onclick={() => prefs.reset()}>defaults</button>
     {/snippet}
@@ -65,7 +65,7 @@
 <style>
   .group {
     margin: 10px 0 2px; padding: 0 12px;
-    color: var(--muted); font-size: 10px; font-weight: 700;
+    color: var(--muted); font-size: var(--ui-xs); font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.08em;
   }
   .row { display: flex; gap: 8px; align-items: center; min-height: 26px; padding: 1px 12px; }

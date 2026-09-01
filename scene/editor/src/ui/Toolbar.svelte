@@ -25,6 +25,7 @@
   import IconLine from "@tabler/icons-svelte/icons/line";
   import IconArrowsMove from "@tabler/icons-svelte/icons/arrows-move";
   import IconPoint from "@tabler/icons-svelte/icons/point";
+  import IconPlayerPlay from "@tabler/icons-svelte/icons/player-play";
   import IconPointer from "@tabler/icons-svelte/icons/pointer";
   import IconPolygon from "@tabler/icons-svelte/icons/polygon";
   import IconResize from "@tabler/icons-svelte/icons/resize";
@@ -46,6 +47,7 @@
   import Keymap from "../keys/Keymap.svelte";
   import Prefs from "./Prefs.svelte";
   import ToolOptions from "./ToolOptions.svelte";
+  import { host } from "../host.svelte.ts";
   import { keys } from "../keys/keys.svelte.ts";
   import { printChord } from "../keys/keymap.ts";
   import { look } from "../render/look.svelte.ts";
@@ -138,22 +140,22 @@
       </button>
     </span>
 
-    <!-- two states, not a slider: "classic" is what a level is built in and "modern" is what it will look
-         like, and anything in between is a third thing a designer has to think about for no gain -->
+    <!-- two states, not a slider: unshaded shows the level's shape and shaded shows its in-game materials
+         and lighting; anything in between is a third thing a designer has to think about for no gain -->
     <span class="group looks">
       <button
         class="btn"
-        class:on={!look.pbr}
-        use:tooltip={"classic — flat shading, one material: shows the shape of the level"}
-        onclick={() => (look.current = "classic")}
+        class:on={!look.shaded}
+        use:tooltip={"unshaded — one unlit material: shows the shape of the level"}
+        onclick={() => (look.current = "unshaded")}
       >
         <IconCube size={16} />
       </button>
       <button
         class="btn"
-        class:on={look.pbr}
-        use:tooltip={"modern — the sheet's materials and the map's lights: how the level will look in game"}
-        onclick={() => (look.current = "pbr")}
+        class:on={look.shaded}
+        use:tooltip={"shaded — the sheet's materials and the map's lights: how the level will look in game"}
+        onclick={() => (look.current = "shaded")}
       >
         <IconSparkles size={16} />
       </button>
@@ -195,6 +197,15 @@
     </span>
 
     <span class="spacer"></span>
+
+    <!-- only when the page that mounted the editor has a game to play. What it is handed is the document
+         as it stands, not the file: nothing is saved on the way in, which is the entire point -->
+    {#if host.canPlay}
+      <button class="play" use:tooltip={withKey("play the map", "file.play")} onclick={() => host.play()}>
+        <IconPlayerPlay size={14} />
+        play
+      </button>
+    {/if}
 
     <button
       class="save"
@@ -286,7 +297,7 @@
   .toolbar :global(.btn.wide) {
     width: auto;
     padding: 0 9px;
-    font-size: 11px;
+    font-size: var(--ui-sm);
     font-weight: 600;
     gap: 5px;
     grid-auto-flow: column;
@@ -304,7 +315,7 @@
     border-radius: 7px;
     background: var(--p5);
     color: var(--p9);
-    font: 9px/13px ui-sans-serif, system-ui, sans-serif;
+    font: var(--ui-xs)/14px ui-sans-serif, system-ui, sans-serif;
     font-style: normal;
     text-align: center;
   }
@@ -319,6 +330,27 @@
 
   .spacer {
     flex: 1;
+  }
+
+  /* the same shape as the save button, in the one colour nothing else in the bar uses: it is the only
+     button here that hands the map to something that is not the editor */
+  .play {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    margin-right: 8px;
+    padding: 6px 12px;
+    background: var(--p6);
+    border: 1px solid var(--p6-lt);
+    border-radius: 5px;
+    color: var(--p0);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .play:hover {
+    background: var(--p6-lt);
   }
 
   .save {

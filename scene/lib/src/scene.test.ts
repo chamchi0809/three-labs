@@ -811,6 +811,34 @@ test("an entity is its own node: data at a point, and not a mesh", async () => {
   assert.match((await checkText(`@template entity.x { @fields { hp: { type: intt } }; }`))[0]!, /@fields hp/);
 });
 
+test("an entity keeps the template it was written with, and entities() filters on it", async () => {
+  const root = await load(`
+    @template entity.monster { @entity { hp: 40 }; }
+    @template entity.boss { @entity { boss: true }; }
+    @template entity.pickup { @entity { amount: 25 }; }
+    @template mesh.door { @entity { key: "brass" }; }
+    group {
+      entity.monster #grunt { }
+      entity.monster.boss #brute { @entity { hp: 300 }; }
+      entity.pickup #medkit { }
+      mesh.door #gate { }
+      entity #nameless { @entity { note: "no template" }; }
+      mesh #wall { }
+    }`);
+  const { entities } = await import("./runtime.ts");
+  const named = (kind?: string) => entities(root, kind).map((e) => e.name);
+  assert.deepEqual(named("monster"), ["grunt", "brute"]);
+  assert.deepEqual(named("boss"), ["brute"], "every class it was written with, not just the first");
+  assert.deepEqual(named("pickup"), ["medkit"]);
+  // a mesh carrying @entity is an entity too, and its template is as much its kind as an entity's is
+  assert.deepEqual(named("door"), ["gate"]);
+  assert.deepEqual(named(), ["grunt", "brute", "medkit", "gate", "nameless"]);
+  assert.deepEqual(named("monster.boss"), [], "a kind is one class, not a selector");
+  assert.deepEqual((root.getObjectByName("nameless") as any).kinds, [], "an entity written with no template has no kind");
+  // classes on a node that is not an entity are spent when they are applied: a mesh gets no new field
+  assert.equal((root.getObjectByName("wall") as any).kinds, undefined);
+});
+
 test("@locale is the sheet's translation table, keyed by the source text", async () => {
   const root = await load(`
     @locale { ko: { "Open the door": "\uBB38\uC744 \uC5EC\uC5B4\uB77C" } };

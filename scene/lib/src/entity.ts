@@ -20,6 +20,9 @@
  * node-last — a definition's defaults under an instance's overrides — so `root.getObjectByName("ogre")`
  * comes back with `entity.hp === 60`, and `@fields` says what each key *is* for the editor that draws
  * a box for it.
+ *
+ * The template the node was written with comes through too, as {@link Entity.kinds} — `@entity` says what
+ * an entity *holds*, and a game also has to know what it *is*: `entities(root, "monster")`.
  */
 import { Object3D } from "three/webgpu";
 
@@ -27,6 +30,17 @@ export class Entity<F = Record<string, unknown>> extends Object3D {
   readonly isEntity = true;
   /** the level's own data: `@entity { … }` on the template, with the node's own written over it */
   entity: F = {} as F;
+  /**
+   * The templates the node was written with, in order: `entity.monster.boss` arrives as
+   * `["monster", "boss"]`.
+   *
+   * A level's monsters, its pickups and its spawn points are all entities, and until this was here the
+   * only way a game could tell them apart was by guessing from their keys — "it has `hp`, so it must be a
+   * monster". The class is what the level actually said, so it is what the game reads. `@fields` and
+   * `@entity` are erased into plain data by the time a sheet is built, but the template *name* survives
+   * because it is the type.
+   */
+  kinds: string[] = [];
   // three reads `type` back in its own serialiser and in `getObjectByProperty`, and the base declares it
   // readonly — so it is set the way three's own subclasses set it, by declaring the narrower literal
   override readonly type: string = "Entity";
