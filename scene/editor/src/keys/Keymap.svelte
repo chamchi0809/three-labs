@@ -111,7 +111,7 @@
 <style>
   .group {
     margin: 10px 0 2px; padding: 0 12px;
-    color: var(--muted); font-size: 10px; font-weight: 700;
+    color: var(--muted); font-size: var(--ui-xs); font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.08em;
   }
   .row {

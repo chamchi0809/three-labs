@@ -155,13 +155,13 @@
     position: absolute; right: -6px; bottom: -5px;
     padding: 0 3px; border-radius: 7px;
     background: var(--accent); color: var(--p0);
-    font: 9px/13px ui-sans-serif, system-ui, sans-serif; font-style: normal;
+    font: var(--ui-xs)/14px ui-sans-serif, system-ui, sans-serif; font-style: normal;
     font-variant-numeric: tabular-nums;
   }
 
   .group {
     margin: 10px 0 2px; padding: 0 12px;
-    color: var(--muted); font-size: 10px; font-weight: 700;
+    color: var(--muted); font-size: var(--ui-xs); font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.08em;
   }
   .row { display: flex; gap: 8px; align-items: center; min-height: 26px; padding: 1px 12px; }

@@ -39,6 +39,9 @@
 
   /** one row's height, in CSS pixels — the `.row` rule and the drag's arithmetic read the same number */
   const ROW = 22;
+  /** the row's base inset and each tree depth's extra inset, shared with the pointer's outdent arithmetic */
+  const PAD = 4;
+  const INDENT = 12;
   /** how far a pointer travels before a click becomes a drag */
   const SLOP = 4;
 
@@ -111,14 +114,16 @@
   let edge = 0;
   let scrolling = 0;
 
-  /** the drop a pointer at this y means, worked out from the row height rather than from the DOM */
-  function aim(clientY: number): void {
+  /** the drop a pointer means, worked out from the fixed row height and indentation bands */
+  function aim(clientX: number, clientY: number): void {
     if (!strip || !drag) return;
     // measured against the rows themselves rather than the box: their own top has the scroll in it already
-    const y = clientY - strip.getBoundingClientRect().top;
+    const rect = strip.getBoundingClientRect();
+    const y = clientY - rect.top;
     const span = rows.length * ROW;
     const at = Math.min(Math.max(y, 0), span - 1);
-    drop = dropOn(world, rows, Math.floor(at / ROW), (at % ROW) / ROW, drag.ids);
+    const depth = Math.max(0, Math.floor((clientX - rect.left - PAD) / INDENT));
+    drop = dropOn(world, rows, Math.floor(at / ROW), (at % ROW) / ROW, depth, drag.ids);
   }
 
   function autoscroll(clientY: number): void {
@@ -132,7 +137,7 @@
     scrolling = 0;
     if (!edge || !box || !drag) return;
     box.scrollTop += edge * 9;
-    aim(drag.at.y);
+    aim(drag.at.x, drag.at.y);
     scrolling = requestAnimationFrame(roll);
   }
 
@@ -151,7 +156,7 @@
       if (Math.hypot(e.clientX - drag.from.x, e.clientY - drag.from.y) < SLOP) return;
       drag.live = true;
     }
-    aim(e.clientY);
+    aim(e.clientX, e.clientY);
     autoscroll(e.clientY);
   }
 
@@ -166,7 +171,7 @@
     }
     if (!drop) return void (drop = undefined);
     reparent(held.ids, drop.parent, dropAt(world, drop.parent, held.ids, drop.index));
-    expand(drop.parent);
+    if (drop.parent !== undefined) expand(drop.parent);
     flash(held.ids);
     drop = undefined;
   }
@@ -253,7 +258,7 @@
           aria-selected={picked.has(node.id)}
           aria-expanded={row.kids ? row.open : undefined}
           tabindex="-1"
-          style:padding-left={`${4 + row.depth * 12}px`}
+          style:padding-left={`${PAD + row.depth * INDENT}px`}
           onpointerdown={(e) => down(e, row, i)}
           onpointermove={moved}
           onpointerup={(e) => up(e, row)}
@@ -317,7 +322,7 @@
       {/each}
 
       {#if drop && drop.where !== "inside"}
-        <div class="line" style:top={`${lineTop}px`} style:left={`${6 + drop.depth * 12}px`}></div>
+        <div class="line" style:top={`${lineTop}px`} style:left={`${PAD + 2 + drop.depth * INDENT}px`}></div>
       {/if}
     </div>
 
@@ -335,9 +340,9 @@
 </Panel>
 
 <style>
-  /* the list is the scroller, not the column: a drag that runs off the bottom has something to scroll, and
-     the templates and history panels stay reachable under a level with two hundred things in it */
-  .tree { position: relative; max-height: 55vh; overflow-y: auto; outline: none; }
+  /* the list is the scroller, not the column: size containment keeps hundreds of rows from becoming the
+     panel's flex basis before it receives the column's remaining height */
+  .tree { position: relative; contain: size; height: 100%; overflow-y: auto; outline: none; }
   .tree.dragging { cursor: grabbing; }
   .rows { position: relative; }
   .row {

@@ -15,6 +15,7 @@
   import Console from "./ui/Console.svelte";
   import HistoryPanel from "./ui/HistoryPanel.svelte";
   import Toolbar from "./ui/Toolbar.svelte";
+  import { host } from "./host.svelte.ts";
   import { log } from "./ui/log.svelte.ts";
   import { project } from "./io/project.svelte.ts";
   import { runCommand } from "./keys/commands.ts";
@@ -55,6 +56,9 @@
   onMount(() => {
     log.watch();
     project.boot();
+    // a page that mounted the editor at a sheet of its own: fetched here rather than in `mountEditor`,
+    // because the log has to be catching before anything the open complains about is said
+    if (host.path) void project.fetchProject(host.path);
   });
 
   /**
@@ -81,6 +85,8 @@
    * belongs to the viewport and hand the rest over.
    */
   function onKeydown(event: KeyboardEvent) {
+    // the game has the keyboard: ⌘S while playing is the player's browser, not the designer's editor
+    if (host.paused) return;
     const command = keys.commandFor(event);
     if (!command || isViewCommand(command)) return;
     if (!runCommand(command)) return;
@@ -190,6 +196,7 @@
   :global(.sv-tooltip) {
     position: fixed;
     z-index: 10001;
+    box-sizing: border-box;
     pointer-events: none;
     max-width: 260px;
     padding: 4px 8px;
@@ -198,8 +205,9 @@
     color: #cdd4a5;
     border: 1px solid #3b405e;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-    font: 11px/1.35 ui-sans-serif, system-ui, sans-serif;
-    white-space: nowrap;
+    font: var(--ui);
+    white-space: normal;
+    overflow-wrap: anywhere;
     animation: sv-tooltip-in 90ms ease-out;
   }
   @keyframes sv-tooltip-in {

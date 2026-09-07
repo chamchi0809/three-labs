@@ -77,7 +77,7 @@
     display: flex; flex-direction: column; align-items: center; gap: 2px;
     padding: 4px 0 3px; cursor: pointer;
     background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
-    font: var(--ui); font-size: 10px; color: var(--muted);
+    font: var(--ui); font-size: var(--ui-xs); color: var(--muted);
     transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
   }
   nav button:hover { background: var(--accent-dim); color: var(--p9); }

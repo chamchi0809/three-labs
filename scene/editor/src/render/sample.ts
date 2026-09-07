@@ -2,7 +2,7 @@
  * Textures the editor can draw before a project has any.
  *
  * The demo map is a sheet with no directory behind it — nothing on disk to point a `texture("./brick.png")`
- * at — and the modern look has nothing to show without one. Committing a folder of PNGs to demonstrate a
+ * at — and the shaded look has nothing to show without one. Committing a folder of PNGs to demonstrate a
  * shader is the usual answer and it is a bad one: binaries in a repository that only exist so a demo has
  * something to look at, and a build step to generate them if they are not.
  *

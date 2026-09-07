@@ -75,8 +75,8 @@ test("a row that holds children gives a quarter to each edge; a leaf splits down
 test("a drop reads as a parent and an index, and the line is drawn at the depth it lands", () => {
   const world = worldOf();
   const rows = rowsOf(world);
-  const at = (id: NodeId, t: number, moving: NodeId[] = [c.id]) =>
-    dropOn(world, rows, rows.findIndex((r) => r.node.id === id), t, moving);
+  const at = (id: NodeId, t: number, moving: NodeId[] = [c.id], depth = row(world, id).depth + 1) =>
+    dropOn(world, rows, rows.findIndex((r) => r.node.id === id), t, depth, moving);
 
   assert.deepEqual(at(a.id, 0.1), { where: "before", row: a.id, parent: world.layers[0]!.id, index: 0, depth: 1 });
   assert.deepEqual(at(a.id, 0.9), { where: "after", row: a.id, parent: world.layers[0]!.id, index: 1, depth: 1 });
@@ -87,11 +87,111 @@ test("a drop reads as a parent and an index, and the line is drawn at the depth 
   assert.equal(at(a.id, 0.5)!.where, "inside", "an object with no children can still take one");
 });
 
+test("pulling the end of a subtree left drops after its ancestor instead of back inside it", () => {
+  const world = worldOf();
+  const rows = rowsOf(world);
+  const at = (depth: number) => dropOn(world, rows, 5, 0.9, depth, [a.id]);
+
+  assert.deepEqual(at(3), { where: "after", row: c.id, parent: inner.id, index: 1, depth: 3 });
+  assert.deepEqual(at(2), { where: "after", row: c.id, parent: group.id, index: 2, depth: 2 });
+  assert.deepEqual(at(1), {
+    where: "after", row: c.id, parent: world.layers[0]!.id, index: 2, depth: 1,
+  });
+
+  const followedGroup = groupNode("room", [inner, b]);
+  const followed: World = {
+    layers: [layerNode("Main", [a, followedGroup])],
+    broom: { grid: -2, scale: 1 },
+  };
+  const followedRows = rowsOf(followed);
+  const cIndex = followedRows.findIndex((candidate) => candidate.node.id === c.id);
+  assert.deepEqual(
+    dropOn(followed, followedRows, cIndex, 0.9, 1, [a.id]),
+    { where: "after", row: c.id, parent: followedGroup.id, index: 1, depth: 2 },
+    "the pointer cannot outdent past a sibling that still follows inside the ancestor",
+  );
+});
+
+test("a container's own indent band makes its upper and lower halves sibling insertion targets", () => {
+  const first = groupNode("first", [c]);
+  const world: World = {
+    layers: [layerNode("Main", [first, a])],
+    broom: { grid: -2, scale: 1 },
+  };
+  const root = world.layers[0]!.id;
+  const rows = rowsOf(world);
+  const groupIndex = rows.findIndex((candidate) => candidate.node.id === first.id);
+  const childIndex = rows.findIndex((candidate) => candidate.node.id === c.id);
+
+  const before = dropOn(world, rows, groupIndex, 0.4, 1, [c.id]);
+  assert.deepEqual(before, { where: "before", row: first.id, parent: root, index: 0, depth: 1 });
+  assert.deepEqual(
+    childrenOf(nodeById(moveNodes(world, [c.id], root, dropAt(world, root, [c.id], before!.index)), root)!)
+      .map((node) => node.id),
+    [c.id, first.id, a.id],
+    "a child dragged above the first group is unparented before it",
+  );
+
+  const siblingBefore = dropOn(world, rows, groupIndex, 0.4, 1, [a.id]);
+  assert.deepEqual(siblingBefore, { where: "before", row: first.id, parent: root, index: 0, depth: 1 });
+
+  const after = dropOn(world, rows, childIndex, 0.6, 1, [c.id]);
+  assert.deepEqual(after, { where: "after", row: c.id, parent: root, index: 1, depth: 1 });
+  assert.deepEqual(
+    childrenOf(nodeById(moveNodes(world, [c.id], root, dropAt(world, root, [c.id], after!.index)), root)!)
+      .map((node) => node.id),
+    [first.id, c.id, a.id],
+    "a child dragged left at the expanded group's bottom is unparented after it",
+  );
+
+  assert.deepEqual(
+    dropOn(world, rows, groupIndex, 0.6, 1, [a.id]),
+    { where: "after", row: c.id, parent: root, index: 1, depth: 1 },
+    "an expanded group's after marker is drawn below its last visible child",
+  );
+  assert.equal(dropOn(world, rows, groupIndex, 0.6, 2, [a.id])!.where, "inside");
+});
+
+test("a nested group can cross depth zero and become a root layer between two others", () => {
+  const gameplay = groupNode("Gameplay", [a]);
+  const architecture = layerNode("Architecture", [gameplay]);
+  const lighting = layerNode("Lighting");
+  const world: World = { layers: [architecture, lighting], broom: { grid: -2, scale: 1 } };
+  const rows = rowsOf(world);
+  const gameplayIndex = rows.findIndex((candidate) => candidate.node.id === gameplay.id);
+
+  const afterArchitecture = dropOn(world, rows, gameplayIndex, 0.5, 0, [gameplay.id]);
+  assert.deepEqual(afterArchitecture, {
+    where: "after", row: a.id, parent: undefined, index: 1, depth: 0,
+  });
+  const promoted = moveNodes(
+    world,
+    [gameplay.id],
+    undefined,
+    dropAt(world, undefined, [gameplay.id], afterArchitecture!.index),
+  );
+  assert.deepEqual(promoted.layers.map((layer) => layer.name), ["Architecture", "Gameplay", "Lighting"]);
+  assert.deepEqual(rowsOf(promoted).map((candidate) => candidate.depth), [0, 0, 1, 0]);
+  assert.equal(promoted.layers[0]!.children.length, 0);
+  assert.equal(promoted.layers[1]!.kind, "layer");
+
+  const architectureIndex = rows.findIndex((candidate) => candidate.node.id === architecture.id);
+  const aboveArchitecture = dropOn(world, rows, architectureIndex, 0.4, 0, [gameplay.id]);
+  assert.deepEqual(aboveArchitecture, {
+    where: "before", row: architecture.id, parent: undefined, index: 0, depth: 0,
+  });
+  const promotedBefore = moveNodes(world, [gameplay.id], undefined, aboveArchitecture!.index);
+  assert.deepEqual(promotedBefore.layers.map((layer) => layer.name), ["Gameplay", "Architecture", "Lighting"]);
+
+  const nestedAgain = moveNodes(promoted, [gameplay.id], architecture.id, 0);
+  assert.equal(nodeById(nestedAgain, gameplay.id)!.kind, "group", "a layer nested again becomes a group");
+});
+
 test("a drop that cannot happen offers no marker at all", () => {
   const world = worldOf();
   const rows = rowsOf(world);
   const at = (id: NodeId, t: number, moving: NodeId[]) =>
-    dropOn(world, rows, rows.findIndex((r) => r.node.id === id), t, moving);
+    dropOn(world, rows, rows.findIndex((r) => r.node.id === id), t, row(world, id).depth + 1, moving);
   const root = world.layers[0]!.id;
 
   assert.equal(at(root, 0.1, [a.id])!.where, "inside", "a root has no siblings, so its whole height is inside");
@@ -105,7 +205,7 @@ test("a drop that cannot happen offers no marker at all", () => {
     broom: { grid: -2, scale: 1 },
   };
   const shutRows = rowsOf(shut);
-  assert.equal(dropOn(shut, shutRows, 1, 0.5, [a.id]), undefined, "a locked parent takes no deliveries");
+  assert.equal(dropOn(shut, shutRows, 1, 0.5, 2, [a.id]), undefined, "a locked parent takes no deliveries");
 });
 
 // ---------------------------------------------------------------- the index moveNodes wants

@@ -39,7 +39,7 @@ import {
   spikeSegments, type LineBatch,
 } from "./lines.ts";
 import {
-  edgeMaterial, faceMaterial, gridPlaneMaterial, handleMaterial, newGridUniforms, type GridUniforms,
+  edgeMaterial, gridPlaneMaterial, handleMaterial, newGridUniforms, unshadedMaterial, type GridUniforms,
 } from "./materials.ts";
 import { newPalette, setMaterials, slotOf, type Look, type Palette } from "./palette.ts";
 import { hideLabels, newLabels, setLabel, type Labels } from "./text.ts";
@@ -63,13 +63,13 @@ export type RenderScene = {
   world: Group;
   /** the things drawn over the map — bounds, guides, spikes, links, handles, labels */
   overlays: Group;
-  /** whatever is currently lighting the map: the editor's fixed rig, or the level's own lights */
+  /** the shaded look's map or fallback lights; empty while the unshaded look is active */
   lights: Group;
 
   grid: GridUniforms;
-  /** the one grey material the classic look draws the whole map with */
-  classic: Material;
-  /** the modern look's material per declaration; the slot numbering is shared by both looks */
+  /** the one grey material the unshaded look draws the whole map with */
+  unshaded: Material;
+  /** the shaded look's material per declaration; the slot numbering is shared by both looks */
   palette: Palette;
   brushes: BrushBatch;
   edges: LineBatch;
@@ -119,11 +119,11 @@ export function newRenderScene(gridSize = 1): RenderScene {
   const grid = newGridUniforms(gridSize);
   const palette = newPalette(grid);
 
-  // the classic material is built here and kept for the life of the scene, separately from the palette's
+  // the unshaded material is built here and kept for the life of the scene, separately from the palette's
   // own slot 0 — the palette is rebuilt and disposed whenever the catalogue changes, and the material the
-  // classic look is holding must not be one of the casualties
-  const classic = faceMaterial(grid);
-  const faceMesh = new Mesh(new BufferGeometry(), classic);
+  // unshaded look is holding must not be one of the casualties
+  const unshaded = unshadedMaterial(grid);
+  const faceMesh = new Mesh(new BufferGeometry(), unshaded);
   faceMesh.frustumCulled = false; // one mesh holds the whole map, so its box is always on screen
   faceMesh.name = "broom:faces";
 
@@ -161,7 +161,7 @@ export function newRenderScene(gridSize = 1): RenderScene {
   scene.add(lights);
 
   return {
-    scene, world, overlays, lights, grid, classic, palette,
+    scene, world, overlays, lights, grid, unshaded, palette,
     brushes: newBatch(),
     edges: newLines(),
     decor: newLines(),
@@ -180,12 +180,12 @@ export function newRenderScene(gridSize = 1): RenderScene {
 // ---------------------------------------------------------------- the look
 
 /**
- * The classic/modern switch, and everything that follows from it.
+ * The unshaded/shaded switch, and everything that follows from it.
  *
  * Both halves are guarded on identity rather than done every sync, because both are expensive in ways that
  * a mouse move must not be: the palette recompiles a shader per material, and the lights allocate one
  * object per light in the map. The catalogue is in both guards because a sheet that declared a new material
- * changes what the modern look draws, and the world is in the lighting's because moving a torch moves a
+ * changes what the shaded look draws, and the world is in the lighting's because moving a torch moves a
  * light.
  *
  * Kept out of {@link syncScene} on purpose. The document knows nothing about which look is showing and the
@@ -194,7 +194,7 @@ export function newRenderScene(gridSize = 1): RenderScene {
 export function syncLook(rs: RenderScene, editor: Editor, catalogue: Catalogue, look: Look): void {
   if (rs.looked?.look !== look || rs.looked.catalogue !== catalogue) {
     setMaterials(rs.palette, catalogue.materials);
-    rs.faceMesh.material = look === "pbr" ? rs.palette.materials : rs.classic;
+    rs.faceMesh.material = look === "shaded" ? rs.palette.materials : rs.unshaded;
     applyGroups(rs, look);
     rs.looked = { look, catalogue };
   }
@@ -204,14 +204,14 @@ export function syncLook(rs: RenderScene, editor: Editor, catalogue: Catalogue, 
 /**
  * The draw groups on the face mesh, or none at all.
  *
- * None at all is the classic look and it is not an omission: three ignores `geometry.groups` entirely when
- * the material is not an array, so clearing them is what keeps the classic look at literally one draw call
+ * None at all is the unshaded look and it is not an omission: three ignores `geometry.groups` entirely when
+ * the material is not an array, so clearing them is what keeps the unshaded look at literally one draw call
  * — and what keeps the pick pass at one, since it swaps a single material in over whatever is there.
  */
-function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "classic"): void {
+function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "unshaded"): void {
   const geometry = rs.faceMesh.geometry;
   geometry.clearGroups();
-  if (look !== "pbr") {
+  if (look !== "shaded") {
     rs.brushes.groupsDirty = false;
     return;
   }
@@ -233,8 +233,8 @@ function applyGroups(rs: RenderScene, look: Look = rs.looked?.look ?? "classic")
  * sixty times a second, which is the bulk of why the tools felt like treacle.
  */
 function syncLights(rs: RenderScene, world: World, catalogue: Catalogue, look: Look): void {
-  const own = look === "pbr" ? mapLights(world, catalogue) : [];
-  const lights = own.length ? own : editorLights();
+  const own = look === "shaded" ? mapLights(world, catalogue) : [];
+  const lights = look === "unshaded" || own.length ? own : editorLights();
 
   const signature = look + "|" + lights.map(lightSignature).join(";");
   if (rs.lit === signature) return;
@@ -738,8 +738,8 @@ export function upload(rs: RenderScene): void {
     ],
     flushBatch(rs.brushes),
   );
-  // only geometry moving can change which vertices belong to which material, and only the modern look
-  // reads the answer — so this costs nothing at all in the classic one
+  // only geometry moving can change which vertices belong to which material, and only the shaded look
+  // reads the answer — so this costs nothing at all in the unshaded one
   if (rs.brushes.groupsDirty) applyGroups(rs);
 
   applyBatch(

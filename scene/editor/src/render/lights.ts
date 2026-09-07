@@ -3,17 +3,16 @@
  *
  * Two answers, because the two looks are asking two different questions.
  *
- * The classic look asks *what shape is this* — so its light is fixed to the world and exists only to make a
- * wall, a floor and a ceiling read as three different surfaces. It is not the level's lighting and it is not
- * supposed to be; a designer cutting a corridor wants to see the corridor, not the mood.
+ * The unshaded look asks *what shape is this* and ignores lighting entirely. Its neutral material is drawn
+ * at a constant colour so the same face does not change as lights are added, removed or moved.
  *
- * The modern look asks *what will a player see* — so it lights the map with the map's own lights, read out
+ * The shaded look asks *what will a player see* — so it lights the map with the map's own lights, read out
  * of the document exactly as they are declared. This is where a level designer finds out that the torch
  * they placed is two metres too high, and no amount of an editor's own key light will ever tell them that.
  *
- * A map that declares no lights at all falls back to the editor's rig rather than to black. Black is
- * technically the honest answer and it is a useless one — the usual reason a map has no lights yet is that
- * it is an hour old.
+ * In the shaded look, a map that declares no lights at all falls back to the editor's rig rather than to
+ * black. Black is technically the honest answer and it is a useless one — the usual reason a map has no
+ * lights yet is that it is an hour old.
  */
 import {
   AmbientLight, Color, DirectionalLight, HemisphereLight, PointLight, SpotLight, type Object3D,

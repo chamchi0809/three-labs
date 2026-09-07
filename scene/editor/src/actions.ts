@@ -125,12 +125,12 @@ export const matchCopies = (): void =>
 // ---------------------------------------------------------------- the tree
 
 /**
- * Nodes moved under a parent, at an index — the hierarchy panel's drag and drop.
+ * Nodes moved under a parent or into the root layer list, at an index — the hierarchy panel's drag and drop.
  *
  * `at` counts the children the parent has *after* the moving ones are taken out of it, which is what
  * `moveNodes` is written to take; the panel works that index out with `dropAt` in doc/tree.ts.
  */
-export const reparent = (ids: NodeId[], parent: NodeId, at?: number): void =>
+export const reparent = (ids: NodeId[], parent: NodeId | undefined, at?: number): void =>
   edit("move", (e) => ({ ...e, world: moveNodes(e.world, ids, parent, at) }));
 
 /** the hierarchy's own click: a row names a node, so that node is what is picked, group or no group */

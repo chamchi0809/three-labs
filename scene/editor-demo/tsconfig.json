@@ -1,0 +1,7 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["src", "arena.check.ts", "vite.config.ts", "svelte.config.js", "tools"],
+  "compilerOptions": {
+    "types": ["@webgpu/types", "node", "vite/client"]
+  }
+}

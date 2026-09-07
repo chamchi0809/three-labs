@@ -514,6 +514,17 @@ const root = await loadScene(sheet);
 for (const it of entities<{ hp: number }>(root)) spawn(it.position, it.entity.hp);
 ```
 
+The template comes through as well, on `object.kinds` — `@entity` is what an entity *holds*, and the class
+is what it *is*. A level's monsters, its pickups and its spawn points are all entities, so a game with only
+the data would be reduced to guessing from the keys ("it has `hp`, so it must be a monster"). Ask for one
+kind and get the nodes written with that template, in sheet order:
+
+```ts
+// entity.monster #grunt and entity.monster.boss #brute; #brute answers to "boss" as well
+for (const it of entities<Monster>(root, "monster")) fight(it);
+const start = entities<Spawn>(root, "spawn")[0];
+```
+
 ## `@fields`
 
 What an `@entity` key *is*, as against what it happens to hold. This is the half of a `.fgd` tscene still

@@ -139,7 +139,7 @@ test("what the instance writes wins over what the template says", () => {
   assert.equal((lit([node], demoCatalogue())[0] as PointLight).intensity, 2);
 });
 
-test("the demo room lights itself, which is the whole claim the modern look makes", () => {
+test("the demo room lights itself, which is the whole claim the shaded look makes", () => {
   const lights = mapLights(demoMap(), demoCatalogue());
   assert.equal(lights.length, 3, "a sky fill, a sun and a lamp");
   assert.ok(lights.some((l) => l instanceof HemisphereLight));
@@ -161,30 +161,29 @@ const lamp = (at: [number, number, number]) =>
 
 test("the same lights declared by a different world object are the same rig", () => {
   const rs = newRenderScene();
-  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "shaded");
   const first = rig(rs);
   assert.equal(first.length, 1);
 
-  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "shaded");
   assert.deepEqual(rig(rs), first, "an edit hands over a new world every frame; the lamp did not move");
 });
 
 test("a lamp that did move relights, so the guard is on the lights and not on the clock", () => {
   const rs = newRenderScene();
-  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "shaded");
   const first = rig(rs);
 
-  syncLook(rs, newEditor(lamp([3, 2, 0])), EMPTY, "pbr");
+  syncLook(rs, newEditor(lamp([3, 2, 0])), EMPTY, "shaded");
   assert.notDeepEqual(rig(rs), first);
   assert.deepEqual((rs.lights.children[0] as PointLight).position.toArray(), [3, 2, 0]);
 });
 
-test("switching look relights even when the map did not change", () => {
+test("unshaded removes every light even when the map did not change", () => {
   const rs = newRenderScene();
-  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "pbr");
-  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "classic");
-  assert.equal(rig(rs).filter((l) => "isLight" in l).length, 3, "the editor's own rig");
-  assert.ok(rig(rs).every((l) => !(l instanceof PointLight)), "and no lamp from the map");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "shaded");
+  syncLook(rs, newEditor(lamp([0, 2, 0])), EMPTY, "unshaded");
+  assert.deepEqual(rig(rs), []);
 });
 
 report("lights");

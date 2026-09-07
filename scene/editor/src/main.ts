@@ -1,12 +1,13 @@
-import { mount } from "svelte";
-import App from "./App.svelte";
 import { nodeBounds, walk } from "./doc/document.ts";
+import { mountEditor } from "./mount.ts";
 import { session } from "./session.svelte.ts";
 
 const target = document.getElementById("app");
 if (!target) throw new Error("#app is missing from index.html");
 
-mount(App, { target });
+// through `mountEditor` rather than around it: the editor running on its own is a page with one editor on
+// it and nothing else, which is the same thing every other host is, minus a game
+mountEditor(target);
 
 if (import.meta.env.DEV) {
   // A handle on the editor from the browser console, for the development build only.

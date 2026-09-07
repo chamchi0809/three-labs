@@ -1,0 +1,23 @@
+{
+  "name": "tscene-editor-demo",
+  "private": true,
+  "type": "module",
+  "description": "the editor mounted on a game: draw the arena, press play, fight in it",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "arena": "node tools/make-arena.mjs",
+    "check": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/game/step.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning src/game/guns.check.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning arena.check.ts"
+  },
+  "dependencies": {
+    "tscene": "workspace:*",
+    "tscene-editor": "workspace:*"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "svelte": "^5.55.2",
+    "svelte-check": "^4.3.4"
+  }
+}

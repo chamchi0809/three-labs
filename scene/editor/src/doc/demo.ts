@@ -50,7 +50,7 @@ export function demoMap(): World {
 
   const pillar = box([-1, 0, -1], [1, 4, 1], "stone");
 
-  // a sky fill and a sun, which are things a level has rather than things an editor has: the modern look
+  // a sky fill and a sun, which are things a level has rather than things an editor has: the shaded look
   // lights the room with what the map declares, and a room whose only light is one lamp is a room that is
   // mostly black. The sun's direction is where it is — that is what a directional light's position means —
   // so it is written a long way out along the axis it comes down.
@@ -117,7 +117,7 @@ export function demoMap(): World {
  * to draw — a number, a colour, a place, a flag, a name and a reference — and no more than that. A demo
  * catalogue is a thing to look at, not a library to build a level from.
  *
- * Two of the five have relief on them, because the modern look's whole argument is one a screenshot has to
+ * Two of the five have relief on them, because the shaded look's whole argument is one a screenshot has to
  * make: the walls are six planes and they have bricks in them, and the bricks are in a texture rather than
  * in the geometry the player will collide with. The `broom:` urls are generated in `render/sample.ts` — the
  * demo has no directory behind it to keep a `brick.png` in, and committing one so that a shader has

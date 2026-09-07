@@ -265,17 +265,37 @@ export function insertNodes(world: World, parent: NodeId, nodes: Node[], at?: nu
   });
 }
 
+/** a nested group promoted to the root becomes a layer, which is how a top-level group is represented */
+function asLayer(node: Node): LayerNode | undefined {
+  if (node.kind === "layer") return node;
+  return node.kind === "group" ? { ...node, kind: "layer" } : undefined;
+}
+
+/** a layer nested under another node becomes an ordinary group again */
+function asChild(node: Node): Node {
+  return node.kind === "layer" ? { ...node, kind: "group" } : node;
+}
+
 /**
- * Nodes moved to another parent. Removing and re-inserting in one step rather than two, because between
- * the two a node belongs to nobody, and every observer of the tree would have to be prepared for that.
+ * Nodes moved to another parent, or to the root when `parent` is undefined. Removing and re-inserting in
+ * one step avoids an observable moment where the nodes belong to nobody. Crossing the root boundary also
+ * changes group/layer kind because their location is the distinction between those two representations.
  */
-export function moveNodes(world: World, ids: NodeId[], parent: NodeId, at?: number): World {
+export function moveNodes(world: World, ids: NodeId[], parent: NodeId | undefined, at?: number): World {
   const moving = ids.map((id) => nodeById(world, id)).filter((n): n is Node => !!n);
   if (!moving.length) return world;
+  if (parent === undefined) {
+    const layers = moving.map(asLayer);
+    if (!layers.every((layer): layer is LayerNode => layer !== undefined)) return world;
+    const without = removeNodes(world, ids);
+    const roots = [...without.layers];
+    roots.splice(at ?? roots.length, 0, ...layers);
+    return { ...without, layers: roots };
+  }
   // a node cannot be moved inside itself, which is the one way this could produce a cycle
   const inside = new Set(moving.flatMap((n) => [...subtreeIds(n)]));
   if (inside.has(parent)) return world;
-  return insertNodes(removeNodes(world, ids), parent, moving, at);
+  return insertNodes(removeNodes(world, ids), parent, moving.map(asChild), at);
 }
 
 export function* subtreeIds(node: Node): Generator<NodeId> {

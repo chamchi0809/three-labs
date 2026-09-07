@@ -163,7 +163,7 @@
   .named { display: flex; align-items: center; gap: 2px; min-width: 0; }
   .named .name { flex: 1; }
   .star { flex: none; font-style: normal; color: var(--accent); cursor: help; }
-  .note { flex: none; font-size: 9px; font-style: normal; color: var(--dim); cursor: help; }
+  .note { flex: none; font-size: var(--ui-xs); font-style: normal; color: var(--dim); cursor: help; }
   textarea {
     flex: 1; min-width: 0; padding: 2px 4px; resize: vertical;
     background: var(--bg); border: 1px solid var(--border); border-radius: 2px;

@@ -31,8 +31,8 @@ import { session } from "../session.svelte.ts";
 import { log } from "../ui/log.svelte.ts";
 import { prefs } from "../ui/prefs.svelte.ts";
 import { readForExport, toGlb, toObj } from "./export.ts";
-import { readWorld, type Sheets } from "./read.ts";
-import { nameOf, rootOf } from "./root.ts";
+import { readWorld, resolve, type Sheets } from "./read.ts";
+import { importTarget, nameOf, rootOf } from "./root.ts";
 import { writeWorld, type Project } from "./write.ts";
 import type { MaterialDrafts } from "./materials.ts";
 import type { TemplateDrafts } from "./templates.ts";
@@ -87,6 +87,17 @@ const AUTOSAVE_KEY = "three-broom:autosave";
 
 export type Recovery = { name: string; at: number; files: Record<string, string> };
 
+/**
+ * The whole document as text: every sheet it is made of, and which of them is the map.
+ *
+ * What a save would write, handed to something that is not a file — the page that mounted the editor, so
+ * a game can load the level that is on the screen rather than the one that is on disk.
+ */
+export type Snapshot = { root: string; files: Record<string, string> };
+
+/** where a save goes when the page has somewhere better than a file dialogue to put it */
+export type Writer = (project: Snapshot) => Promise<void>;
+
 class ProjectStore {
   /** the sheets as they were read, which is the only thing a surgical save may diff against */
   #held = new Map<string, Held>();
@@ -108,6 +119,10 @@ class ProjectStore {
   #timer: ReturnType<typeof setInterval> | undefined;
   /** whether the autosave is already following the preference, so booting twice is not two timers */
   #watching = false;
+  /** whether a real document has been adopted, which is what makes {@link boot} nothing at all */
+  #opened = false;
+  /** the page's own way of writing the project back, when it has one */
+  #writer: Writer | undefined;
 
   /**
    * The name in the title bar.
@@ -135,6 +150,7 @@ class ProjectStore {
 
   /** whether this browser can write back to the file it opened, or can only offer a download */
   get writable(): boolean {
+    if (this.#writer) return true;
     return typeof window !== "undefined" && typeof window.showSaveFilePicker === "function";
   }
 
@@ -161,6 +177,10 @@ class ProjectStore {
    * they change anything it is unsaved work like any other, and ⌘S asks where to put it.
    */
   boot(): void {
+    // A page that mounted the editor at a sheet of its own has already opened it — the fetch is
+    // asynchronous and the shell's mount is not, so which of the two happens first is not something
+    // either end should have to know. Whoever got there first keeps the document.
+    if (this.#opened) return this.startAutosave();
     // the demo's own definitions are held as the root sheet's text, not just as a catalogue in memory. The
     // world's five materials and five templates were parsed out of `DEMO_SHEET`, and a document whose
     // baseline does not contain them writes brushes that say `var(--floor)` with nothing behind it — which
@@ -233,6 +253,64 @@ class ProjectStore {
     this.adopt(held);
   }
 
+  /**
+   * Open a sheet the page names, over the network, following its `@import`s.
+   *
+   * The third way in, and the only one a mounted editor can use: a file picker needs a click and a
+   * directory handle needs two, and a page that says "edit `/scenes/arena.tscene`" has given consent to
+   * exactly one thing and should not be asked twice. It is also the only path that can find an imported
+   * sheet by itself — a URL has a folder, which is what `showOpenFilePicker` never hands over.
+   *
+   * The keys are the URLs, so an `@import` written relative to its own file resolves to the key its
+   * target is held under, and a save can hand those same paths straight back to the server.
+   *
+   * A missing import is a warning, not a failure: half a document on the screen with a complaint under it
+   * is worth more than an empty window, and the missing sheet is usually the point — it is the file the
+   * designer is about to write.
+   */
+  async fetchProject(path: string): Promise<boolean> {
+    const held = new Map<string, Held>();
+    const problems: string[] = [];
+    const queue = [path];
+    while (queue.length) {
+      const file = queue.shift()!;
+      if (held.has(file)) continue;
+      const res = await fetch(file).catch(() => undefined);
+      if (!res?.ok) {
+        problems.push(`${file}: ${res ? `${res.status} ${res.statusText}` : "unreachable"}`);
+        continue;
+      }
+      const text = await res.text();
+      held.set(file, { text });
+      // parsed here only for its `@import` lines; `adopt` parses for real, and a sheet with syntax errors
+      // still lists the files it wanted, which is what keeps a broken sheet openable
+      for (const statement of parse(text, file).statements) {
+        const target = importTarget(statement);
+        if (target) queue.push(resolve(target, file));
+      }
+    }
+
+    if (!held.has(path)) {
+      this.#diagnostics = problems;
+      log.all("bad", problems);
+      return false;
+    }
+    this.adopt(held);
+    log.all("warn", problems);
+    return true;
+  }
+
+  /**
+   * Where a save goes, when the page has an answer better than a file dialogue.
+   *
+   * A dev server that can write the sheet back is that answer — see `io/server.ts` for the four lines of
+   * middleware. Without one the editor is a browser tab and the only honest destination is a download,
+   * which is what {@link saveAs} already falls back to.
+   */
+  writeWith(writer: Writer | undefined): void {
+    this.#writer = writer;
+  }
+
   /** the fallback for a browser with no file system access: bytes in, downloads out */
   private openViaInput(): Promise<void> {
     return new Promise((resolve) => {
@@ -263,6 +341,7 @@ class ProjectStore {
 
     this.#held = held;
     this.#root = root;
+    this.#opened = true;
     this.#problems = [];
     this.#diagnostics = diagnostics.map((d) => `${d.file ?? root}: ${d.message}`);
     session.load(newEditor(world));
@@ -287,6 +366,25 @@ class ProjectStore {
   async save(): Promise<boolean> {
     const out = this.written();
     if (!out) return false;
+
+    // the page's own writer first, and every file it was given: a project fetched from a dev server has
+    // no file handles at all, and a picker in front of a server that can write the sheet back is a
+    // dialogue asking the designer to confirm where the file they opened already lives
+    if (this.#writer) {
+      try {
+        await this.#writer({ root: this.#root, files: Object.fromEntries(out.files) });
+      } catch (e) {
+        this.#problems = [`could not save: ${(e as Error).message}`];
+        log.all("bad", this.#problems);
+        return false;
+      }
+      for (const [file, text] of out.files) {
+        const held = this.#held.get(file);
+        if (held) held.onDisk = text;
+      }
+      this.settle();
+      return true;
+    }
 
     const missing = [...out.files.keys()].some((f) => !this.#held.get(f)?.handle);
     if (missing) return this.saveAs();
@@ -366,7 +464,7 @@ class ProjectStore {
    * presses bake means the wall where it is now. It is the same text either way for a clean document,
    * and for a dirty one this is the only reading that is not a lie.
    */
-  snapshot(): { root: string; files: Record<string, string> } | undefined {
+  snapshot(): Snapshot | undefined {
     const out = this.written();
     return out && { root: this.#root, files: Object.fromEntries(out.files) };
   }
