@@ -546,7 +546,7 @@ export class ScreenSpaceRC {
     viewDepthTexture.minFilter = NearestFilter;
     viewDepthTexture.magFilter = NearestFilter;
     // The field's surface heights, recovered from the field G-buffer (the
-    // multisample resolve stores position × coverage, coverage). Nearest
+    // multisample resolve stores position × coverage, 1 − coverage). Nearest
     // because every consumer wants the height of one surface, not a blend
     // across a silhouette: filtering it would smear a wall's height out over
     // the floor beside it and darken a rim there in the visibility test.
@@ -582,12 +582,13 @@ export class ScreenSpaceRC {
     const floorResolution = vec2(floorWidth, floorHeight);
     // Surface position at a field texel, and the coverage it was resolved
     // from. The multisample resolve stores position × coverage, so dividing
-    // by w recovers the average world position of the covered samples.
+    // by (1 - w) recovers the average world position of the covered samples.
     const heightSampleAt = (uv: Node<"vec2">) => {
       const sample = textureLevel(fieldPositionTexture, uv, float(0));
-      const position = sample.xyz.div(max(sample.w, 1e-3));
+      const coverage = float(1).sub(sample.w);
+      const position = sample.xyz.div(max(coverage, 1e-3));
       return {
-        coverage: sample.w,
+        coverage,
         position,
         height: position.y,
       };
@@ -631,9 +632,9 @@ export class ScreenSpaceRC {
             float(0),
           );
           // position.y is already premultiplied by coverage, so summing y and
-          // w directly accumulates the coverage-weighted height.
+          // (1 - w) directly accumulates the coverage-weighted height.
           sumHeight = sumHeight.add(sample.y);
-          sumCoverage = sumCoverage.add(sample.w);
+          sumCoverage = sumCoverage.add(float(1).sub(sample.w));
         }
       }
       const taps = FLOOR_LEVEL_SCALE * FLOOR_LEVEL_SCALE;
@@ -855,7 +856,10 @@ export class ScreenSpaceRC {
     );
     this.fieldPassMrt = mrt({
       output: vec4(emissive, aboveGround),
-      position: vec4(positionWorld, 1),
+      // WebGPU clears secondary MRT attachments to (0, 0, 0, 1).
+      // Store uncovered fraction so the clear represents no geometry. MSAA
+      // resolves this to (position * coverage, 1 - coverage).
+      position: vec4(positionWorld, 0),
     });
 
     const shade = abs(normalWorld.y).mul(0.3).add(0.7);
@@ -909,9 +913,9 @@ export class ScreenSpaceRC {
     const current = texture(this.rc.lightTexture, screenUV);
     const fieldPosition = texture(fieldPositionTexture, screenUV);
     // The multisample resolve coverage-weights the attachment, so silhouette
-    // edge texels hold (position * coverage, coverage); dividing by w
+    // edge texels hold (position * coverage, 1 - coverage); dividing by coverage
     // recovers the average world position of the covered samples.
-    const coverage = fieldPosition.w;
+    const coverage = float(1).sub(fieldPosition.w);
     const fieldWorldPosition = vec4(
       fieldPosition.xyz.div(max(coverage, 1e-3)),
       1,
@@ -997,7 +1001,34 @@ export class ScreenSpaceRC {
     // floors and ceilings, which flatten to nothing — have no defined facing
     // there and keep full omnidirectional reception, blending in smoothly as
     // horizontality grows.
-    const lightSample = texture(this.lightAccumTarget.textures[0]!, fieldUv);
+    const filledLight = texture(this.lightAccumTarget.textures[0]!, fieldUv);
+    // The inpaint fills occluders from both sides. Where the normal offset
+    // projects outside scene coverage, there is no surface to inpaint: use
+    // transported light rather than extending the wall's interior glow there.
+    let openLight: Node<"vec4"> = vec4(0);
+    for (const x of [-0.5, 0.5]) {
+      for (const y of [-0.5, 0.5]) {
+        openLight = openLight.add(
+          texture(this.rc.directTexture, fieldUv.add(vec2(x, y).div(this.rc.size))),
+        );
+      }
+    }
+    const fieldPixel = fieldUv.mul(fieldResolution).sub(0.5);
+    const fieldBase = floor(fieldPixel);
+    const fieldFraction = fieldPixel.sub(fieldBase);
+    let surfaceCoverage: Node<"float"> = float(0);
+    for (let y = 0; y <= 1; y++) {
+      for (let x = 0; x <= 1; x++) {
+        const uv = fieldBase.add(vec2(x, y)).add(0.5).div(fieldResolution);
+        const weight = (x === 0 ? float(1).sub(fieldFraction.x) : fieldFraction.x)
+          .mul(y === 0 ? float(1).sub(fieldFraction.y) : fieldFraction.y);
+        surfaceCoverage = surfaceCoverage.add(heightSampleAt(uv).coverage.mul(weight));
+      }
+    }
+    const outside = float(1).sub(surfaceCoverage)
+      .mul(clamp(vec2(normal.x, normal.z).length(), 0, 1))
+      .mul(uFootprint);
+    const lightSample = mix(filledLight, openLight.mul(0.25), outside);
     const lightDir = texture(this.lightAccumTarget.textures[1]!, fieldUv).xy;
     const lum = lightSample.rgb.dot(vec3(1 / 3));
     const anisotropy = lightDir.div(max(lum, 1e-4));
